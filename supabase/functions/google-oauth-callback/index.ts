@@ -173,11 +173,45 @@ Deno.serve(async (req: Request) => {
       return errorPage(`generateLink failed: ${linkErr?.message ?? "no link"}`);
     }
 
+    const verifyRes = await fetch(linkData.properties.action_link, {
+      redirect: "manual",
+      headers: { "User-Agent": "WeddingWinOAuthBridge/1.0" },
+    });
+
+    const verifyLocation = verifyRes.headers.get("location") || "";
+    if (!verifyLocation) {
+      return errorPage(
+        `Supabase verify did not redirect (status ${verifyRes.status}). Body: ${(await verifyRes.text()).slice(0, 300)}`
+      );
+    }
+
+    let parsedVerify: URL;
+    try {
+      parsedVerify = new URL(verifyLocation);
+    } catch {
+      return errorPage(`Verify returned invalid Location: ${verifyLocation.slice(0, 300)}`);
+    }
+
+    const hash = parsedVerify.hash.replace(/^#/, "");
+    const queryError =
+      parsedVerify.searchParams.get("error_description") ||
+      parsedVerify.searchParams.get("error");
+
+    if (!hash || !hash.includes("access_token")) {
+      const detail = queryError
+        ? `Supabase rejected the sign-in: ${queryError}`
+        : `Supabase verify produced no tokens. Redirect was: ${verifyLocation.slice(0, 300)}`;
+      return errorPage(detail);
+    }
+
+    const finalUrl = new URL(finalRedirect);
+    finalUrl.hash = hash;
+
     return new Response(null, {
       status: 302,
       headers: {
         ...corsHeaders,
-        Location: linkData.properties.action_link,
+        Location: finalUrl.toString(),
         "Cache-Control": "no-store",
       },
     });
