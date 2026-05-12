@@ -205,6 +205,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const finalUrl = new URL(finalRedirect);
+    finalUrl.searchParams.set("ww_oauth", "v2");
     finalUrl.hash = hash;
 
     return new Response(null, {
