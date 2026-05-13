@@ -12,9 +12,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   WebView,
   type WebViewNavigation,
-  type ShouldStartLoadRequest,
-  type WebViewMessageEvent,
 } from 'react-native-webview';
+
+type ShouldStartLoadRequest = { url: string };
 import * as WebBrowser from 'expo-web-browser';
 import {
   RefreshCw,
@@ -25,8 +25,26 @@ import {
 
 const TARGET_URL = 'https://weddingwin.ca';
 const BRAND_COLOR = '#C9A227';
-const OAUTH_REDIRECT = 'weddingwin://auth-callback';
+const OAUTH_RETURN_URL = 'https://www.weddingwin.ca/auth-callback';
 const APP_UA_TAG = 'WeddingWinApp/1.0';
+
+function isOAuthStartUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (host === 'accounts.google.com') return true;
+    if (host === 'accounts.youtube.com') return true;
+    if (
+      host.endsWith('.supabase.co') &&
+      u.pathname.startsWith('/auth/v1/authorize')
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 const IOS_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1 ' +
@@ -41,7 +59,6 @@ const SOURCE = { uri: TARGET_URL } as const;
 const CLOAK_INJECTION = `
 (function() {
   try {
-    var HOME_URL = ${JSON.stringify(TARGET_URL)};
     var isOwnSite = false;
     var isSupabase = false;
     try {
@@ -49,36 +66,10 @@ const CLOAK_INJECTION = `
       isSupabase = /(^|\\.)supabase\\.co$/i.test(window.location.hostname);
     } catch(e) {}
 
-    if (isOwnSite) {
-      try {
-        window.WeddingWinApp = {
-          version: '1.0',
-          openGoogleOAuth: function(authUrl) {
-            try {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'GOOGLE_OAUTH',
-                url: authUrl
-              }));
-            } catch(e) {}
-          }
-        };
-        try {
-          var evt = new Event('WeddingWinAppReady');
-          window.dispatchEvent(evt);
-        } catch(e) {}
-      } catch(e) {}
-    }
-
     if (isOwnSite || isSupabase) {
       try {
-        var returnUrlKey = '__ww_oauth_return';
         window.open = function(url) {
-          try {
-            if (url) {
-              try { sessionStorage.setItem(returnUrlKey, window.location.href); } catch(e) {}
-              window.location.href = url;
-            }
-          } catch(e) {}
+          try { if (url) window.location.href = url; } catch(e) {}
           return {
             closed: false,
             focus: function(){},
@@ -88,23 +79,6 @@ const CLOAK_INJECTION = `
             location: { href: '', replace: function(u){ if(u) window.location.href = u; } },
             document: { write: function(){}, close: function(){} }
           };
-        };
-      } catch(e) {}
-
-      try {
-        window.close = function() {
-          try {
-            var ret = null;
-            try { ret = sessionStorage.getItem('__ww_oauth_return'); } catch(e) {}
-            try { sessionStorage.removeItem('__ww_oauth_return'); } catch(e) {}
-            if (ret && ret !== window.location.href) {
-              window.location.href = ret;
-            } else if (window.history.length > 1) {
-              window.history.back();
-            } else {
-              window.location.href = HOME_URL;
-            }
-          } catch(e) {}
         };
       } catch(e) {}
     }
@@ -237,46 +211,72 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const handleShouldStart = useCallback((request: ShouldStartLoadRequest) => {
-    const { url } = request;
-
-    if (
-      url.startsWith('http://') ||
-      url.startsWith('https://') ||
-      url.startsWith('about:') ||
-      url.startsWith('data:') ||
-      url === 'about:blank'
-    ) {
-      return true;
-    }
-
-    if (
-      url.startsWith('mailto:') ||
-      url.startsWith('tel:') ||
-      url.startsWith('sms:') ||
-      url.startsWith('itms-apps:') ||
-      url.startsWith('itms-appss:') ||
-      url.startsWith('maps:')
-    ) {
-      Linking.openURL(url).catch(() => {});
-      return false;
-    }
-
+  const runOAuthInSystemBrowser = useCallback(async (authUrl: string) => {
     try {
-      const parsed = new URL(url);
-      const tail =
-        (parsed.pathname || '') + (parsed.search || '') + (parsed.hash || '');
-      const redirectTo = `${TARGET_URL}${tail || '/'}`;
+      const result = await WebBrowser.openAuthSessionAsync(
+        authUrl,
+        OAUTH_RETURN_URL,
+        { showInRecents: true }
+      );
+
+      if (result.type !== 'success' || !result.url) return;
+
       webviewRef.current?.injectJavaScript(
-        `window.location.replace(${JSON.stringify(redirectTo)}); true;`
+        `window.location.href = ${JSON.stringify(result.url)}; true;`
       );
     } catch {
-      webviewRef.current?.injectJavaScript(
-        `window.location.replace(${JSON.stringify(TARGET_URL)}); true;`
-      );
+      // user dismissed or system browser failed; leave WebView as-is
     }
-    return false;
   }, []);
+
+  const handleShouldStart = useCallback(
+    (request: ShouldStartLoadRequest) => {
+      const { url } = request;
+
+      if (isOAuthStartUrl(url)) {
+        runOAuthInSystemBrowser(url);
+        return false;
+      }
+
+      if (
+        url.startsWith('http://') ||
+        url.startsWith('https://') ||
+        url.startsWith('about:') ||
+        url.startsWith('data:') ||
+        url === 'about:blank'
+      ) {
+        return true;
+      }
+
+      if (
+        url.startsWith('mailto:') ||
+        url.startsWith('tel:') ||
+        url.startsWith('sms:') ||
+        url.startsWith('itms-apps:') ||
+        url.startsWith('itms-appss:') ||
+        url.startsWith('maps:')
+      ) {
+        Linking.openURL(url).catch(() => {});
+        return false;
+      }
+
+      try {
+        const parsed = new URL(url);
+        const tail =
+          (parsed.pathname || '') + (parsed.search || '') + (parsed.hash || '');
+        const redirectTo = `${TARGET_URL}${tail || '/'}`;
+        webviewRef.current?.injectJavaScript(
+          `window.location.replace(${JSON.stringify(redirectTo)}); true;`
+        );
+      } catch {
+        webviewRef.current?.injectJavaScript(
+          `window.location.replace(${JSON.stringify(TARGET_URL)}); true;`
+        );
+      }
+      return false;
+    },
+    [runOAuthInSystemBrowser]
+  );
 
   const handleNavigationStateChange = useCallback((s: WebViewNavigation) => {
     const host = safeHostname(s.url);
@@ -294,49 +294,6 @@ export default function HomeScreen() {
         hostname: host,
       };
     });
-  }, []);
-
-  const handleMessage = useCallback(async (event: WebViewMessageEvent) => {
-    let payload: { type?: string; url?: string } | null = null;
-    try {
-      payload = JSON.parse(event.nativeEvent.data);
-    } catch {
-      return;
-    }
-    if (!payload || payload.type !== 'GOOGLE_OAUTH' || !payload.url) return;
-
-    try {
-      const result = await WebBrowser.openAuthSessionAsync(
-        payload.url,
-        OAUTH_REDIRECT,
-        { showInRecents: true }
-      );
-
-      if (result.type !== 'success' || !result.url) {
-        webviewRef.current?.injectJavaScript(
-          `window.dispatchEvent(new CustomEvent('WeddingWinOAuthCancelled')); true;`
-        );
-        return;
-      }
-
-      const parsed = new URL(result.url);
-      const hash = parsed.hash || '';
-      const search = parsed.search || '';
-
-      webviewRef.current?.injectJavaScript(
-        `(function(){
-          try {
-            window.dispatchEvent(new CustomEvent('WeddingWinOAuthCallback', {
-              detail: { hash: ${JSON.stringify(hash)}, search: ${JSON.stringify(search)} }
-            }));
-          } catch(e) {}
-        })(); true;`
-      );
-    } catch {
-      webviewRef.current?.injectJavaScript(
-        `window.dispatchEvent(new CustomEvent('WeddingWinOAuthCancelled')); true;`
-      );
-    }
   }, []);
 
   const handleOpenWindow = useCallback(
@@ -417,7 +374,6 @@ export default function HomeScreen() {
           injectedJavaScriptBeforeContentLoaded={CLOAK_INJECTION}
           onShouldStartLoadWithRequest={handleShouldStart}
           onOpenWindow={handleOpenWindow}
-          onMessage={handleMessage}
           onNavigationStateChange={handleNavigationStateChange}
           onLoadStart={handleLoadStart}
           onLoadEnd={handleLoadEnd}
