@@ -22,6 +22,12 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
+
+# generated Expo QR/debug artifacts
+expo-*.png
+weddingwin-expo-*.png
+weddingwin-expo-*.svg
 
 # macos
 .DS_Store
@@ -33,3 +39,6 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# supabase local runtime state
+supabase/.temp/

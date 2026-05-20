@@ -1,74 +1,104 @@
-import { Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  Alert,
+  Image,
+  Linking,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Globe, Mail, Shield, Heart } from 'lucide-react-native';
+import {
+  ChevronRight,
+  FileText,
+  Mail,
+  Shield,
+} from 'lucide-react-native';
 
-const BRAND_COLOR = '#C9A227';
+const SITE_URL = 'https://www.weddingwin.ca';
+const BRAND_COLOR = '#C66A6A';
+const LOGO_IMAGE = {
+  uri: `${SITE_URL}/images/CoralLogoTransB.png`,
+} as const;
+
+async function openExternal(url: string) {
+  try {
+    await Linking.openURL(url);
+  } catch {
+    Alert.alert('Could not open link', 'Please try again in a moment.');
+  }
+}
+
+function LinkRow({
+  icon,
+  title,
+  subtitle,
+  url,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  url: string;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.row}
+      activeOpacity={0.82}
+      onPress={() => openExternal(url)}>
+      <View style={styles.iconWrap}>{icon}</View>
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        <Text style={styles.rowSub}>{subtitle}</Text>
+      </View>
+      <ChevronRight size={20} color="#D1AAA5" strokeWidth={2} />
+    </TouchableOpacity>
+  );
+}
 
 export default function AboutScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.hero}>
-          <View style={styles.logoCircle}>
-            <Heart size={32} color="#FFFFFF" strokeWidth={2} fill="#FFFFFF" />
-          </View>
-          <Text style={styles.title}>WeddingWin</Text>
-          <Text style={styles.tagline}>Your dream wedding, made possible</Text>
+        <View style={styles.header}>
+          <Image
+            source={LOGO_IMAGE}
+            style={styles.logo}
+            resizeMode="contain"
+            accessibilityLabel="WeddingWin.ca Canada"
+          />
+          <Text style={styles.title}>About WeddingWin</Text>
+          <Text style={styles.body}>App version 1.0.0</Text>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>About the app</Text>
-          <Text style={styles.body}>
-            WeddingWin brings the full weddingwin.ca experience to your iPhone. Browse,
-            sign in, and manage your account on the go with a native-feeling interface.
-          </Text>
+        <View style={styles.linkCard}>
+          <Text style={styles.sectionTitle}>Support</Text>
+          <LinkRow
+            icon={<Mail size={20} color={BRAND_COLOR} strokeWidth={2} />}
+            title="Contact WeddingWin"
+            subtitle="info@weddingwin.ca"
+            url="mailto:info@weddingwin.ca"
+          />
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Links</Text>
-
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => Linking.openURL('https://weddingwin.ca')}>
-            <View style={styles.iconWrap}>
-              <Globe size={20} color={BRAND_COLOR} strokeWidth={2} />
-            </View>
-            <View style={styles.rowText}>
-              <Text style={styles.rowTitle}>Visit website</Text>
-              <Text style={styles.rowSub}>weddingwin.ca</Text>
-            </View>
-          </TouchableOpacity>
-
+        <View style={styles.linkCard}>
+          <Text style={styles.sectionTitle}>Legal</Text>
+          <LinkRow
+            icon={<Shield size={20} color={BRAND_COLOR} strokeWidth={2} />}
+            title="Privacy Policy"
+            subtitle="How WeddingWin handles your data"
+            url={`${SITE_URL}/about/privacy`}
+          />
           <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => Linking.openURL('mailto:hello@weddingwin.ca')}>
-            <View style={styles.iconWrap}>
-              <Mail size={20} color={BRAND_COLOR} strokeWidth={2} />
-            </View>
-            <View style={styles.rowText}>
-              <Text style={styles.rowTitle}>Contact support</Text>
-              <Text style={styles.rowSub}>hello@weddingwin.ca</Text>
-            </View>
-          </TouchableOpacity>
-
-          <View style={styles.divider} />
-
-          <TouchableOpacity
-            style={styles.row}
-            onPress={() => Linking.openURL('https://weddingwin.ca/privacy')}>
-            <View style={styles.iconWrap}>
-              <Shield size={20} color={BRAND_COLOR} strokeWidth={2} />
-            </View>
-            <View style={styles.rowText}>
-              <Text style={styles.rowTitle}>Privacy policy</Text>
-              <Text style={styles.rowSub}>How we handle your data</Text>
-            </View>
-          </TouchableOpacity>
+          <LinkRow
+            icon={<FileText size={20} color={BRAND_COLOR} strokeWidth={2} />}
+            title="Terms of Use"
+            subtitle="Rules for using WeddingWin"
+            url={`${SITE_URL}/about/terms`}
+          />
         </View>
 
-        <Text style={styles.version}>Version 1.0.0</Text>
+        <Text style={styles.footerText}>WeddingWin Canada</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -77,101 +107,102 @@ export default function AboutScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F7F5F0',
+    backgroundColor: '#FFF8F5',
   },
   content: {
-    padding: 20,
-    paddingBottom: 40,
+    paddingHorizontal: 20,
+    paddingTop: 22,
+    paddingBottom: 36,
   },
-  hero: {
-    alignItems: 'center',
-    paddingVertical: 24,
-  },
-  logoCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: BRAND_COLOR,
+  header: {
+    minHeight: 148,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: BRAND_COLOR,
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#F0D5D1',
+  },
+  logo: {
+    width: '82%',
+    maxWidth: 260,
+    height: 70,
   },
   title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1C1C1E',
-    marginTop: 16,
-    letterSpacing: 0.3,
-  },
-  tagline: {
-    fontSize: 15,
-    color: '#6E6E73',
-    marginTop: 6,
-  },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    marginTop: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#8A8A8E',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginBottom: 12,
+    color: '#2E2E32',
+    fontSize: 21,
+    lineHeight: 26,
+    fontWeight: '800',
+    marginTop: 8,
+    textAlign: 'center',
   },
   body: {
+    color: '#8E7D7A',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  linkCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#F0D5D1',
+  },
+  sectionTitle: {
+    color: '#2E2E32',
     fontSize: 15,
-    lineHeight: 23,
-    color: '#3A3A3C',
+    lineHeight: 19,
+    fontWeight: '800',
+    marginBottom: 8,
   },
   row: {
+    minHeight: 58,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 6,
   },
   iconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#FAF6E8',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FFF1EF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 14,
+    marginRight: 13,
   },
   rowText: {
     flex: 1,
   },
   rowTitle: {
+    color: '#2D2827',
     fontSize: 16,
-    fontWeight: '600',
-    color: '#1C1C1E',
+    lineHeight: 20,
+    fontWeight: '800',
   },
   rowSub: {
+    color: '#8E7D7A',
     fontSize: 13,
-    color: '#8A8A8E',
+    lineHeight: 17,
+    fontWeight: '500',
     marginTop: 2,
   },
   divider: {
     height: 1,
-    backgroundColor: '#F2F2F7',
-    marginVertical: 4,
+    backgroundColor: '#F4DFDC',
+    marginLeft: 55,
   },
-  version: {
-    textAlign: 'center',
-    color: '#8A8A8E',
+  footerText: {
+    alignSelf: 'center',
+    color: '#9B8583',
     fontSize: 12,
-    marginTop: 24,
+    fontWeight: '700',
+    paddingTop: 20,
   },
 });

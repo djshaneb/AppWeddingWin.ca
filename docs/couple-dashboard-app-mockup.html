@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WeddingWin Couple App Dashboard Mockup</title>
+  <style>
+    :root {
+      --coral: #cf6d75;
+      --coral-dark: #a9444e;
+      --rose-soft: #fff1ee;
+      --gold: #b9882e;
+      --gold-soft: #fff7e7;
+      --ink: #24262d;
+      --muted: #74727a;
+      --line: #ecd8d2;
+      --cream: #fffaf7;
+      --card: #ffffff;
+      --green: #4d8a67;
+      --blue: #476f9d;
+      --shadow: 0 20px 48px rgba(80, 50, 44, .15);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: start center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at top left, rgba(207, 109, 117, .14), transparent 34%),
+        radial-gradient(circle at bottom right, rgba(185, 136, 46, .13), transparent 30%),
+        #f7efeb;
+      color: var(--ink);
+    }
+
+    .stage {
+      width: 100%;
+      max-width: 1180px;
+      display: grid;
+      grid-template-columns: 430px minmax(0, 1fr);
+      gap: 28px;
+      align-items: start;
+    }
+
+    .notes {
+      padding-top: 18px;
+    }
+
+    .notes h1 {
+      margin: 0 0 12px;
+      max-width: 560px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(34px, 4vw, 58px);
+      line-height: 1.04;
+      font-weight: 500;
+      color: var(--ink);
+    }
+
+    .notes p {
+      margin: 0 0 20px;
+      max-width: 560px;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.55;
+    }
+
+    .link-map {
+      max-width: 620px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .map-pill {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(236, 216, 210, .9);
+      background: rgba(255, 255, 255, .64);
+      color: #4c484e;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .phone {
+      width: 430px;
+      height: 932px;
+      border-radius: 38px;
+      padding: 14px;
+      background: #1d1d22;
+      box-shadow: var(--shadow);
+      position: sticky;
+      top: 24px;
+    }
+
+    .screen {
+      height: 100%;
+      border-radius: 28px;
+      overflow: hidden;
+      background: var(--cream);
+      position: relative;
+    }
+
+    .screen::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 18% 5%, rgba(207, 109, 117, .16), transparent 26%),
+        radial-gradient(circle at 100% 18%, rgba(185, 136, 46, .14), transparent 28%);
+    }
+
+    .status {
+      height: 34px;
+      padding: 10px 22px 0;
+      position: relative;
+      z-index: 2;
+      display: flex;
+      justify-content: space-between;
+      color: #343239;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .app {
+      height: calc(100% - 34px);
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .content {
+      flex: 1;
+      overflow: hidden;
+      padding: 10px 20px 84px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .rings {
+      width: 38px;
+      height: 38px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #fff, #ffe9e4);
+      border: 1px solid var(--line);
+      display: grid;
+      place-items: center;
+      color: var(--gold);
+      font-size: 19px;
+      font-weight: 900;
+    }
+
+    .brand span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .brand strong {
+      display: block;
+      margin-top: 1px;
+      font-size: 16px;
+      line-height: 1;
+      color: var(--ink);
+    }
+
+    .icon-button {
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, .78);
+      color: var(--coral-dark);
+      font-size: 18px;
+      font-weight: 900;
+    }
+
+    .hero {
+      padding: 14px;
+      border-radius: 22px;
+      background: linear-gradient(135deg, #ffffff, #fff0ec);
+      border: 1px solid var(--line);
+      box-shadow: 0 12px 26px rgba(100, 59, 52, .08);
+    }
+
+    .eyebrow {
+      margin: 0 0 4px;
+      color: var(--coral-dark);
+      font-size: 11px;
+      font-weight: 950;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .hero h2 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 27px;
+      line-height: 1.04;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      margin: 6px 0 11px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.42;
+    }
+
+    .progress {
+      display: grid;
+      gap: 7px;
+    }
+
+    .progress-row {
+      display: flex;
+      justify-content: space-between;
+      color: #55515a;
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 999px;
+      background: #f1dfda;
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      width: 68%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--coral), #e8a0a3);
+    }
+
+    .primary-grid {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .feature-card {
+      min-height: 96px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, .84);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      box-shadow: 0 9px 20px rgba(100, 59, 52, .06);
+    }
+
+    .feature-card.strong {
+      background: linear-gradient(135deg, var(--coral), #df8d92);
+      color: #fff;
+      border-color: transparent;
+    }
+
+    .card-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 13px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, .23);
+      font-size: 18px;
+      font-weight: 900;
+    }
+
+    .feature-card:not(.strong) .card-icon {
+      background: var(--rose-soft);
+      color: var(--coral-dark);
+    }
+
+    .feature-card strong {
+      display: block;
+      margin-top: 7px;
+      font-size: 15px;
+      line-height: 1.12;
+    }
+
+    .feature-card span {
+      display: block;
+      margin-top: 4px;
+      color: inherit;
+      opacity: .78;
+      font-size: 12px;
+      line-height: 1.3;
+      font-weight: 700;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 12px 0 7px;
+    }
+
+    .section-title h3 {
+      margin: 0;
+      font-size: 14px;
+      letter-spacing: .02em;
+    }
+
+    .section-title a {
+      color: var(--coral-dark);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .quick-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .quick {
+      min-height: 66px;
+      padding: 8px 6px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, .78);
+      text-align: center;
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 5px;
+    }
+
+    .quick .glyph {
+      width: 25px;
+      height: 25px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      background: var(--gold-soft);
+      color: var(--gold);
+      font-size: 13px;
+      font-weight: 950;
+    }
+
+    .quick strong {
+      color: #46434a;
+      font-size: 10.5px;
+      line-height: 1.15;
+    }
+
+    .activity {
+      display: grid;
+      gap: 6px;
+    }
+
+    .activity-row {
+      min-height: 48px;
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 10px;
+      border: 1px solid rgba(236, 216, 210, .86);
+      border-radius: 15px;
+      background: rgba(255, 255, 255, .74);
+    }
+
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      background: #f7dedb;
+      color: var(--coral-dark);
+      font-size: 15px;
+      font-weight: 950;
+    }
+
+    .activity-row strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      color: #3a3740;
+    }
+
+    .activity-row span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .badge {
+      min-width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      background: var(--coral);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 950;
+    }
+
+    .bottom-nav {
+      position: absolute;
+      left: 14px;
+      right: 14px;
+      bottom: 14px;
+      min-height: 62px;
+      border-radius: 22px;
+      border: 1px solid rgba(236, 216, 210, .9);
+      background: rgba(255, 255, 255, .92);
+      box-shadow: 0 12px 30px rgba(83, 55, 50, .14);
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      align-items: center;
+      padding: 7px;
+    }
+
+    .nav-item {
+      display: grid;
+      place-items: center;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 900;
+    }
+
+    .nav-item.active {
+      color: var(--coral-dark);
+    }
+
+    .nav-item i {
+      width: 31px;
+      height: 31px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      font-style: normal;
+      font-size: 15px;
+    }
+
+    .nav-item.active i {
+      background: var(--rose-soft);
+    }
+
+    @media (max-width: 980px) {
+      body { padding: 16px; }
+      .stage { grid-template-columns: 1fr; justify-items: center; }
+      .notes { order: 2; max-width: 430px; padding: 0 0 24px; }
+      .phone { position: relative; top: auto; width: min(430px, calc(100vw - 32px)); height: min(932px, calc((100vw - 32px) * 2.17)); min-height: 760px; }
+      .link-map { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="phone" aria-label="Mobile app mockup">
+      <div class="screen">
+        <div class="status">
+          <span>9:41</span>
+          <span>5G 100%</span>
+        </div>
+        <div class="app">
+          <div class="content">
+            <header class="topbar">
+              <div class="brand">
+                <div class="rings">∞</div>
+                <div>
+                  <span>WeddingWin</span>
+                  <strong>Couple Dashboard</strong>
+                </div>
+              </div>
+              <div class="icon-button">🔔</div>
+            </header>
+
+            <section class="hero">
+              <p class="eyebrow">Welcome back, Joseph</p>
+              <h2>Your wedding hub</h2>
+              <p>Keep planning moving with messages, saved vendors, quotes, and your wedding website all in one place.</p>
+              <div class="progress">
+                <div class="progress-row">
+                  <span>Profile setup</span>
+                  <span>68%</span>
+                </div>
+                <div class="bar"><span></span></div>
+              </div>
+            </section>
+
+            <section class="primary-grid" aria-label="Primary actions">
+              <article class="feature-card strong">
+                <div>
+                  <div class="card-icon">✉</div>
+                  <strong>Messages</strong>
+                  <span>2 new vendor replies</span>
+                </div>
+              </article>
+              <article class="feature-card">
+                <div>
+                  <div class="card-icon">★</div>
+                  <strong>Saved Vendors</strong>
+                  <span>Compare your shortlist</span>
+                </div>
+              </article>
+            </section>
+
+            <div class="section-title">
+              <h3>Couple account links</h3>
+              <a href="#">View all</a>
+            </div>
+            <section class="quick-grid" aria-label="Couple dashboard links">
+              <div class="quick"><div class="glyph">⌂</div><strong>Dashboard Home</strong></div>
+              <div class="quick"><div class="glyph">💬</div><strong>Private Chat</strong></div>
+              <div class="quick"><div class="glyph">♡</div><strong>Favorites</strong></div>
+              <div class="quick"><div class="glyph">≡</div><strong>Vendor Quotes</strong></div>
+              <div class="quick"><div class="glyph">☑</div><strong>Wedding Details</strong></div>
+              <div class="quick"><div class="glyph">✎</div><strong>Contact Details</strong></div>
+              <div class="quick"><div class="glyph">⌁</div><strong>Website Builder</strong></div>
+              <div class="quick"><div class="glyph">▣</div><strong>Photos & Media</strong></div>
+              <div class="quick"><div class="glyph">⚙</div><strong>Account Settings</strong></div>
+            </section>
+
+            <div class="section-title">
+              <h3>Recent activity</h3>
+              <a href="#">Open inbox</a>
+            </div>
+            <section class="activity" aria-label="Recent dashboard activity">
+              <div class="activity-row">
+                <div class="avatar">J</div>
+                <div>
+                  <strong>Joseph replied</strong>
+                  <span>New message about your venue tour</span>
+                </div>
+                <div class="badge">2</div>
+              </div>
+              <div class="activity-row">
+                <div class="avatar">WW</div>
+                <div>
+                  <strong>Wedding website draft</strong>
+                  <span>Add your date and story when ready</span>
+                </div>
+                <span></span>
+              </div>
+            </section>
+          </div>
+
+          <nav class="bottom-nav" aria-label="App navigation">
+            <div class="nav-item active"><i>⌂</i><span>Home</span></div>
+            <div class="nav-item"><i>🔎</i><span>Search</span></div>
+            <div class="nav-item"><i>💬</i><span>Chat</span></div>
+            <div class="nav-item"><i>🌐</i><span>Website</span></div>
+            <div class="nav-item"><i>☰</i><span>More</span></div>
+          </nav>
+        </div>
+      </div>
+    </section>
+
+    <section class="notes">
+      <h1>App version of the couple dashboard</h1>
+      <p>This mockup keeps the same couple-account destinations, but turns them into a cleaner native dashboard: priority actions first, common account links as thumb-friendly tiles, and recent activity below.</p>
+      <div class="link-map" aria-label="Included couple account links">
+        <div class="map-pill">Dashboard Home</div>
+        <div class="map-pill">Private Chat / Messages</div>
+        <div class="map-pill">Saved Vendors / Favorites</div>
+        <div class="map-pill">Vendor Quotes / Inquiries</div>
+        <div class="map-pill">Wedding Details</div>
+        <div class="map-pill">Contact Details</div>
+        <div class="map-pill">Wedding Website Builder</div>
+        <div class="map-pill">Photos & Media</div>
+        <div class="map-pill">Account Settings</div>
+        <div class="map-pill">Billing / Plan</div>
+        <div class="map-pill">Help & Support</div>
+        <div class="map-pill">Logout</div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

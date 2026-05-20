@@ -8,7 +8,9 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const CALLBACK_URL = `${SUPABASE_URL}/functions/v1/google-oauth-callback`;
+const GOOGLE_CALLBACK_URL =
+  Deno.env.get("GOOGLE_CALLBACK_URL") ||
+  "https://www.weddingwin.ca/auth/google-callback";
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -16,6 +18,25 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 
 function b64url(input: string): string {
   return btoa(input).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function requestedSubscriptionId(value: string | null): string {
+  return value === "17" ? "17" : "18";
+}
+
+function consentFromUrl(url: URL) {
+  if (
+    url.searchParams.get("accepted_terms") !== "1" ||
+    url.searchParams.get("accepted_privacy") !== "1"
+  ) {
+    return null;
+  }
+
+  return {
+    acceptedAt: url.searchParams.get("accepted_at") || new Date().toISOString(),
+    termsVersion: url.searchParams.get("terms_version") || "",
+    privacyVersion: url.searchParams.get("privacy_version") || "",
+  };
 }
 
 Deno.serve(async (req: Request) => {
@@ -27,6 +48,8 @@ Deno.serve(async (req: Request) => {
     const url = new URL(req.url);
     const finalRedirect =
       url.searchParams.get("redirect_to") || "https://www.weddingwin.ca/";
+    const subscriptionId = requestedSubscriptionId(url.searchParams.get("subscription_id"));
+    const consent = consentFromUrl(url);
 
     const { data, error } = await admin
       .from("admin_config")
@@ -43,11 +66,16 @@ Deno.serve(async (req: Request) => {
 
     const clientId = data.value;
     const nonce = crypto.randomUUID();
-    const state = b64url(JSON.stringify({ r: finalRedirect, n: nonce }));
+    const state = b64url(JSON.stringify({
+      r: finalRedirect,
+      n: nonce,
+      s: subscriptionId,
+      c: consent,
+    }));
 
     const params = new URLSearchParams({
       client_id: clientId,
-      redirect_uri: CALLBACK_URL,
+      redirect_uri: GOOGLE_CALLBACK_URL,
       response_type: "code",
       scope: "openid email profile",
       access_type: "online",

@@ -2,8 +2,8 @@ import { Tabs } from 'expo-router';
 import { Heart, Info } from 'lucide-react-native';
 import { Platform } from 'react-native';
 
-const BRAND_COLOR = '#C9A227';
-const INACTIVE_COLOR = '#8A8A8E';
+const BRAND_COLOR = '#C66A6A';
+const INACTIVE_COLOR = '#9B8583';
 
 export default function TabLayout() {
   return (
@@ -13,9 +13,9 @@ export default function TabLayout() {
         tabBarActiveTintColor: BRAND_COLOR,
         tabBarInactiveTintColor: INACTIVE_COLOR,
         tabBarStyle: {
-          backgroundColor: '#FFFFFF',
+          backgroundColor: '#FFF8F5',
           borderTopWidth: 0.5,
-          borderTopColor: '#E5E5EA',
+          borderTopColor: '#F0D5D1',
           height: Platform.OS === 'ios' ? 88 : 64,
           paddingTop: 8,
           paddingBottom: Platform.OS === 'ios' ? 28 : 8,

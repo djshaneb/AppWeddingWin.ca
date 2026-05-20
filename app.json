@@ -4,14 +4,15 @@
     "slug": "weddingwin-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
     "scheme": "weddingwin",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "usesAppleSignIn": true,
       "bundleIdentifier": "ca.weddingwin.app",
       "infoPlist": {
+        "NSCameraUsageDescription": "WeddingWin uses the camera to scan QR bingo codes at wedding shows.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSExceptionDomains": {
@@ -29,10 +30,25 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "output": "single"
     },
-    "plugins": ["expo-router", "expo-font", "expo-web-browser"],
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      "expo-apple-authentication",
+      "expo-secure-store",
+      "expo-notifications",
+      "expo-camera",
+      "@react-native-community/datetimepicker",
+      "expo-audio"
+    ],
+    "extra": {
+      "googleOAuth": {
+        "iosClientId": "",
+        "webClientId": "655876057326-n28uvus7f20sm5isqc2m9v3jf1o8u196.apps.googleusercontent.com"
+      }
+    },
     "experiments": {
       "typedRoutes": true
     }

@@ -3,6 +3,8 @@ import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from '
 
 type Status = 'working' | 'no-params' | 'redirecting' | 'error';
 
+const BRAND_COLOR = '#C66A6A';
+
 export default function AuthCallback() {
   const [status, setStatus] = useState<Status>('working');
   const [message, setMessage] = useState('Signing you in...');
@@ -79,7 +81,7 @@ export default function AuthCallback() {
     <View style={styles.container}>
       <View style={styles.card}>
         {status === 'working' || status === 'redirecting' ? (
-          <ActivityIndicator size="large" color="#d4af37" />
+          <ActivityIndicator size="large" color={BRAND_COLOR} />
         ) : null}
 
         <Text style={styles.title}>WeddingWin</Text>
@@ -108,7 +110,7 @@ export default function AuthCallback() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0b0b0c',
+    backgroundColor: '#FFF8F5',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
@@ -120,26 +122,26 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   title: {
-    color: '#d4af37',
+    color: BRAND_COLOR,
     fontSize: 20,
     fontWeight: '600',
     letterSpacing: 1,
   },
   message: {
-    color: '#e5e5e7',
+    color: '#3B3433',
     fontSize: 16,
     textAlign: 'center',
     lineHeight: 24,
   },
   button: {
-    backgroundColor: '#d4af37',
+    backgroundColor: BRAND_COLOR,
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
     marginTop: 8,
   },
   buttonText: {
-    color: '#0b0b0c',
+    color: '#FFFFFF',
     fontWeight: '600',
     fontSize: 14,
   },
@@ -147,14 +149,14 @@ const styles = StyleSheet.create({
     marginTop: 24,
     padding: 12,
     borderRadius: 8,
-    backgroundColor: '#161618',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#2a2a2e',
+    borderColor: '#F0D5D1',
     width: '100%',
     gap: 4,
   },
   debugText: {
-    color: '#9a9a9f',
+    color: '#9B8583',
     fontSize: 11,
     fontFamily: Platform.select({ web: 'monospace', default: 'Courier' }),
   },

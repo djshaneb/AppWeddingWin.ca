@@ -1,0 +1,341 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
+const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const CHAT_INBOX_PATH = "/account/chat_messages";
+
+const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+};
+
+type BdEnvelope = {
+  status?: string;
+  message?: unknown;
+};
+type BdRow = Record<string, unknown>;
+type NativeSession = {
+  email?: string;
+  user_id?: string | number;
+  token?: string;
+  cookie?: string;
+};
+
+function chatPermissionError(path: string, message: unknown) {
+  const endpoint = path.split("?")[0];
+  const reason = typeof message === "string" ? message : "API key permission denied";
+  return `${reason}. Enable ${endpoint} in BD Admin > Developer Hub > API key permissions.`;
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function rowsFromMessage(message: unknown): BdRow[] {
+  return Array.isArray(message)
+    ? message.filter((row): row is BdRow => row !== null && typeof row === "object")
+    : [];
+}
+
+function buildListPath(model: string, params: Record<string, string | number>) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => search.set(key, String(value)));
+  return `/api/v2/${model}/get?${search.toString()}`;
+}
+
+function unwrapBdUser(message: unknown): BdRow | undefined {
+  if (Array.isArray(message)) {
+    const first = message[0];
+    return first && typeof first === "object" ? (first as BdRow) : undefined;
+  }
+
+  return message && typeof message === "object" ? (message as BdRow) : undefined;
+}
+
+function nativeSessionMatchesBdUser(session: NativeSession, user: BdRow | undefined) {
+  if (!user?.user_id || String(user.user_id) !== String(session.user_id || "")) {
+    return false;
+  }
+
+  const sessionToken = String(session.token || "").trim();
+  const userToken = String(user.token || "").trim();
+  if (!sessionToken || !userToken || sessionToken !== userToken) {
+    return false;
+  }
+
+  const sessionCookie = String(session.cookie || "").trim();
+  const userCookie = String(user.cookie || "").trim();
+  if (sessionCookie && userCookie && sessionCookie !== userCookie) {
+    return false;
+  }
+
+  return true;
+}
+
+async function callBd(path: string, init: RequestInit = {}) {
+  if (!BD_API_KEY) {
+    throw new Error("BD_API_KEY is not configured");
+  }
+
+  const response = await fetch(`${BD_API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      "X-Api-Key": BD_API_KEY,
+      ...(init.headers || {}),
+    },
+  });
+  const text = await response.text();
+  let body: BdEnvelope;
+
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { status: "error", message: text };
+  }
+
+  return { response, body };
+}
+
+async function fetchFullBdUserById(userId: string | number) {
+  const fullUser = await callBd(`/api/v2/user/get/${encodeURIComponent(String(userId))}`);
+  if (fullUser.response.ok && fullUser.body.status === "success") {
+    return unwrapBdUser(fullUser.body.message);
+  }
+
+  return undefined;
+}
+
+function participantTokens(user: BdRow, session: NativeSession) {
+  return [...new Set([
+    user.token,
+    session.token,
+    user.cookie,
+    session.cookie,
+    user.user_id,
+    session.user_id,
+    user.email,
+    session.email,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean))];
+}
+
+function rowIncludesToken(rowValue: unknown, tokens: string[]) {
+  const value = String(rowValue || "");
+  return tokens.some((token) => token && value.includes(token));
+}
+
+function threadBelongsToUser(thread: BdRow, tokens: string[]) {
+  return (
+    rowIncludesToken(thread.thread_owner, tokens) ||
+    rowIncludesToken(thread.thread_responders, tokens)
+  );
+}
+
+async function listChatThreads(tokens: string[]) {
+  const byToken = new Map<string, BdRow>();
+  const attempts: string[] = [];
+
+  for (const token of tokens.slice(0, 2)) {
+    attempts.push(
+      buildListPath("chat_message_threads", {
+        limit: 100,
+        property: "thread_owner",
+        property_value: token,
+        property_operator: "eq",
+        order_column: "updated_at",
+        order_type: "DESC",
+      }),
+      buildListPath("chat_message_threads", {
+        limit: 100,
+        property: "thread_responders",
+        property_value: token,
+        property_operator: "eq",
+        order_column: "updated_at",
+        order_type: "DESC",
+      }),
+    );
+  }
+
+  let permissionError = "";
+  for (const path of attempts) {
+    const result = await callBd(path);
+    const message = result.body.message;
+    if (result.response.status === 401 || result.response.status === 403) {
+      permissionError = chatPermissionError(path, message);
+      continue;
+    }
+    if (!result.response.ok || result.body.status !== "success") continue;
+
+    for (const thread of rowsFromMessage(message)) {
+      if (!threadBelongsToUser(thread, tokens)) continue;
+      const key = String(thread.thread_token || thread.thread_id || "");
+      if (key) byToken.set(key, thread);
+    }
+  }
+
+  if (byToken.size === 0 && permissionError) {
+    throw new Error(permissionError);
+  }
+
+  return [...byToken.values()].sort((a, b) =>
+    String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")),
+  );
+}
+
+async function countUnreadMessages(threads: BdRow[], tokens: string[], ignoredThreadToken = "") {
+  const threadTokens = new Set(
+    threads.map((thread) => String(thread.thread_token || "").trim()).filter(Boolean),
+  );
+  if (ignoredThreadToken) threadTokens.delete(ignoredThreadToken);
+  if (threadTokens.size === 0) return 0;
+
+  const result = await callBd(
+    buildListPath("chat_message_items", {
+      limit: 100,
+      property: "message_status",
+      property_value: 0,
+      property_operator: "eq",
+      order_column: "created_at",
+      order_type: "DESC",
+    }),
+  );
+
+  if (!result.response.ok || result.body.status !== "success") return 0;
+
+  return rowsFromMessage(result.body.message).filter((message) => {
+    const threadToken = String(message.thread_token || "").trim();
+    const owner = String(message.message_owner || "");
+    const mine = tokens.some((token) => token && owner.includes(token));
+    return threadTokens.has(threadToken) && !mine;
+  }).length;
+}
+
+async function sendExpoPushNotifications(bdMemberId: string, unreadCount: number) {
+  const { data: rows, error } = await admin
+    .from("app_push_tokens")
+    .select("id, expo_push_token, last_unread_count")
+    .eq("bd_member_id", bdMemberId)
+    .eq("enabled", true);
+
+  if (error || !rows?.length) return;
+
+  const rowsToNotify = rows.filter((row) => unreadCount > Number(row.last_unread_count || 0));
+  const allIds = rows.map((row) => row.id).filter(Boolean);
+
+  if (unreadCount <= 0) {
+    if (allIds.length) {
+      await admin
+        .from("app_push_tokens")
+        .update({ last_unread_count: 0, updated_at: new Date().toISOString() })
+        .in("id", allIds);
+    }
+    return;
+  }
+
+  if (!rowsToNotify.length) return;
+
+  await fetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    },
+    body: JSON.stringify(rowsToNotify.map((row) => ({
+      to: row.expo_push_token,
+      sound: "default",
+      title: "New WeddingWin message",
+      body: unreadCount === 1
+        ? "You have a new message."
+        : `You have ${unreadCount} new messages.`,
+      data: { screen: "chat" },
+    }))),
+  }).catch(() => undefined);
+
+  await admin
+    .from("app_push_tokens")
+    .update({
+      last_unread_count: unreadCount,
+      last_notified_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .in("id", rowsToNotify.map((row) => row.id).filter(Boolean));
+}
+
+Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  if (request.method !== "POST") {
+    return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
+  }
+
+  try {
+    const body = await request.json().catch(() => ({}));
+    const nativeSession = body?.native_session as NativeSession | undefined;
+    const activeThreadToken = String(body?.active_thread_token || "").trim();
+
+    if (!nativeSession?.user_id || !nativeSession?.token) {
+      return jsonResponse({ ok: false, error: "Native session required" }, 401);
+    }
+
+    const user = await fetchFullBdUserById(nativeSession.user_id);
+    if (!nativeSessionMatchesBdUser(nativeSession, user)) {
+      return jsonResponse({ ok: false, error: "Native session expired" }, 401);
+    }
+
+    const tokens = participantTokens(user!, nativeSession);
+    let threads: BdRow[] = [];
+    let syncDetail = "";
+
+    try {
+      threads = await listChatThreads(tokens);
+    } catch (error) {
+      syncDetail = error instanceof Error ? error.message : String(error);
+    }
+
+    const unreadCount = syncDetail ? 0 : await countUnreadMessages(threads, tokens, activeThreadToken);
+    if (!activeThreadToken) {
+      await sendExpoPushNotifications(String(nativeSession.user_id), unreadCount);
+    }
+
+    return jsonResponse({
+      ok: true,
+      unread_count: unreadCount,
+      total_count: threads.length,
+      sync_available: !syncDetail,
+      sync_detail: syncDetail,
+      latest_label:
+        unreadCount > 0
+          ? `${unreadCount} new message${unreadCount === 1 ? "" : "s"} waiting`
+          : syncDetail
+            ? "Open website messages"
+            : "No new messages",
+      inbox_path: CHAT_INBOX_PATH,
+    });
+  } catch (error) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Website chat status unavailable",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      500,
+    );
+  }
+});

@@ -1,0 +1,129 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
+const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+
+const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+};
+
+type BdEnvelope = {
+  status?: string;
+  message?: unknown;
+};
+type BdRow = Record<string, unknown>;
+type NativeSession = {
+  email?: string;
+  user_id?: string | number;
+  token?: string;
+  cookie?: string;
+};
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function firstRow(message: unknown): BdRow | undefined {
+  if (Array.isArray(message)) {
+    const first = message[0];
+    return first && typeof first === "object" ? (first as BdRow) : undefined;
+  }
+  return message && typeof message === "object" ? (message as BdRow) : undefined;
+}
+
+async function callBd(path: string) {
+  if (!BD_API_KEY) throw new Error("BD_API_KEY is not configured");
+  const response = await fetch(`${BD_API_BASE_URL}${path}`, {
+    headers: { "X-Api-Key": BD_API_KEY },
+  });
+  const text = await response.text();
+  let body: BdEnvelope;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { status: "error", message: text };
+  }
+  return { response, body };
+}
+
+async function fetchFullBdUserById(userId: string | number) {
+  const fullUser = await callBd(`/api/v2/user/get/${encodeURIComponent(String(userId))}`);
+  if (fullUser.response.ok && fullUser.body.status === "success") {
+    return firstRow(fullUser.body.message);
+  }
+  return undefined;
+}
+
+function nativeSessionMatchesBdUser(session: NativeSession, user: BdRow | undefined) {
+  if (!user?.user_id || String(user.user_id) !== String(session.user_id || "")) return false;
+
+  const sessionToken = String(session.token || "").trim();
+  const userToken = String(user.token || "").trim();
+  if (!sessionToken || !userToken || sessionToken !== userToken) return false;
+
+  const sessionCookie = String(session.cookie || "").trim();
+  const userCookie = String(user.cookie || "").trim();
+  return !(sessionCookie && userCookie && sessionCookie !== userCookie);
+}
+
+Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (request.method !== "POST") {
+    return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
+  }
+
+  try {
+    const body = await request.json().catch(() => ({}));
+    const nativeSession = body?.native_session as NativeSession | undefined;
+    const expoPushToken = String(body?.expo_push_token || "").trim();
+    const platform = String(body?.platform || "").trim();
+
+    if (!nativeSession?.user_id || !nativeSession?.token) {
+      return jsonResponse({ ok: false, error: "Native session required" }, 401);
+    }
+    if (!/^ExponentPushToken\[[^\]]+\]$/.test(expoPushToken) && !/^ExpoPushToken\[[^\]]+\]$/.test(expoPushToken)) {
+      return jsonResponse({ ok: false, error: "Valid Expo push token required" }, 400);
+    }
+
+    const user = await fetchFullBdUserById(nativeSession.user_id);
+    if (!nativeSessionMatchesBdUser(nativeSession, user)) {
+      return jsonResponse({ ok: false, error: "Native session expired" }, 401);
+    }
+
+    const { error } = await admin
+      .from("app_push_tokens")
+      .upsert({
+        bd_member_id: String(nativeSession.user_id),
+        bd_member_token: String(nativeSession.token || ""),
+        expo_push_token: expoPushToken,
+        platform,
+        enabled: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "expo_push_token" });
+
+    if (error) throw error;
+
+    return jsonResponse({ ok: true });
+  } catch (error) {
+    return jsonResponse({
+      ok: false,
+      error: "Push registration failed",
+      detail: error instanceof Error ? error.message : String(error),
+    }, 500);
+  }
+});
