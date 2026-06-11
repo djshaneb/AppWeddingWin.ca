@@ -14,6 +14,7 @@ import {
   FileText,
   Mail,
   Shield,
+  Trash2,
 } from 'lucide-react-native';
 
 const SITE_URL = 'https://www.weddingwin.ca';
@@ -21,6 +22,7 @@ const BRAND_COLOR = '#C66A6A';
 const LOGO_IMAGE = {
   uri: `${SITE_URL}/images/CoralLogoTransB.png`,
 } as const;
+const DELETE_ACCOUNT_URL = `${SITE_URL}/account/deleteaccount`;
 
 async function openExternal(url: string) {
   try {
@@ -28,6 +30,24 @@ async function openExternal(url: string) {
   } catch {
     Alert.alert('Could not open link', 'Please try again in a moment.');
   }
+}
+
+function confirmDeleteAccount() {
+  Alert.alert(
+    'Delete account?',
+    'WeddingWin will open the secure account deletion page. You can review the details before confirming deletion.',
+    [
+      {
+        text: 'Cancel',
+        style: 'cancel',
+      },
+      {
+        text: 'Open Delete Account',
+        style: 'destructive',
+        onPress: () => openExternal(DELETE_ACCOUNT_URL),
+      },
+    ]
+  );
 }
 
 function LinkRow({
@@ -96,6 +116,25 @@ export default function AboutScreen() {
             subtitle="Rules for using WeddingWin"
             url={`${SITE_URL}/about/terms`}
           />
+        </View>
+
+        <View style={styles.linkCard}>
+          <Text style={styles.sectionTitle}>Account Management</Text>
+          <TouchableOpacity
+            style={styles.row}
+            activeOpacity={0.82}
+            onPress={confirmDeleteAccount}
+            accessibilityRole="button"
+            accessibilityLabel="Delete account">
+            <View style={[styles.iconWrap, styles.deleteIconWrap]}>
+              <Trash2 size={20} color="#9B3E36" strokeWidth={2} />
+            </View>
+            <View style={styles.rowText}>
+              <Text style={[styles.rowTitle, styles.deleteTitle]}>Delete Account</Text>
+              <Text style={styles.rowSub}>Open the secure account deletion page</Text>
+            </View>
+            <ChevronRight size={20} color="#D1AAA5" strokeWidth={2} />
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.footerText}>WeddingWin Canada</Text>
@@ -177,6 +216,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 13,
   },
+  deleteIconWrap: {
+    backgroundColor: '#FFF1EE',
+  },
   rowText: {
     flex: 1,
   },
@@ -192,6 +234,9 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: '500',
     marginTop: 2,
+  },
+  deleteTitle: {
+    color: '#9B3E36',
   },
   divider: {
     height: 1,

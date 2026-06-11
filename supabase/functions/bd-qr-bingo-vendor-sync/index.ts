@@ -821,7 +821,7 @@ Deno.serve(async (request) => {
   try {
     const body = await request.json().catch(() => ({}));
     const nativeSession = body?.native_session as NativeSession | undefined;
-    const action = String(body?.action || "list");
+    const action = String(body?.action || "vendor_raffle_get");
 
     if (!nativeSession?.user_id || !nativeSession?.token) {
       return jsonResponse({ ok: false, error: "Native session required" }, 401);
@@ -954,7 +954,7 @@ Deno.serve(async (request) => {
   } catch (error) {
     return jsonResponse({
       ok: false,
-      error: "QR Bingo sync unavailable",
+      error: "QR Bingo vendor sync unavailable",
       detail: error instanceof Error ? error.message : String(error),
     }, 500);
   }

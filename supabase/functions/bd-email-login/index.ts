@@ -99,6 +99,13 @@ function createBdSessionCookie() {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function createBdLoginToken() {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+}
+
 function getPasswordHash(user: BdUser | undefined) {
   const hash = typeof user?.password === "string" ? user.password.trim() : "";
 
@@ -214,16 +221,20 @@ async function ensureBdSessionCookie(user: BdUser | undefined) {
     return user;
   }
 
+  const existingToken = typeof user.token === "string" ? user.token.trim() : "";
   const existingCookie = typeof user.cookie === "string" ? user.cookie.trim() : "";
-  if (existingCookie) {
+  if (existingToken && existingCookie) {
     return user;
   }
 
+  const loginToken = existingToken || createBdLoginToken();
   const sessionCookie = createBdSessionCookie();
-  const updateBody = new URLSearchParams({
+  const updateValues: Record<string, string> = {
     user_id: String(user.user_id),
-    cookie: sessionCookie,
-  });
+  };
+  if (!existingToken) updateValues.token = loginToken;
+  if (!existingCookie) updateValues.cookie = sessionCookie;
+  const updateBody = new URLSearchParams(updateValues);
 
   const update = await callBd("/api/v2/user/update", {
     method: "PUT",
@@ -246,7 +257,8 @@ async function ensureBdSessionCookie(user: BdUser | undefined) {
 
   return {
     ...user,
-    cookie: sessionCookie,
+    token: loginToken,
+    cookie: existingCookie || sessionCookie,
   };
 }
 
@@ -257,17 +269,32 @@ function nativeSessionMatchesUser(session: NativeSession, user: BdUser | undefin
 
   const sessionToken = String(session.token || "").trim();
   const userToken = String(user.token || "").trim();
-  if (!sessionToken || !userToken || sessionToken !== userToken) {
-    return false;
-  }
-
   const sessionCookie = String(session.cookie || "").trim();
   const userCookie = String(user.cookie || "").trim();
-  if (sessionCookie && userCookie && sessionCookie !== userCookie) {
+  return (sessionToken && userToken && sessionToken === userToken) ||
+    (sessionCookie && userCookie && sessionCookie === userCookie);
+}
+
+function nativeSessionCanRefreshUser(session: NativeSession, user: BdUser | undefined) {
+  if (nativeSessionMatchesUser(session, user)) return true;
+  if (!user?.user_id || String(user.user_id) !== String(session.user_id || "")) {
     return false;
   }
 
-  return true;
+  const sessionEmail = String(session.email || "").trim().toLowerCase();
+  const userEmail = String(user.email || "").trim().toLowerCase();
+  const hadIssuedSecret =
+    String(session.token || "").trim().length >= 16 ||
+    String(session.cookie || "").trim().length >= 16;
+
+  if (!hadIssuedSecret) return false;
+
+  // Older app sessions can survive after BD rotates the member token/cookie.
+  // The app already has the member id plus a previously-issued long secret, but
+  // may not have the email if the session came from the website cookie bridge.
+  if (!sessionEmail) return true;
+
+  return sessionEmail === userEmail;
 }
 
 Deno.serve(async (req) => {
@@ -287,7 +314,7 @@ Deno.serve(async (req) => {
       const session = native_session as NativeSession;
       let user = session.user_id ? await fetchFullUserById(session.user_id) : undefined;
 
-      if (!nativeSessionMatchesUser(session, user)) {
+      if (!nativeSessionCanRefreshUser(session, user)) {
         return jsonResponse({ error: "Stored session expired. Please sign in again." }, 401);
       }
 

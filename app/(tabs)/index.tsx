@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -14,6 +14,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   Vibration,
   View,
 } from 'react-native';
@@ -40,15 +41,19 @@ import * as WebBrowser from 'expo-web-browser';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Eye,
+  Globe2,
+  LayoutDashboard,
   LockKeyhole,
   Mail,
   ImagePlus,
   MessageCircle,
   QrCode,
   ScanLine,
+  Search,
   Store,
   TriangleAlert as AlertTriangle,
   X,
@@ -71,7 +76,7 @@ type LoginCredentials = { email: string; password: string; role?: SignupRole };
 type ContactProfile = {
   firstName: string;
   email: string;
-  weddingDate: string;
+  weddingDate?: string;
 };
 type SignupConsent = {
   acceptedTerms: true;
@@ -107,6 +112,11 @@ type NativeBridgeSession = {
   token?: string;
   cookie?: string;
 };
+
+function hasNativeBridgeSession(session?: NativeBridgeSession | null) {
+  return !!session?.user_id && (!!session.token || !!session.cookie);
+}
+
 type ChatStatus = {
   unread_count?: number;
   latest_label?: string;
@@ -115,11 +125,16 @@ type ChatStatus = {
 type NativeChatThread = {
   id: string;
   token: string;
+  thread_id?: string;
+  request_uri?: string;
   title: string;
   avatar_url?: string;
   subtitle: string;
   updated_at: string;
   unread_count: number;
+  reported?: boolean;
+  closed?: boolean;
+  report_notice?: string;
 };
 type NativeChatMessage = {
   id: string;
@@ -138,9 +153,26 @@ type NativeChatSyncResponse = {
   detail?: string;
   threads?: NativeChatThread[];
   selected_thread_token?: string;
+  selected_thread_reported?: boolean;
+  report_notice?: string;
   messages?: NativeChatMessage[];
   unread_count?: number;
+  sync_debug?: {
+    member_id?: string;
+    bd_threads?: number;
+    app_threads?: number;
+    visible_app_threads?: number;
+  };
 };
+type NativeChatReportResponse = {
+  ok?: boolean;
+  error?: string;
+  detail?: string;
+  selected_thread_token?: string;
+  report_notice?: string;
+  selected_thread_reported?: boolean;
+};
+type NativeChatSyncAction = 'list' | 'read' | 'send' | 'report' | 'open_vendor_profile';
 type QrScanAction = 'open-in-app' | 'open-external' | 'raw-code';
 type QrBingoVendor = {
   id: string;
@@ -174,9 +206,9 @@ type QrBingoRaffleSettings = {
   enabled: boolean;
   prize_title: string;
   prize_description: string;
-  claim_instructions: string;
   legal_terms_accepted: boolean;
   draw_opens_at: string;
+  updated_at?: string;
 };
 type QrBingoRaffleEntry = {
   id: string;
@@ -201,13 +233,22 @@ type QrBingoVendorRaffleResponse = {
   ok?: boolean;
   error?: string;
   detail?: string;
+  conflict?: boolean;
   vendor?: QrBingoVendor;
   settings?: QrBingoRaffleSettings;
   entries?: QrBingoRaffleEntry[];
   draws?: QrBingoRaffleDraw[];
   can_draw?: boolean;
+  max_draws?: number;
+  draws_remaining?: number;
+  draw_limit_reached?: boolean;
   draw_opens_at?: string;
   terms_url?: string;
+  email_result?: {
+    vendor?: { sent?: boolean; error?: string };
+    couple?: { sent?: boolean; error?: string };
+    error?: string;
+  };
   exports?: {
     csv?: string;
     txt?: string;
@@ -238,7 +279,15 @@ const CHAT_UNREAD_SESSION_KEY = 'weddingwin.chatUnread.v1';
 const PUSH_TOKEN_SESSION_KEY = 'weddingwin.expoPushToken.v1';
 const CHAT_STATUS_POLL_MS = 30000;
 const DEFAULT_CHAT_INBOX_PATH = '/account/chat_messages';
+const CHAT_REPORTED_NOTICE = "Chat Reported: This conversation will remain closed while it's being reviewed.";
 const CHAT_DING_SOUND = require('../../assets/sounds/chat-ding.wav');
+const QR_VENDOR_DRAW_MOBILE_SLIDES = [
+  require('../../assets/images/qr-bingo/vendor-draw-mobile/vendor-draw-mobile-slide-01.webp'),
+  require('../../assets/images/qr-bingo/vendor-draw-mobile/vendor-draw-mobile-slide-02.webp'),
+  require('../../assets/images/qr-bingo/vendor-draw-mobile/vendor-draw-mobile-slide-03.webp'),
+  require('../../assets/images/qr-bingo/vendor-draw-mobile/vendor-draw-mobile-slide-04.webp'),
+  require('../../assets/images/qr-bingo/vendor-draw-mobile/vendor-draw-mobile-slide-05.webp'),
+];
 const CHAT_INBOX_PATHS = new Set([
   '/account/chat_messages',
   '/account/chat/messages',
@@ -347,9 +396,11 @@ const HERO_IMAGE = {
 const LOGO_IMAGE = {
   uri: `${TARGET_URL}/images/CoralLogoTransB.png`,
 } as const;
-const COUPLE_MENU_WEBSITE_IMAGE = require('../../assets/images/couple-menu/website-builder.webp');
-const COUPLE_MENU_DASHBOARD_IMAGE = require('../../assets/images/couple-menu/vendor-dashboard.webp');
-const COUPLE_MENU_CHAT_IMAGE = require('../../assets/images/couple-menu/private-chat.webp');
+const COUPLE_MENU_WEBSITE_AI_IMAGE = require('../../assets/images/couple-menu/ai-website-builder.webp');
+const COUPLE_MENU_VENDOR_AI_IMAGE = require('../../assets/images/couple-menu/ai-vendor-search.webp');
+const COUPLE_MENU_MESSAGES_AI_IMAGE = require('../../assets/images/couple-menu/ai-private-messages.webp');
+const COUPLE_MENU_QR_AI_IMAGE = require('../../assets/images/couple-menu/ai-qr-bingo.webp');
+const VENDOR_MENU_DASHBOARD_AI_IMAGE = require('../../assets/images/couple-menu/ai-vendor-dashboard-small.png');
 
 const CLOAK_INJECTION = `
 (function() {
@@ -362,6 +413,47 @@ const CLOAK_INJECTION = `
     } catch(e) {}
 
     if (isOwnSite) {
+      try {
+        var blockMetaPixelScript = function(value) {
+          return /connect\\.facebook\\.net\\/.*fbevents\\.js/i.test(String(value || ''));
+        };
+        var noopFbq = function(){};
+        noopFbq.callMethod = function(){};
+        noopFbq.queue = [];
+        noopFbq.loaded = true;
+        window.fbq = noopFbq;
+        window._fbq = noopFbq;
+
+        var nativeCreateElement = document.createElement.bind(document);
+        document.createElement = function(tagName) {
+          var element = nativeCreateElement(tagName);
+          if (String(tagName || '').toLowerCase() === 'script') {
+            var nativeSetAttribute = element.setAttribute.bind(element);
+            Object.defineProperty(element, 'src', {
+              configurable: true,
+              get: function() {
+                return element.getAttribute('src') || '';
+              },
+              set: function(value) {
+                if (blockMetaPixelScript(value)) {
+                  nativeSetAttribute('data-ww-app-blocked-src', String(value));
+                  return;
+                }
+                nativeSetAttribute('src', value);
+              }
+            });
+            element.setAttribute = function(name, value) {
+              if (String(name || '').toLowerCase() === 'src' && blockMetaPixelScript(value)) {
+                nativeSetAttribute('data-ww-app-blocked-src', String(value));
+                return;
+              }
+              return nativeSetAttribute(name, value);
+            };
+          }
+          return element;
+        };
+      } catch(e) {}
+
       var notifyAppLogout = function() {
         try {
           window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -538,6 +630,27 @@ function isChatInboxPath(path: string): boolean {
   return CHAT_INBOX_PATHS.has(path.replace(/\/+$/, '') || '/');
 }
 
+function isVendorConnectPath(path: string): boolean {
+  const parts = path.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+  return parts.length >= 2 && parts[parts.length - 1] === 'connect';
+}
+
+function vendorNameFromConnectUrl(url: string): string {
+  try {
+    const parsed = new URL(url, TARGET_URL);
+    const parts = parsed.pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+    const slug = parts[parts.length - 2] || '';
+    if (!slug) return 'this vendor';
+    return slug
+      .split('-')
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  } catch {
+    return 'this vendor';
+  }
+}
+
 function needsContactProfile(member: NativeMember | null): boolean {
   if (!member?.email) return false;
   const firstName = String(member.first_name || '').trim();
@@ -652,6 +765,32 @@ function NativeQrScanner({
   const [lastScanTone, setLastScanTone] = useState<QrScanFeedbackTone>('idle');
   const [raffleOffer, setRaffleOffer] = useState<QrBingoRaffleOffer | null>(null);
   const [raffleSaving, setRaffleSaving] = useState(false);
+  const scanFeedbackClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearScanFeedbackTimer = useCallback(() => {
+    if (scanFeedbackClearTimerRef.current) {
+      clearTimeout(scanFeedbackClearTimerRef.current);
+      scanFeedbackClearTimerRef.current = null;
+    }
+  }, []);
+
+  const showScanFeedback = useCallback((
+    label: string,
+    tone: QrScanFeedbackTone,
+    clearAfterMs?: number,
+  ) => {
+    clearScanFeedbackTimer();
+    setLastScanLabel(label);
+    setLastScanTone(tone);
+
+    if (clearAfterMs) {
+      scanFeedbackClearTimerRef.current = setTimeout(() => {
+        setLastScanLabel('');
+        setLastScanTone('idle');
+        scanFeedbackClearTimerRef.current = null;
+      }, clearAfterMs);
+    }
+  }, [clearScanFeedbackTimer]);
 
   const loadBingoCard = useCallback(async () => {
     if (!nativeSession?.user_id || !nativeSession?.token) {
@@ -691,17 +830,21 @@ function NativeQrScanner({
   }, [nativeSession]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      showScanFeedback('', 'idle');
+      return;
+    }
     setScanLocked(false);
-    setLastScanLabel('');
-    setLastScanTone('idle');
+    showScanFeedback('', 'idle');
     setRaffleOffer(null);
     setBingoTotalCount(null);
     loadBingoCard();
     if (permission && !permission.granted && permission.canAskAgain) {
       requestPermission().catch(() => {});
     }
-  }, [loadBingoCard, permission, requestPermission, visible]);
+  }, [loadBingoCard, permission, requestPermission, showScanFeedback, visible]);
+
+  useEffect(() => clearScanFeedbackTimer, [clearScanFeedbackTimer]);
 
   const saveBingoScan = useCallback(async (vendor: QrBingoVendor) => {
     if (!nativeSession?.user_id || !nativeSession?.token) {
@@ -734,12 +877,13 @@ function NativeQrScanner({
       setVendors(data.vendors || vendors);
       setBingoTotalCount(typeof data.total_count === 'number' ? data.total_count : data.vendors?.length || vendors.length);
       setScannedVendorIds(new Set((data.scanned || [vendor.id]).map(String)));
-      setLastScanLabel(
+      showScanFeedback(
         data.completed
           ? 'Grand prize entry complete! You scanned every vendor booth. You are entered to win.'
-          : `Scanned: ${vendor.name}`
+          : `Scanned: ${vendor.name}`,
+        'success',
+        data.completed ? undefined : 5000
       );
-      setLastScanTone('success');
       if (data.raffle_offer) {
         setRaffleOffer(data.raffle_offer);
       }
@@ -750,7 +894,7 @@ function NativeQrScanner({
     } finally {
       setSavingBingo(false);
     }
-  }, [nativeSession, vendors]);
+  }, [nativeSession, showScanFeedback, vendors]);
 
   const handleBarcodeScanned = useCallback(async (result: BarcodeScanningResult) => {
     const value = result.data?.trim();
@@ -758,8 +902,7 @@ function NativeQrScanner({
     setScanLocked(true);
     const matched = matchQrBingoVendor(value, vendors);
     if (!matched) {
-      setLastScanLabel('Unrecognized QR');
-      setLastScanTone('error');
+      showScanFeedback('Unrecognized QR', 'error', 5000);
       onScan(value);
       setTimeout(() => setScanLocked(false), 1600);
       return;
@@ -767,8 +910,7 @@ function NativeQrScanner({
 
     if (scannedVendorIds.has(matched.id)) {
       setBingoError(null);
-      setLastScanLabel(`Already scanned: ${matched.name}`);
-      setLastScanTone('duplicate');
+      showScanFeedback(`Already scanned: ${matched.name}`, 'duplicate', 5000);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
       setTimeout(() => setScanLocked(false), 1200);
       return;
@@ -779,7 +921,7 @@ function NativeQrScanner({
       onScan(value);
     }
     setTimeout(() => setScanLocked(false), 1600);
-  }, [onScan, saveBingoScan, scanLocked, scannedVendorIds, vendors]);
+  }, [onScan, saveBingoScan, scanLocked, scannedVendorIds, showScanFeedback, vendors]);
 
   const enterRaffle = useCallback(async () => {
     if (!raffleOffer || raffleSaving || !nativeSession?.user_id || !nativeSession?.token) return;
@@ -1012,6 +1154,113 @@ function NativeQrScanner({
   );
 }
 
+type BottomNavIcon = ComponentType<{
+  size?: number;
+  color?: string;
+  strokeWidth?: number;
+}>;
+
+function CoupleBottomNav({
+  onOpenWebsiteBuilder,
+  onOpenDashboard,
+  onOpenChat,
+  onOpenQrScanner,
+  chatUnreadCount,
+}: {
+  onOpenWebsiteBuilder: () => void;
+  onOpenDashboard: () => void;
+  onOpenChat: () => void;
+  onOpenQrScanner: () => void;
+  chatUnreadCount: number;
+}) {
+  const renderItem = (
+    label: string,
+    accessibilityLabel: string,
+    Icon: BottomNavIcon,
+    onPress: () => void,
+    badgeCount = 0
+  ) => (
+    <TouchableOpacity
+      style={styles.coupleBottomNavItem}
+      activeOpacity={0.78}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}>
+      <View style={styles.coupleBottomNavIconWrap}>
+        <Icon size={19} color={BRAND_COLOR} strokeWidth={2.15} />
+        {badgeCount > 0 ? (
+          <View style={styles.coupleBottomNavBadge}>
+            <Text style={styles.coupleBottomNavBadgeText}>
+              {badgeCount > 99 ? '99+' : badgeCount}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+      <Text style={styles.coupleBottomNavLabel} numberOfLines={1}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+
+  return (
+    <View style={styles.coupleBottomNav} pointerEvents="box-none">
+      {renderItem('Website', 'Open wedding website builder', Globe2, onOpenWebsiteBuilder)}
+      {renderItem('Vendors', 'Open vendor search dashboard', Search, onOpenDashboard)}
+      {renderItem('Messages', 'Open private messages', MessageCircle, onOpenChat, chatUnreadCount)}
+      {renderItem('QR Bingo', 'Open QR Bingo scanner', QrCode, onOpenQrScanner)}
+    </View>
+  );
+}
+
+function VendorBottomNav({
+  onOpenVendorDashboard,
+  onOpenChat,
+  onOpenVendorDraw,
+  chatUnreadCount,
+}: {
+  onOpenVendorDashboard: () => void;
+  onOpenChat: () => void;
+  onOpenVendorDraw: () => void;
+  chatUnreadCount: number;
+}) {
+  const renderItem = (
+    label: string,
+    accessibilityLabel: string,
+    Icon: BottomNavIcon,
+    onPress: () => void,
+    badgeCount = 0
+  ) => (
+    <TouchableOpacity
+      style={styles.coupleBottomNavItem}
+      activeOpacity={0.78}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}>
+      <View style={styles.coupleBottomNavIconWrap}>
+        <Icon size={19} color={BRAND_COLOR} strokeWidth={2.15} />
+        {badgeCount > 0 ? (
+          <View style={styles.coupleBottomNavBadge}>
+            <Text style={styles.coupleBottomNavBadgeText}>
+              {badgeCount > 99 ? '99+' : badgeCount}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+      <Text style={styles.coupleBottomNavLabel} numberOfLines={1}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+
+  return (
+    <View style={styles.coupleBottomNav} pointerEvents="box-none">
+      {renderItem('Dashboard', 'Open vendor dashboard', LayoutDashboard, onOpenVendorDashboard)}
+      {renderItem('Messages', 'Open private messages', MessageCircle, onOpenChat, chatUnreadCount)}
+      {renderItem('Draw', 'Open QR Bingo vendor draw settings', QrCode, onOpenVendorDraw)}
+    </View>
+  );
+}
+
 function NativeHome({
   onOpenUrl,
   onOpenWebsiteBuilder,
@@ -1033,6 +1282,7 @@ function NativeHome({
   websiteSessionReady,
   onSignOut,
   nativeSession,
+  vendorDrawOpenRequestId,
 }: {
   onOpenUrl: (path: string) => void;
   onOpenWebsiteBuilder: () => void;
@@ -1054,7 +1304,11 @@ function NativeHome({
   websiteSessionReady: boolean;
   onSignOut: () => void;
   nativeSession: NativeBridgeSession | null;
+  vendorDrawOpenRequestId: number;
 }) {
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const vendorDrawSlideWidth = Math.min(Math.max(viewportWidth - 82, 260), 380);
+  const vendorDrawSlideHeight = Math.round(vendorDrawSlideWidth * (1920 / 1088));
   const [role, setRole] = useState<'couple' | 'vendor'>('couple');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1074,11 +1328,20 @@ function NativeHome({
   const [vendorRaffleDrawing, setVendorRaffleDrawing] = useState(false);
   const [vendorRaffleError, setVendorRaffleError] = useState<string | null>(null);
   const [vendorRaffle, setVendorRaffle] = useState<QrBingoVendorRaffleResponse | null>(null);
+  const [vendorRaffleSlideIndex, setVendorRaffleSlideIndex] = useState(0);
   const [raffleEnabled, setRaffleEnabled] = useState(false);
   const [rafflePrizeTitle, setRafflePrizeTitle] = useState('');
   const [rafflePrizeDescription, setRafflePrizeDescription] = useState('');
-  const [raffleClaimInstructions, setRaffleClaimInstructions] = useState('');
   const [raffleLegalAccepted, setRaffleLegalAccepted] = useState(false);
+  const [vendorRaffleSaveMessage, setVendorRaffleSaveMessage] = useState('');
+  const vendorRaffleHydratingRef = useRef(false);
+  const vendorRaffleLoadedRef = useRef(false);
+  const vendorRaffleSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vendorRaffleLastSavedRef = useRef('');
+  const vendorRaffleSaveInFlightRef = useRef(false);
+  const vendorRaffleSaveSeqRef = useRef(0);
+  const vendorRaffleLastLocalEditRef = useRef(0);
+  const lastVendorDrawOpenRequestRef = useRef(0);
 
   useEffect(() => {
     setProfileFirstName(member?.first_name || '');
@@ -1209,14 +1472,45 @@ function NativeHome({
   const isVendorRole = role === 'vendor';
   const showCoupleMenu = !!member && memberIsCouple;
   const showVendorMenu = !!member && !memberIsCouple;
+  const showOneAppMenu = !!member && !shouldCompleteProfile && (showCoupleMenu || showVendorMenu);
+  const compactOneAppMenu = showOneAppMenu || viewportHeight < 740;
+
+  const vendorRaffleSignature = (
+    enabled: boolean,
+    prizeDescription: string,
+    legalAccepted: boolean
+  ) =>
+    JSON.stringify({
+      enabled,
+      prize_description: prizeDescription,
+      legal_terms_accepted: enabled ? true : legalAccepted,
+    });
+
+  const markVendorRaffleLocalEdit = () => {
+    vendorRaffleLastLocalEditRef.current = Date.now();
+  };
+
+  const finishVendorRaffleHydration = () => {
+    setTimeout(() => {
+      vendorRaffleHydratingRef.current = false;
+      vendorRaffleLoadedRef.current = true;
+    }, 0);
+  };
 
   const applyVendorRaffle = (data: QrBingoVendorRaffleResponse) => {
+    vendorRaffleHydratingRef.current = true;
     setVendorRaffle(data);
     setRaffleEnabled(Boolean(data.settings?.enabled));
     setRafflePrizeTitle(data.settings?.prize_title || '');
     setRafflePrizeDescription(data.settings?.prize_description || '');
-    setRaffleClaimInstructions(data.settings?.claim_instructions || '');
     setRaffleLegalAccepted(Boolean(data.settings?.legal_terms_accepted));
+    vendorRaffleLastSavedRef.current = vendorRaffleSignature(
+      Boolean(data.settings?.enabled),
+      data.settings?.prize_description || '',
+      Boolean(data.settings?.legal_terms_accepted)
+    );
+    setVendorRaffleSaveMessage('Changes save automatically to the app and website.');
+    finishVendorRaffleHydration();
   };
 
   const fetchVendorRaffle = async () => {
@@ -1252,12 +1546,41 @@ function NativeHome({
   };
 
   const openVendorRaffle = () => {
+    vendorRaffleLoadedRef.current = false;
+    setVendorRaffleSaveMessage('');
+    setVendorRaffleSlideIndex(0);
     setShowVendorRaffle(true);
     fetchVendorRaffle();
   };
 
-  const saveVendorRaffle = async () => {
-    if (!nativeSession?.user_id || !nativeSession?.token || vendorRaffleSaving) return;
+  useEffect(() => {
+    if (
+      !showVendorMenu ||
+      vendorDrawOpenRequestId <= 0 ||
+      vendorDrawOpenRequestId === lastVendorDrawOpenRequestRef.current
+    ) {
+      return;
+    }
+
+    lastVendorDrawOpenRequestRef.current = vendorDrawOpenRequestId;
+    openVendorRaffle();
+  }, [showVendorMenu, vendorDrawOpenRequestId]);
+
+  const saveVendorRaffle = async (options: { silent?: boolean } = {}) => {
+    if (!nativeSession?.user_id || !nativeSession?.token || vendorRaffleSaveInFlightRef.current) return;
+    const saveStartedAt = Date.now();
+    const saveSeq = vendorRaffleSaveSeqRef.current + 1;
+    vendorRaffleSaveSeqRef.current = saveSeq;
+    const draftEnabled = raffleEnabled;
+    const draftPrizeTitle = rafflePrizeTitle;
+    const draftPrizeDescription = rafflePrizeDescription;
+    const draftLegalAccepted = draftEnabled ? true : raffleLegalAccepted;
+    const savedSignature = vendorRaffleSignature(
+      draftEnabled,
+      draftPrizeDescription,
+      draftLegalAccepted
+    );
+    vendorRaffleSaveInFlightRef.current = true;
     setVendorRaffleSaving(true);
     setVendorRaffleError(null);
     try {
@@ -1271,31 +1594,95 @@ function NativeHome({
         body: JSON.stringify({
           action: 'vendor_raffle_update',
           native_session: nativeSession,
-          enabled: raffleEnabled,
-          prize_title: rafflePrizeTitle,
-          prize_description: rafflePrizeDescription,
-          claim_instructions: raffleClaimInstructions,
-          legal_terms_accepted: raffleLegalAccepted,
+          enabled: draftEnabled,
+          prize_title: draftPrizeDescription.trim().split(/\r?\n/)[0]?.trim() || draftPrizeTitle,
+          prize_description: draftPrizeDescription,
+          legal_terms_accepted: draftLegalAccepted,
+          settings_updated_at: vendorRaffle?.settings?.updated_at || '',
         }),
       });
       const data = (await response.json()) as QrBingoVendorRaffleResponse;
       if (!response.ok || data?.ok === false) {
+        if (response.status === 409 || data?.conflict) {
+          const userKeptTyping = vendorRaffleLastLocalEditRef.current > saveStartedAt;
+          if (userKeptTyping) {
+            setVendorRaffle(data);
+            vendorRaffleLastSavedRef.current = vendorRaffleSignature(
+              Boolean(data.settings?.enabled),
+              data.settings?.prize_description || '',
+              Boolean(data.settings?.legal_terms_accepted)
+            );
+          } else {
+            applyVendorRaffle(data);
+          }
+          const message =
+            data?.detail ||
+            data?.error ||
+            'This draw was updated in another tab. Review the latest settings before saving again.';
+          if (!options.silent) Alert.alert('Updated in another tab', message);
+          throw new Error(message);
+        }
         throw new Error(data?.detail || data?.error || 'Could not save this draw.');
       }
-      applyVendorRaffle(data);
-      Alert.alert('Saved', 'Your QR Bingo vendor draw settings are saved.');
+      setVendorRaffle(data);
+      vendorRaffleLastSavedRef.current = savedSignature;
+      if (vendorRaffleLastLocalEditRef.current <= saveStartedAt && saveSeq === vendorRaffleSaveSeqRef.current) {
+        vendorRaffleHydratingRef.current = true;
+        setRaffleEnabled(Boolean(data.settings?.enabled));
+        setRafflePrizeTitle(data.settings?.prize_title || '');
+        setRafflePrizeDescription(data.settings?.prize_description || '');
+        setRaffleLegalAccepted(Boolean(data.settings?.legal_terms_accepted));
+        finishVendorRaffleHydration();
+      }
+      setVendorRaffleSaveMessage(
+        vendorRaffleLastLocalEditRef.current > saveStartedAt
+          ? 'Saving your latest changes...'
+          : 'Saved to the app and website.'
+      );
+      if (!options.silent) {
+        Alert.alert('Saved', 'Your QR Bingo vendor draw settings are synced in the app and on the website.');
+      }
     } catch (error) {
       setVendorRaffleError(error instanceof Error ? error.message : 'Could not save this draw.');
+      setVendorRaffleSaveMessage('Could not autosave. Check the message above and try again.');
     } finally {
+      vendorRaffleSaveInFlightRef.current = false;
       setVendorRaffleSaving(false);
     }
   };
 
+  useEffect(() => {
+    if (!showVendorRaffle || !vendorRaffle || !vendorRaffleLoadedRef.current || vendorRaffleHydratingRef.current) {
+      return;
+    }
+    const signature = vendorRaffleSignature(raffleEnabled, rafflePrizeDescription, raffleLegalAccepted);
+    if (signature === vendorRaffleLastSavedRef.current) return;
+    if (vendorRaffleSaving || vendorRaffleSaveInFlightRef.current) {
+      setVendorRaffleSaveMessage('Saving your latest changes...');
+      return;
+    }
+
+    setVendorRaffleSaveMessage('Saving after you pause...');
+    if (vendorRaffleSaveTimerRef.current) clearTimeout(vendorRaffleSaveTimerRef.current);
+    vendorRaffleSaveTimerRef.current = setTimeout(() => {
+      vendorRaffleSaveTimerRef.current = null;
+      saveVendorRaffle({ silent: true });
+    }, 1200);
+
+    return () => {
+      if (vendorRaffleSaveTimerRef.current) {
+        clearTimeout(vendorRaffleSaveTimerRef.current);
+        vendorRaffleSaveTimerRef.current = null;
+      }
+    };
+  }, [showVendorRaffle, raffleEnabled, rafflePrizeDescription, raffleLegalAccepted, vendorRaffleSaving]);
+
   const drawVendorWinner = async (reason = 'initial') => {
     if (!nativeSession?.user_id || !nativeSession?.token || vendorRaffleDrawing) return;
+    const nextDrawNumber = vendorRaffleDrawCount + 1;
     Alert.alert(
       'Pick a winner?',
-      'Wedding Win Inc. will generate emails for both you and the selected couple. You can redraw later for an extra prize or unclaimed prize.',
+      `Wedding Win Inc. will generate emails for both you and the selected couple. This will count as winner ${nextDrawNumber} of ${vendorRaffleMaxDraws} for this event.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -1322,7 +1709,15 @@ function NativeHome({
                 throw new Error(data?.detail || data?.error || 'Could not pick a winner.');
               }
               applyVendorRaffle(data);
-              Alert.alert('Winner Selected', data.draw?.winner_name || 'Winner selected.');
+              const emailError =
+                data.email_result?.error ||
+                [data.email_result?.vendor?.error, data.email_result?.couple?.error].filter(Boolean).join('\n');
+              Alert.alert(
+                'Winner Selected',
+                emailError
+                  ? `${data.draw?.winner_name || 'Winner selected.'}\n\nWeddingWin could not send the emails yet:\n${emailError}`
+                  : `${data.draw?.winner_name || 'Winner selected.'}\n\nWeddingWin is sending the vendor and couple emails.`
+              );
             } catch (error) {
               setVendorRaffleError(error instanceof Error ? error.message : 'Could not pick a winner.');
             } finally {
@@ -1346,17 +1741,36 @@ function NativeHome({
     }).catch(() => {});
   };
 
+  const vendorDrawPrizePreview =
+    rafflePrizeDescription.trim().split(/\r?\n/)[0]?.trim() || rafflePrizeTitle.trim() || 'Your prize';
+  const vendorDrawNamePreview = vendorRaffle?.vendor?.name || displayName || 'your business';
+  const vendorDrawProfilePreview = vendorRaffle?.vendor?.full_filename
+    ? vendorRaffle.vendor.full_filename.startsWith('http')
+      ? vendorRaffle.vendor.full_filename
+      : `${TARGET_URL}/${vendorRaffle.vendor.full_filename.replace(/^\/+/, '')}`
+    : 'their WeddingWin profile';
+  const vendorRaffleDrawCount = vendorRaffle?.draws?.length || 0;
+  const vendorRaffleMaxDraws = vendorRaffle?.max_draws || 3;
+  const vendorRaffleDrawsRemaining =
+    typeof vendorRaffle?.draws_remaining === 'number'
+      ? vendorRaffle.draws_remaining
+      : Math.max(0, vendorRaffleMaxDraws - vendorRaffleDrawCount);
+  const vendorRaffleLimitReached = Boolean(vendorRaffle?.draw_limit_reached || vendorRaffleDrawsRemaining <= 0);
+  const vendorRaffleCanPickWinner = Boolean(raffleEnabled && vendorRaffle?.can_draw && !vendorRaffleLimitReached);
+
   const saveProfile = () => {
     if (profileSaveLoading) return;
 
     if (
       !profileFirstName.trim() ||
       !profileEmail.trim() ||
-      !profileWeddingDate.trim()
+      (memberIsCouple && !profileWeddingDate.trim())
     ) {
       Alert.alert(
         'Finish your profile',
-        'Add your first name, email address, and wedding date so WeddingWin can complete your couple account.'
+        memberIsCouple
+          ? 'Add your first name, email address, and wedding date so WeddingWin can complete your couple account.'
+          : 'Add your name and email address so WeddingWin can complete your vendor account.'
       );
       return;
     }
@@ -1372,16 +1786,24 @@ function NativeHome({
     onCompleteProfile({
       firstName: profileFirstName.trim(),
       email: profileEmail.trim().toLowerCase(),
-      weddingDate: profileWeddingDate.trim(),
+      ...(memberIsCouple ? { weddingDate: profileWeddingDate.trim() } : {}),
     });
   };
 
   return (
     <SafeAreaView style={styles.nativeContainer} edges={['top']}>
       <ScrollView
-        contentContainerStyle={styles.nativeContent}
+        scrollEnabled={!showOneAppMenu}
+        contentContainerStyle={[
+          styles.nativeContent,
+        ]}
         showsVerticalScrollIndicator={false}>
-        <ImageBackground source={HERO_IMAGE} style={styles.loginBackdrop}>
+        <ImageBackground
+          source={HERO_IMAGE}
+          style={[
+            styles.loginBackdrop,
+            compactOneAppMenu && styles.loginBackdropCompact,
+          ]}>
           <View style={styles.backdropWash} />
           <View style={[styles.branch, styles.branchTopRight]}>
             <View style={styles.branchStem} />
@@ -1396,20 +1818,22 @@ function NativeHome({
             <View style={[styles.leaf, styles.leafThree]} />
           </View>
 
-          <View style={styles.logoWrap}>
+          <View style={[styles.logoWrap, compactOneAppMenu && styles.logoWrapCompact]}>
             <Image
               source={LOGO_IMAGE}
-              style={styles.brandLogo}
+              style={[styles.brandLogo, compactOneAppMenu && styles.brandLogoCompact]}
               resizeMode="contain"
               accessibilityLabel="WeddingWin.ca"
             />
-            <Text style={styles.countryLabel}>CANADA</Text>
+            {!compactOneAppMenu ? <Text style={styles.countryLabel}>CANADA</Text> : null}
           </View>
-          <Text style={styles.tagline}>
-            {isVendorRole
-              ? 'Where the perfect couples can find you'
-              : 'Find your perfect venue & vendors'}
-          </Text>
+          {!showOneAppMenu ? (
+            <Text style={styles.tagline}>
+              {isVendorRole
+                ? 'Where the perfect couples can find you'
+                : 'Find your perfect venue & vendors'}
+            </Text>
+          ) : null}
 
           {!member && wizardStep === 1 ? (
             <View style={styles.pathWizard}>
@@ -1501,24 +1925,24 @@ function NativeHome({
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.pathStepText}>Step 1 of 3</Text>
-              <View style={styles.stepDots}>
-                <View style={[styles.stepDot, styles.stepDotActive]} />
-                <View style={styles.stepDot} />
-                <View style={styles.stepDot} />
-              </View>
               <Text style={styles.pathFooter}>Your wedding journey starts here</Text>
             </View>
           ) : null}
 
           {member || wizardStep === 2 ? (
-          <View style={styles.loginCard}>
+          <View
+            style={[
+              styles.loginCard,
+              showOneAppMenu && styles.oneAppLoginCard,
+            ]}>
             {member ? (
-              <View style={styles.signedInPanel}>
+              <View style={[styles.signedInPanel, showOneAppMenu && styles.oneAppSignedInPanel]}>
                 <Text style={styles.signedInTitle}>
                   {shouldCompleteProfile ? 'Finish your profile' : 'You are signed in'}
                 </Text>
-                <Text style={styles.signedInName} numberOfLines={1}>
+                <Text
+                  style={[styles.signedInName, showOneAppMenu && styles.oneAppSignedInName]}
+                  numberOfLines={1}>
                   {displayName}
                 </Text>
                 {shouldCompleteProfile ? (
@@ -1616,7 +2040,7 @@ function NativeHome({
                 ) : showCoupleMenu ? (
                   <>
                     <TouchableOpacity
-                      style={styles.coupleMenuCard}
+                      style={[styles.coupleMenuCard, styles.oneAppMenuCard]}
                       activeOpacity={0.86}
                       onPress={onOpenWebsiteBuilder}>
                       <View style={styles.coupleMenuCopy}>
@@ -1627,30 +2051,30 @@ function NativeHome({
                         </Text>
                       </View>
                       <Image
-                        source={COUPLE_MENU_WEBSITE_IMAGE}
-                        style={styles.coupleMenuImage}
-                        resizeMode="cover"
+                        source={COUPLE_MENU_WEBSITE_AI_IMAGE}
+                        style={[styles.coupleMenuImage, styles.oneAppMenuImage]}
+                        resizeMode="contain"
                       />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={styles.coupleMenuCard}
+                      style={[styles.coupleMenuCard, styles.oneAppMenuCard]}
                       activeOpacity={0.86}
                       onPress={onOpenDashboard}>
                       <View style={styles.coupleMenuCopy}>
                         <Text style={styles.coupleMenuEyebrow}>Plan</Text>
-                        <Text style={styles.coupleMenuTitle}>Vendor Search Dashboard</Text>
+                        <Text style={styles.coupleMenuTitle}>Vendor Search</Text>
                         <Text style={styles.coupleMenuDescription}>
                           Search vendors and manage your saved finds.
                         </Text>
                       </View>
                       <Image
-                        source={COUPLE_MENU_DASHBOARD_IMAGE}
-                        style={styles.coupleMenuImage}
-                        resizeMode="cover"
+                        source={COUPLE_MENU_VENDOR_AI_IMAGE}
+                        style={[styles.coupleMenuImage, styles.oneAppMenuImage]}
+                        resizeMode="contain"
                       />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={styles.coupleMenuCard}
+                      style={[styles.coupleMenuCard, styles.oneAppMenuCard]}
                       activeOpacity={0.86}
                       onPress={onOpenChat}>
                       <View style={styles.coupleMenuCopy}>
@@ -1664,19 +2088,19 @@ function NativeHome({
                             </View>
                           ) : null}
                         </View>
-                        <Text style={styles.coupleMenuTitle}>Private Chat Messages</Text>
+                        <Text style={styles.coupleMenuTitle}>Private Messages</Text>
                         <Text style={styles.coupleMenuDescription} numberOfLines={2}>
                           {chatUnreadCount > 0 ? chatStatusLabel : 'Open your synced WeddingWin inbox.'}
                         </Text>
                       </View>
                       <Image
-                        source={COUPLE_MENU_CHAT_IMAGE}
-                        style={styles.coupleMenuImage}
-                        resizeMode="cover"
+                        source={COUPLE_MENU_MESSAGES_AI_IMAGE}
+                        style={[styles.coupleMenuImage, styles.oneAppMenuImage]}
+                        resizeMode="contain"
                       />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.coupleMenuCard, styles.qrMenuCard]}
+                      style={[styles.coupleMenuCard, styles.oneAppMenuCard, styles.qrMenuCard]}
                       activeOpacity={0.86}
                       onPress={onOpenQrScanner}>
                       <View style={styles.coupleMenuCopy}>
@@ -1685,35 +2109,35 @@ function NativeHome({
                         <Text style={styles.coupleMenuDescription}>
                           Scan WeddingWin QR codes at wedding shows.
                         </Text>
-                        <Text style={styles.qrMenuEventDate}>October 18, 2026</Text>
-                        <Text style={styles.qrMenuEventVenue}>
-                          Americana Niagara Resort • Niagara Falls
-                        </Text>
                       </View>
-                      <View style={styles.qrMenuIconWrap}>
-                        <QrCode size={48} color="#FFFFFF" strokeWidth={1.7} />
-                      </View>
+                      <Image
+                        source={COUPLE_MENU_QR_AI_IMAGE}
+                        style={[styles.coupleMenuImage, styles.oneAppMenuImage]}
+                        resizeMode="contain"
+                      />
                     </TouchableOpacity>
                   </>
-                ) : showVendorMenu ? (
+                 ) : showVendorMenu ? (
                   <>
                     <TouchableOpacity
-                      style={styles.coupleMenuCard}
+                      style={[styles.coupleMenuCard, styles.oneAppMenuCard]}
                       activeOpacity={0.86}
                       onPress={onOpenDashboard}>
                       <View style={styles.coupleMenuCopy}>
-                        <Text style={styles.coupleMenuEyebrow}>Dashboard</Text>
+                        <Text style={styles.coupleMenuEyebrow}>Account</Text>
                         <Text style={styles.coupleMenuTitle}>Vendor Dashboard</Text>
                         <Text style={styles.coupleMenuDescription}>
-                          Open your full WeddingWin account dashboard and business tools.
+                          Manage your profile, leads, messages, and WeddingWin account.
                         </Text>
                       </View>
-                      <View style={[styles.vendorMenuIconWrap, styles.vendorMenuDashboardIcon]}>
-                        <Store size={42} color="#FFFFFF" strokeWidth={1.8} />
-                      </View>
+                      <Image
+                        source={VENDOR_MENU_DASHBOARD_AI_IMAGE}
+                        style={[styles.coupleMenuImage, styles.oneAppMenuImage]}
+                        resizeMode="contain"
+                      />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={styles.coupleMenuCard}
+                      style={[styles.coupleMenuCard, styles.oneAppMenuCard]}
                       activeOpacity={0.86}
                       onPress={onOpenChat}>
                       <View style={styles.coupleMenuCopy}>
@@ -1732,12 +2156,14 @@ function NativeHome({
                           {chatUnreadCount > 0 ? chatStatusLabel : 'Reply to couples from your WeddingWin inbox.'}
                         </Text>
                       </View>
-                      <View style={[styles.vendorMenuIconWrap, styles.vendorMenuChatIcon]}>
-                        <MessageCircle size={42} color="#FFFFFF" strokeWidth={1.8} />
-                      </View>
+                      <Image
+                        source={COUPLE_MENU_MESSAGES_AI_IMAGE}
+                        style={[styles.coupleMenuImage, styles.oneAppMenuImage]}
+                        resizeMode="contain"
+                      />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.coupleMenuCard, styles.qrMenuCard]}
+                      style={[styles.coupleMenuCard, styles.oneAppMenuCard, styles.qrMenuCard]}
                       activeOpacity={0.86}
                       onPress={openVendorRaffle}>
                       <View style={styles.coupleMenuCopy}>
@@ -1747,9 +2173,11 @@ function NativeHome({
                           Set your booth prize, view opt-ins, export couples, and pick a winner.
                         </Text>
                       </View>
-                      <View style={styles.vendorMenuIconWrap}>
-                        <QrCode size={44} color="#FFFFFF" strokeWidth={1.7} />
-                      </View>
+                      <Image
+                        source={COUPLE_MENU_QR_AI_IMAGE}
+                        style={[styles.coupleMenuImage, styles.oneAppMenuImage]}
+                        resizeMode="contain"
+                      />
                     </TouchableOpacity>
                   </>
                 ) : (
@@ -1763,7 +2191,7 @@ function NativeHome({
                   </>
                 )}
                 <TouchableOpacity
-                  style={styles.signOutButton}
+                  style={[styles.signOutButton, showOneAppMenu && styles.oneAppSignOutButton]}
                   activeOpacity={0.82}
                   onPress={onSignOut}>
                   <Text style={styles.signOutText}>Sign Out</Text>
@@ -1778,7 +2206,6 @@ function NativeHome({
               <ChevronLeft size={18} color={BRAND_COLOR} strokeWidth={2.2} />
               <Text style={styles.wizardBackText}>Change path</Text>
             </TouchableOpacity>
-            <Text style={styles.authStepText}>Step 2 of 3</Text>
             <Text style={styles.authTitle}>
               {isVendorRole
                 ? 'Create your vendor account'
@@ -1960,9 +2387,9 @@ function NativeHome({
 
             {authMode === 'login' ? (
               <TouchableOpacity
-                style={[
-                  styles.googleButton,
-                  googleLoginLoading && styles.loginButtonDisabled,
+                  style={[
+                    styles.googleButton,
+                    googleLoginLoading && styles.loginButtonDisabled,
                 ]}
                 disabled={googleLoginLoading}
                 activeOpacity={0.86}
@@ -1994,15 +2421,17 @@ function NativeHome({
           </View>
           ) : null}
 
-          <TouchableOpacity
-            style={styles.supportLink}
-            activeOpacity={0.75}
-            onPress={() => Linking.openURL('mailto:hello@weddingwin.ca').catch(() => {})}>
-            <MessageCircle size={18} color={BRAND_COLOR} strokeWidth={1.8} />
-            <Text style={styles.supportText}>
-              Plan your dream day with{'\n'}trusted wedding professionals
-            </Text>
-          </TouchableOpacity>
+          {!showOneAppMenu ? (
+            <TouchableOpacity
+              style={styles.supportLink}
+              activeOpacity={0.75}
+              onPress={() => Linking.openURL('mailto:hello@weddingwin.ca').catch(() => {})}>
+              <MessageCircle size={18} color={BRAND_COLOR} strokeWidth={1.8} />
+              <Text style={styles.supportText}>
+                Plan your dream day with{'\n'}trusted wedding professionals
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </ImageBackground>
       </ScrollView>
       <Modal
@@ -2014,8 +2443,11 @@ function NativeHome({
           <View style={styles.vendorRaffleSheet}>
             <View style={styles.vendorRaffleHeader}>
               <View>
-                <Text style={styles.vendorRaffleEyebrow}>QR Bingo</Text>
-                <Text style={styles.vendorRaffleTitle}>Vendor Draw</Text>
+                <Text style={styles.vendorRaffleEyebrow}>Wedding show tools</Text>
+                <Text style={styles.vendorRaffleTitle}>QR Bingo Vendor Draw</Text>
+                <Text style={styles.vendorRaffleHeaderText}>
+                  Run a booth prize without paper ballots. Couples opt in from their own phone, so your team can spend more time talking with them and less time managing forms.
+                </Text>
               </View>
               <TouchableOpacity
                 style={styles.vendorRaffleClose}
@@ -2031,132 +2463,244 @@ function NativeHome({
             ) : (
               <ScrollView showsVerticalScrollIndicator={false}>
                 {vendorRaffleError ? <Text style={styles.vendorRaffleError}>{vendorRaffleError}</Text> : null}
-                <Text style={styles.vendorRaffleVendor} numberOfLines={1}>
-                  {vendorRaffle?.vendor?.name || displayName || 'Vendor account'}
+                <View style={styles.vendorRaffleScrollCue}>
+                  <ChevronDown size={16} color="#AA565D" strokeWidth={2.4} />
+                  <Text style={styles.vendorRaffleScrollCueText}>Scroll down after the slides to set up your draw</Text>
+                </View>
+                <View style={[styles.vendorRaffleInfographicFrame, { width: vendorDrawSlideWidth }]}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    decelerationRate="fast"
+                    disableIntervalMomentum
+                    snapToInterval={vendorDrawSlideWidth}
+                    snapToAlignment="start"
+                    onMomentumScrollEnd={(event) => {
+                      const nextIndex = Math.round(event.nativeEvent.contentOffset.x / vendorDrawSlideWidth);
+                      setVendorRaffleSlideIndex(
+                        Math.max(0, Math.min(QR_VENDOR_DRAW_MOBILE_SLIDES.length - 1, nextIndex))
+                      );
+                    }}
+                    contentContainerStyle={styles.vendorRaffleInfographicTrack}>
+                    {QR_VENDOR_DRAW_MOBILE_SLIDES.map((slide, index) => (
+                      <Image
+                        key={index}
+                        source={slide}
+                        style={[
+                          styles.vendorRaffleInfographic,
+                          { width: vendorDrawSlideWidth, height: vendorDrawSlideHeight },
+                        ]}
+                        resizeMode="cover"
+                      />
+                    ))}
+                  </ScrollView>
+                  <View style={styles.vendorRaffleCarouselCue}>
+                    <Text style={styles.vendorRaffleCarouselCueText}>Swipe left to see the next step</Text>
+                    <View style={styles.vendorRaffleCarouselDots}>
+                      {QR_VENDOR_DRAW_MOBILE_SLIDES.map((_, index) => (
+                        <View
+                          key={index}
+                          style={[
+                            styles.vendorRaffleCarouselDot,
+                            index === vendorRaffleSlideIndex && styles.vendorRaffleCarouselDotActive,
+                          ]}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                </View>
+                <Text style={styles.vendorRaffleSectionEyebrow}>Prize setup</Text>
+                <Text style={styles.vendorRaffleSectionTitle}>1. Set up your prize</Text>
+                <Text style={styles.vendorRaffleHint}>
+                  Add the prize in one clear box. Everything saves automatically and stays synced with the app.
                 </Text>
                 <TouchableOpacity
                   style={styles.vendorRaffleToggleRow}
                   activeOpacity={0.8}
-                  onPress={() => setRaffleEnabled((value) => !value)}>
+                  onPress={() => {
+                    markVendorRaffleLocalEdit();
+                    setRaffleEnabled((value) => {
+                      const nextValue = !value;
+                      if (nextValue) setRaffleLegalAccepted(true);
+                      return nextValue;
+                    });
+                  }}>
                   <View style={[styles.vendorRaffleToggle, raffleEnabled && styles.vendorRaffleToggleOn]}>
                     <View style={[styles.vendorRaffleToggleKnob, raffleEnabled && styles.vendorRaffleToggleKnobOn]} />
                   </View>
                   <View style={styles.vendorRaffleToggleCopy}>
-                    <Text style={styles.vendorRaffleToggleTitle}>Offer a vendor draw</Text>
-                    <Text style={styles.vendorRaffleToggleText}>Couples can opt in after scanning your booth QR code.</Text>
+                    <Text style={styles.vendorRaffleToggleTitle}>Accept prize entries</Text>
+                    <Text style={styles.vendorRaffleToggleText}>
+                      {raffleEnabled
+                        ? 'Turn this on when your prize details are ready. By accepting entries, you agree to the vendor draw rules and understand WeddingWin will email you and the winner after each draw.'
+                        : 'Turn this on when your prize details are ready. Couples can still scan you for QR Bingo, but they will not see your prize entry option.'}
+                    </Text>
+                    {raffleEnabled ? (
+                      <Text
+                        style={styles.vendorRaffleRulesLink}
+                        onPress={() => vendorRaffle?.terms_url && Linking.openURL(vendorRaffle.terms_url).catch(() => {})}>
+                        View vendor draw rules
+                      </Text>
+                    ) : null}
                   </View>
                 </TouchableOpacity>
-                <Text style={styles.inputLabel}>Prize title</Text>
-                <View style={styles.inputShell}>
-                  <TextInput
-                    value={rafflePrizeTitle}
-                    onChangeText={setRafflePrizeTitle}
-                    placeholder="Example: Engagement photo session"
-                    placeholderTextColor="#A8A8AD"
-                    style={styles.textInput}
-                  />
-                </View>
-                <Text style={[styles.inputLabel, styles.passwordLabel]}>Prize details</Text>
-                <View style={[styles.inputShell, styles.vendorRaffleTextAreaShell]}>
-                  <TextInput
-                    value={rafflePrizeDescription}
-                    onChangeText={setRafflePrizeDescription}
-                    placeholder="What is included?"
-                    placeholderTextColor="#A8A8AD"
-                    style={[styles.textInput, styles.vendorRaffleTextArea]}
-                    multiline
-                  />
-                </View>
-                <Text style={[styles.inputLabel, styles.passwordLabel]}>Claim instructions</Text>
-                <View style={[styles.inputShell, styles.vendorRaffleTextAreaShell]}>
-                  <TextInput
-                    value={raffleClaimInstructions}
-                    onChangeText={setRaffleClaimInstructions}
-                    placeholder="How should the winner claim the prize?"
-                    placeholderTextColor="#A8A8AD"
-                    style={[styles.textInput, styles.vendorRaffleTextArea]}
-                    multiline
-                  />
-                </View>
-                <TouchableOpacity
-                  style={styles.signupConsentRow}
-                  activeOpacity={0.82}
-                  onPress={() => setRaffleLegalAccepted((accepted) => !accepted)}>
-                  <View style={[styles.signupConsentBox, raffleLegalAccepted && styles.signupConsentBoxChecked]}>
-                    {raffleLegalAccepted ? <Text style={styles.signupConsentCheck}>{'\u2713'}</Text> : null}
+                <View style={!raffleEnabled && styles.vendorRaffleDisabledContent}>
+                  <Text style={styles.inputLabel}>Prize details</Text>
+                  <View style={[styles.inputShell, styles.vendorRaffleTextAreaShell]}>
+                    <TextInput
+                      value={rafflePrizeDescription}
+                      onChangeText={(value) => {
+                        markVendorRaffleLocalEdit();
+                        setRafflePrizeDescription(value);
+                      }}
+                      placeholder={'Example: Free engagement photo session\nIncludes a 30-minute session and 10 edited photos.'}
+                      placeholderTextColor="#A8A8AD"
+                      style={[styles.textInput, styles.vendorRaffleTextArea]}
+                      multiline
+                    />
                   </View>
-                  <Text style={styles.signupConsentText}>
-                    I agree to the vendor draw rules and understand Wedding Win Inc. will send winner emails.
-                    {' '}
-                    <Text
-                      style={styles.signupConsentLink}
-                      onPress={() => vendorRaffle?.terms_url && Linking.openURL(vendorRaffle.terms_url).catch(() => {})}>
-                      View rules
-                    </Text>
+                  <Text style={styles.vendorRaffleFieldHelp}>
+                    Use the first line as the prize name. Add any short details below for your own record. The winner email stays short for better delivery.
                   </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.loginButton, vendorRaffleSaving && styles.loginButtonDisabled]}
-                  activeOpacity={0.9}
-                  disabled={vendorRaffleSaving}
-                  onPress={saveVendorRaffle}>
-                  {vendorRaffleSaving ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.loginButtonText}>Save Draw Settings</Text>
-                  )}
-                </TouchableOpacity>
-                <View style={styles.vendorRaffleStatsRow}>
-                  <View style={styles.vendorRaffleStat}>
-                    <Text style={styles.vendorRaffleStatValue}>{vendorRaffle?.entries?.length || 0}</Text>
-                    <Text style={styles.vendorRaffleStatLabel}>Opt-ins</Text>
-                  </View>
-                  <View style={styles.vendorRaffleStat}>
-                    <Text style={styles.vendorRaffleStatValue}>{vendorRaffle?.draws?.length || 0}</Text>
-                    <Text style={styles.vendorRaffleStatLabel}>Draws</Text>
-                  </View>
-                </View>
-                <View style={styles.vendorRaffleExportRow}>
-                  <TouchableOpacity style={styles.raffleCancelButton} activeOpacity={0.78} onPress={() => shareVendorExport('csv')}>
-                    <Text style={styles.raffleCancelText}>Export CSV</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.raffleCancelButton} activeOpacity={0.78} onPress={() => shareVendorExport('txt')}>
-                    <Text style={styles.raffleCancelText}>Export TXT</Text>
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity
-                  style={[styles.raffleEnterButton, (!vendorRaffle?.can_draw || vendorRaffleDrawing) && styles.loginButtonDisabled]}
-                  activeOpacity={0.88}
-                  disabled={!vendorRaffle?.can_draw || vendorRaffleDrawing}
-                  onPress={() => drawVendorWinner(vendorRaffle?.draws?.length ? 'additional_prize_or_redraw' : 'initial')}>
-                  {vendorRaffleDrawing ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.raffleEnterText}>
-                      {vendorRaffle?.draws?.length ? 'Pick Another Winner' : 'Pick Winner'}
-                    </Text>
-                  )}
-                </TouchableOpacity>
-                {!vendorRaffle?.can_draw ? (
-                  <Text style={styles.vendorRaffleHint}>Draws open after 3:00 PM on October 18, 2026.</Text>
-                ) : null}
-                {(vendorRaffle?.draws || []).map((draw) => (
-                  <View key={draw.id} style={styles.vendorRaffleWinnerCard}>
-                    <Text style={styles.vendorRaffleWinnerTitle}>Winner #{draw.draw_number}</Text>
-                    <Text style={styles.vendorRaffleWinnerName}>{draw.winner_name}</Text>
-                    <Text style={styles.vendorRaffleWinnerText}>{draw.winner_email}</Text>
-                    {draw.email_error ? <Text style={styles.vendorRaffleError}>{draw.email_error}</Text> : null}
-                  </View>
-                ))}
-                {(vendorRaffle?.entries || []).slice(0, 12).map((entry) => (
-                  <View key={entry.id} style={styles.vendorRaffleEntryRow}>
-                    <View>
-                      <Text style={styles.vendorRaffleEntryName}>{entry.couple_name || 'Couple'}</Text>
-                      <Text style={styles.vendorRaffleEntryText}>{entry.couple_email}</Text>
+                  <View style={styles.vendorRaffleEmailPreview}>
+                    <Text style={styles.vendorRafflePreviewEyebrow}>Couple email preview</Text>
+                    <Text style={styles.vendorRafflePreviewMeta}>Sent after winner is picked</Text>
+                    <View style={styles.vendorRafflePreviewPaper}>
+                      <Image
+                        source={{ uri: 'https://www.weddingwin.ca/images/CoralLogoTransB.png' }}
+                        style={styles.vendorRafflePreviewLogo}
+                        resizeMode="contain"
+                        accessibilityLabel="WeddingWin.ca"
+                      />
+                      <View style={styles.vendorRafflePreviewDivider} />
+                      <Text style={styles.vendorRafflePreviewSubject}>
+                        Subject: Your name was selected for a QR Bingo booth draw
+                      </Text>
+                      <Text style={styles.vendorRafflePreviewBody}>Hi First Name,</Text>
+                      <Text style={styles.vendorRafflePreviewBody}>
+                        Congratulations, your name was selected by {vendorDrawNamePreview} for their draw.
+                      </Text>
+                      <View style={styles.vendorRafflePreviewBox}>
+                        <Text style={styles.vendorRafflePreviewSection}>Your draw</Text>
+                        <Text style={styles.vendorRafflePreviewBody}>Vendor: {vendorDrawNamePreview}</Text>
+                        <Text style={styles.vendorRafflePreviewBody}>Draw item: {vendorDrawPrizePreview}</Text>
+                      </View>
+                      <Text style={styles.vendorRafflePreviewSection}>What happens next</Text>
+                      <Text style={styles.vendorRafflePreviewBody}>
+                        {vendorDrawNamePreview} will follow up with the prize details and next steps.
+                      </Text>
+                      <View style={styles.vendorRafflePreviewButton}>
+                        <Text style={styles.vendorRafflePreviewButtonText}>View vendor profile</Text>
+                      </View>
+                      <Text style={styles.vendorRafflePreviewSection}>Why you received this</Text>
+                      <Text style={styles.vendorRafflePreviewBody}>
+                        You opted in after scanning this vendor{'\u2019s'} QR code at the wedding show.
+                      </Text>
+                      <Text style={styles.vendorRafflePreviewFooter}>WeddingWin.ca</Text>
                     </View>
-                    <Text style={styles.vendorRaffleEntryText}>{entry.couple_wedding_date || ''}</Text>
                   </View>
-                ))}
+                  <View style={styles.vendorRaffleAutosaveRow}>
+                    {vendorRaffleSaving ? <ActivityIndicator size="small" color="#AA565D" /> : null}
+                    <Text style={styles.vendorRaffleSaveHint}>
+                      {vendorRaffleSaveMessage || 'Changes save automatically to the app and website.'}
+                    </Text>
+                  </View>
+                  <View style={styles.vendorRaffleStatsRow}>
+                    <View style={styles.vendorRaffleStat}>
+                      <Text style={styles.vendorRaffleStatValue}>{vendorRaffle?.entries?.length || 0}</Text>
+                      <Text style={styles.vendorRaffleStatLabel}>Couples entered</Text>
+                    </View>
+                    <View style={styles.vendorRaffleStat}>
+                      <Text style={styles.vendorRaffleStatValue}>
+                        {vendorRaffleDrawCount}/{vendorRaffleMaxDraws}
+                      </Text>
+                      <Text style={styles.vendorRaffleStatLabel}>Winners</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.vendorRaffleHint}>
+                    These couples scanned your booth QR code and chose to enter your prize draw. Their contact details are saved here so you can follow up after the show.
+                  </Text>
+                  <View style={styles.vendorRaffleExportRow}>
+                    <TouchableOpacity style={styles.raffleCancelButton} activeOpacity={0.78} onPress={() => shareVendorExport('csv')}>
+                      <Text style={styles.raffleCancelText}>Export CSV</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.raffleCancelButton} activeOpacity={0.78} onPress={() => shareVendorExport('txt')}>
+                      <Text style={styles.raffleCancelText}>Export TXT</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.vendorRaffleSectionEyebrow}>Winner selection</Text>
+                  <Text style={styles.vendorRaffleSectionTitle}>2. Pick a winner</Text>
+                  <View style={styles.vendorRaffleDrawStatusCard}>
+                    <Text style={styles.vendorRaffleDrawStatusLabel}>
+                      {vendorRaffleCanPickWinner ? 'Draw is open' : vendorRaffleLimitReached ? 'Winner limit reached' : 'Draw opens after the show'}
+                    </Text>
+                    <Text style={styles.vendorRaffleDrawStatusText}>
+                      {vendorRaffleCanPickWinner
+                        ? `${vendorRaffleDrawsRemaining} of ${vendorRaffleMaxDraws} winner selections left.`
+                        : vendorRaffleLimitReached
+                          ? `You have used all ${vendorRaffleMaxDraws} winner selections for this event.`
+                          : 'You can pick a winner after 3:00 PM on October 18, 2026.'}
+                    </Text>
+                  </View>
+                  <View style={styles.vendorRaffleWinnerSteps}>
+                    <View style={styles.vendorRaffleWinnerStep}>
+                      <Text style={styles.vendorRaffleWinnerStepNumber}>1</Text>
+                      <View style={styles.vendorRaffleWinnerStepCopy}>
+                        <Text style={styles.vendorRaffleWinnerStepTitle}>Tap Pick winner</Text>
+                        <Text style={styles.vendorRaffleWinnerStepText}>WeddingWin randomly selects one couple from your prize entries.</Text>
+                      </View>
+                    </View>
+                    <View style={styles.vendorRaffleWinnerStep}>
+                      <Text style={styles.vendorRaffleWinnerStepNumber}>2</Text>
+                      <View style={styles.vendorRaffleWinnerStepCopy}>
+                        <Text style={styles.vendorRaffleWinnerStepTitle}>WeddingWin sends the emails</Text>
+                        <Text style={styles.vendorRaffleWinnerStepText}>You get the winner's contact details. The couple gets a short notice that you will follow up.</Text>
+                      </View>
+                    </View>
+                    <View style={styles.vendorRaffleWinnerStep}>
+                      <Text style={styles.vendorRaffleWinnerStepNumber}>3</Text>
+                      <View style={styles.vendorRaffleWinnerStepCopy}>
+                        <Text style={styles.vendorRaffleWinnerStepTitle}>Follow up with the winner</Text>
+                        <Text style={styles.vendorRaffleWinnerStepText}>Use the contact details in your winner history to arrange the prize.</Text>
+                      </View>
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.raffleEnterButton, (!vendorRaffleCanPickWinner || vendorRaffleDrawing) && styles.loginButtonDisabled]}
+                    activeOpacity={0.88}
+                    disabled={!vendorRaffleCanPickWinner || vendorRaffleDrawing}
+                    onPress={() => drawVendorWinner(vendorRaffleDrawCount ? 'additional_prize_or_redraw' : 'initial')}>
+                    {vendorRaffleDrawing ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.raffleEnterText}>
+                        {vendorRaffleLimitReached ? 'Winner Limit Reached' : vendorRaffleDrawCount ? 'Pick Another Winner' : 'Pick Winner'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                  {vendorRaffleLimitReached ? (
+                    <Text style={styles.vendorRaffleHint}>Winner limit reached. Contact WeddingWin if you need help with an additional draw.</Text>
+                  ) : !vendorRaffle?.can_draw ? (
+                    <Text style={styles.vendorRaffleHint}>Draws open after 3:00 PM on October 18, 2026.</Text>
+                  ) : null}
+                  {(vendorRaffle?.draws || []).map((draw) => (
+                    <View key={draw.id} style={styles.vendorRaffleWinnerCard}>
+                      <Text style={styles.vendorRaffleWinnerTitle}>Winner #{draw.draw_number}</Text>
+                      <Text style={styles.vendorRaffleWinnerName}>{draw.winner_name}</Text>
+                      <Text style={styles.vendorRaffleWinnerText}>{draw.winner_email}</Text>
+                      {draw.email_error ? <Text style={styles.vendorRaffleError}>{draw.email_error}</Text> : null}
+                    </View>
+                  ))}
+                  {(vendorRaffle?.entries || []).slice(0, 12).map((entry) => (
+                    <View key={entry.id} style={styles.vendorRaffleEntryRow}>
+                      <View>
+                        <Text style={styles.vendorRaffleEntryName}>{entry.couple_name || 'Couple'}</Text>
+                        <Text style={styles.vendorRaffleEntryText}>{entry.couple_email}</Text>
+                      </View>
+                      <Text style={styles.vendorRaffleEntryText}>{entry.couple_wedding_date || ''}</Text>
+                    </View>
+                  ))}
+                </View>
               </ScrollView>
             )}
           </View>
@@ -2167,6 +2711,29 @@ function NativeHome({
 }
 
 type ChatThreadSort = 'recent' | 'unread' | 'name';
+
+function cleanNativeChatThread(thread: NativeChatThread): NativeChatThread | null {
+  const title = String(thread.title || '').trim();
+  const subtitle = String(thread.subtitle || '').trim();
+  const hasRealMessage =
+    !!subtitle &&
+    !/^no messages yet$/i.test(subtitle) &&
+    !/^tap to start the conversation$/i.test(subtitle) &&
+    !/^https?:\/\//i.test(subtitle);
+  const hasReadableTitle =
+    !!title &&
+    !/^\d+$/.test(title) &&
+    !/^app:/i.test(title) &&
+    title !== 'Conversation';
+
+  if (!hasRealMessage && !hasReadableTitle && !thread.reported && !thread.closed) return null;
+
+  return {
+    ...thread,
+    title: hasReadableTitle ? title : 'WeddingWin Member',
+    subtitle: hasRealMessage ? subtitle : thread.closed || thread.reported ? subtitle : 'Open conversation',
+  };
+}
 
 function chatThreadTimeValue(value: string) {
   if (/^\d{14}$/.test(value)) {
@@ -2233,12 +2800,16 @@ function playWebChatDing() {
 }
 
 function NativeChatScreen({
+  member,
+  nativeSession,
   threads,
   messages,
   selectedThreadToken,
   loading,
   sending,
+  reporting,
   error,
+  syncDebug,
   draft,
   onDraftChange,
   onSelectThread,
@@ -2249,13 +2820,19 @@ function NativeChatScreen({
   onClose,
   onThreadViewChange,
   chatUnreadCount,
+  openThreadRequestId,
+  openingConversationLabel,
 }: {
+  member: NativeMember | null;
+  nativeSession: NativeBridgeSession | null;
   threads: NativeChatThread[];
   messages: NativeChatMessage[];
   selectedThreadToken: string;
   loading: boolean;
   sending: boolean;
+  reporting: boolean;
   error: string | null;
+  syncDebug?: NativeChatSyncResponse['sync_debug'] | null;
   draft: string;
   onDraftChange: (value: string) => void;
   onSelectThread: (threadToken: string) => void;
@@ -2266,14 +2843,53 @@ function NativeChatScreen({
   onClose: () => void;
   onThreadViewChange: (isThreadView: boolean) => void;
   chatUnreadCount: number;
+  openThreadRequestId: number;
+  openingConversationLabel?: string;
 }) {
   const [threadSort, setThreadSort] = useState<ChatThreadSort>('recent');
   const [chatView, setChatView] = useState<'list' | 'thread'>('list');
-  const selectedThread = threads.find((thread) => thread.token === selectedThreadToken);
+  const handledOpenThreadRequestRef = useRef(0);
+  const displayThreads = useMemo(() => {
+    return threads
+      .map((thread) => {
+        const cleaned = cleanNativeChatThread(thread);
+        if (cleaned) return cleaned;
+        return thread.token === selectedThreadToken
+          ? { ...thread, title: 'WeddingWin Member', subtitle: 'Open conversation' }
+          : null;
+      })
+      .filter((thread): thread is NativeChatThread => !!thread);
+  }, [selectedThreadToken, threads]);
+  const selectedThread = displayThreads.find((thread) => thread.token === selectedThreadToken);
   const isThreadView = chatView === 'thread' && !!selectedThread;
+  const accountLabel = useMemo(() => {
+    const memberId = String(member?.user_id || nativeSession?.user_id || '').trim();
+    const email = String(member?.email || nativeSession?.email || '').trim();
+    const company = String(member?.company || '').trim();
+    const name = [member?.first_name, member?.last_name].filter(Boolean).join(' ').trim();
+    const displayName = company || name;
+    const parts = [
+      displayName || null,
+      memberId ? `Member ID #${memberId}` : null,
+      email || null,
+    ].filter(Boolean);
+
+    return parts.length ? `Signed in as ${parts.join(' - ')}` : '';
+  }, [member, nativeSession]);
+  const emptySyncLabel = useMemo(() => {
+    if (!syncDebug) return '';
+    const bdCount = Number(syncDebug.bd_threads || 0);
+    const appCount = Number(syncDebug.visible_app_threads ?? syncDebug.app_threads ?? 0);
+    return `Sync checked this account: ${bdCount} website chat${bdCount === 1 ? '' : 's'}, ${appCount} app chat${appCount === 1 ? '' : 's'}.`;
+  }, [syncDebug]);
+  const selectedThreadIsAppNative = selectedThreadToken.startsWith('app:');
+  const selectedThreadClosed = !!selectedThread?.closed || !!selectedThread?.reported;
+  const selectedThreadNotice = selectedThreadClosed
+    ? selectedThread?.report_notice || CHAT_REPORTED_NOTICE
+    : '';
   const selectedInitial = (selectedThread?.title || 'W').trim().charAt(0).toUpperCase();
   const sortedThreads = useMemo(() => {
-    return [...threads].sort((a, b) => {
+    return [...displayThreads].sort((a, b) => {
       if (threadSort === 'name') return a.title.localeCompare(b.title);
       if (threadSort === 'unread') {
         const unreadDelta = b.unread_count - a.unread_count;
@@ -2281,7 +2897,9 @@ function NativeChatScreen({
       }
       return chatThreadTimeValue(b.updated_at) - chatThreadTimeValue(a.updated_at);
     });
-  }, [threadSort, threads]);
+  }, [displayThreads, threadSort]);
+  const isOpeningConversation =
+    !!openingConversationLabel && loading && !selectedThread && displayThreads.length === 0;
   const openThread = (threadToken: string) => {
     setChatView('thread');
     onSelectThread(threadToken);
@@ -2298,6 +2916,16 @@ function NativeChatScreen({
   useEffect(() => {
     onThreadViewChange(isThreadView);
   }, [isThreadView, onThreadViewChange]);
+
+  useEffect(() => {
+    if (
+      openThreadRequestId > handledOpenThreadRequestRef.current &&
+      selectedThread
+    ) {
+      handledOpenThreadRequestRef.current = openThreadRequestId;
+      setChatView('thread');
+    }
+  }, [openThreadRequestId, selectedThread]);
 
   return (
     <SafeAreaView style={styles.chatNativeShell} edges={['top']}>
@@ -2320,14 +2948,19 @@ function NativeChatScreen({
         </View>
         {isThreadView ? (
           <TouchableOpacity
-            style={styles.chatReportButton}
+            style={[
+              styles.chatReportButton,
+              (selectedThreadClosed || reporting) && styles.chatReportButtonDisabled,
+            ]}
             activeOpacity={0.76}
             onPress={onReport}
-            disabled={!selectedThreadToken}
+            disabled={!selectedThreadToken || selectedThreadClosed || reporting}
             accessibilityRole="button"
             accessibilityLabel="Report conversation">
             <AlertTriangle size={17} color="#8A514C" strokeWidth={2.2} />
-            <Text style={styles.chatReportText}>Report</Text>
+            <Text style={styles.chatReportText}>
+              {selectedThreadClosed ? 'Reported' : reporting ? 'Reporting' : 'Report'}
+            </Text>
           </TouchableOpacity>
         ) : null}
         <TouchableOpacity
@@ -2348,9 +2981,11 @@ function NativeChatScreen({
 
       <KeyboardAvoidingView
         style={styles.chatNativeBody}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}>
         {!isThreadView ? (
           <View style={styles.chatConversationList}>
+          {!isOpeningConversation ? (
           <View style={styles.chatInboxToolbar}>
             {([
               ['recent', 'Recent'],
@@ -2375,23 +3010,39 @@ function NativeChatScreen({
               </TouchableOpacity>
             ))}
           </View>
+          ) : null}
 
           <ScrollView
             style={styles.chatConversationScroll}
             contentContainerStyle={styles.chatConversationContent}
             showsVerticalScrollIndicator={false}>
-            {loading && threads.length === 0 ? (
+            {isOpeningConversation ? (
+              <View style={styles.chatCenteredState}>
+                <ActivityIndicator size="small" color={BRAND_COLOR} />
+                <Text style={styles.chatCenteredText}>
+                  Opening chat with {openingConversationLabel}...
+                </Text>
+              </View>
+            ) : loading && displayThreads.length === 0 ? (
               <View style={styles.chatCenteredState}>
                 <ActivityIndicator size="small" color={BRAND_COLOR} />
                 <Text style={styles.chatCenteredText}>Loading conversations...</Text>
               </View>
             ) : null}
-            {threads.length === 0 && !loading ? (
+            {displayThreads.length === 0 && !loading && !isOpeningConversation ? (
               <View style={styles.chatCenteredState}>
                 <MessageCircle size={36} color={BRAND_COLOR} strokeWidth={1.7} />
                 <Text style={styles.chatCenteredText}>
                   Your synced WeddingWin chats will appear here.
                 </Text>
+                {accountLabel ? (
+                  <View style={styles.chatEmptyPill}>
+                    <Text style={styles.chatEmptyPillText}>{accountLabel}</Text>
+                  </View>
+                ) : null}
+                {emptySyncLabel ? (
+                  <Text style={styles.chatEmptyHint}>{emptySyncLabel}</Text>
+                ) : null}
               </View>
             ) : null}
             {sortedThreads.map((thread) => (
@@ -2427,7 +3078,9 @@ function NativeChatScreen({
                   </View>
                   <View style={styles.chatConversationPreviewLine}>
                     <Text style={styles.chatInboxLastMessage} numberOfLines={1}>
-                      {thread.subtitle || 'No messages yet'}
+                      {thread.closed || thread.reported
+                        ? thread.report_notice || CHAT_REPORTED_NOTICE
+                        : thread.subtitle || 'No messages yet'}
                     </Text>
                     {thread.unread_count > 0 ? (
                       <View style={styles.chatThreadUnread}>
@@ -2460,14 +3113,26 @@ function NativeChatScreen({
             <Text style={styles.chatThreadProfileName} numberOfLines={1}>
               {selectedThread?.title}
             </Text>
-            <Text style={styles.chatThreadProfileStatus}>Synced with website chat</Text>
+            <Text style={styles.chatThreadProfileStatus}>
+              {selectedThreadClosed
+                ? 'Closed while WeddingWin reviews it'
+                : selectedThreadIsAppNative ? 'WeddingWin app chat' : 'Synced with website chat'}
+            </Text>
           </View>
         </View>
 
         <ScrollView
           style={styles.chatMessages}
           contentContainerStyle={styles.chatMessagesContent}
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}>
+          {selectedThreadClosed ? (
+            <View style={styles.chatReportedNotice}>
+              <AlertTriangle size={18} color="#8A514C" strokeWidth={2.2} />
+              <Text style={styles.chatReportedNoticeText}>{selectedThreadNotice}</Text>
+            </View>
+          ) : null}
           {loading && messages.length === 0 ? (
             <View style={styles.chatCenteredState}>
               <ActivityIndicator size="small" color={BRAND_COLOR} />
@@ -2482,6 +3147,14 @@ function NativeChatScreen({
                   ? 'Your synced WeddingWin chats will appear here.'
                   : 'No messages in this conversation yet.'}
               </Text>
+              {threads.length === 0 && accountLabel ? (
+                <View style={styles.chatEmptyPill}>
+                  <Text style={styles.chatEmptyPillText}>{accountLabel}</Text>
+                </View>
+              ) : null}
+              {threads.length === 0 && emptySyncLabel ? (
+                <Text style={styles.chatEmptyHint}>{emptySyncLabel}</Text>
+              ) : null}
             </View>
           ) : null}
           {messages.map((message) => (
@@ -2551,6 +3224,12 @@ function NativeChatScreen({
           ))}
         </ScrollView>
 
+        {selectedThreadClosed ? (
+          <View style={styles.chatClosedComposer}>
+            <AlertTriangle size={18} color="#8A514C" strokeWidth={2.2} />
+            <Text style={styles.chatClosedComposerText}>{selectedThreadNotice}</Text>
+          </View>
+        ) : (
         <View style={styles.chatComposer}>
           <TouchableOpacity
             style={[
@@ -2587,6 +3266,7 @@ function NativeChatScreen({
             )}
           </TouchableOpacity>
         </View>
+        )}
           </>
         )}
       </KeyboardAvoidingView>
@@ -2639,10 +3319,16 @@ export default function HomeScreen() {
   const [selectedChatThreadToken, setSelectedChatThreadToken] = useState('');
   const [nativeChatLoading, setNativeChatLoading] = useState(false);
   const [nativeChatSending, setNativeChatSending] = useState(false);
+  const [nativeChatReporting, setNativeChatReporting] = useState(false);
   const [nativeChatError, setNativeChatError] = useState<string | null>(null);
   const [nativeChatDraft, setNativeChatDraft] = useState('');
+  const [nativeChatSyncDebug, setNativeChatSyncDebug] =
+    useState<NativeChatSyncResponse['sync_debug'] | null>(null);
   const [nativeChatThreadOpen, setNativeChatThreadOpen] = useState(false);
+  const [nativeChatOpenRequestId, setNativeChatOpenRequestId] = useState(0);
+  const [nativeChatOpeningLabel, setNativeChatOpeningLabel] = useState('');
   const [showNativeQrScanner, setShowNativeQrScanner] = useState(false);
+  const [vendorDrawOpenRequestId, setVendorDrawOpenRequestId] = useState(0);
   const [pendingDashboardRedirect, setPendingDashboardRedirect] = useState(false);
   const [pendingBridgeTargetPath, setPendingBridgeTargetPath] = useState(
     DEFAULT_BRIDGE_TARGET_PATH
@@ -2652,9 +3338,13 @@ export default function HomeScreen() {
   const pendingAppLogoutRef = useRef(false);
   const chatUnreadSnapshotRef = useRef<number | null>(null);
   const chatDingPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const nativeBridgeSessionRef = useRef<NativeBridgeSession | null>(null);
+  const bridgeSessionWaitersRef = useRef<Array<(session: NativeBridgeSession | null) => void>>([]);
   const nativeChatThreadOpenRef = useRef(false);
   const selectedChatThreadTokenRef = useRef('');
   const pushRegistrationKeyRef = useRef('');
+  const vendorConnectNativeUrlRef = useRef('');
+  const vendorConnectNativeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const addDebugLine = useCallback((_line: string) => {}, []);
 
@@ -2665,6 +3355,10 @@ export default function HomeScreen() {
   useEffect(() => {
     selectedChatThreadTokenRef.current = selectedChatThreadToken;
   }, [selectedChatThreadToken]);
+
+  useEffect(() => {
+    nativeBridgeSessionRef.current = nativeBridgeSession;
+  }, [nativeBridgeSession]);
 
   const registerPushNotifications = useCallback(async (session: NativeBridgeSession | null) => {
     if (Platform.OS === 'web' || !session?.user_id || !session?.token) return;
@@ -2946,19 +3640,13 @@ export default function HomeScreen() {
         ).catch(() => {});
       }
 
-      if (isCoupleAccount(data.user)) {
-        setShowBrowser(false);
-        return;
-      }
-
-      startBridgeRedirect();
-      openAbsoluteUrl(websiteLoginUrl);
+      setShowBrowser(false);
     } catch {
       Alert.alert('Login unavailable', 'Please check your connection and try again.');
     } finally {
       setEmailLoginLoading(false);
     }
-  }, [addDebugLine, openAbsoluteUrl, startBridgeRedirect]);
+  }, [addDebugLine]);
 
   const saveNativeSession = useCallback((user: NativeMember, session?: NativeBridgeSession | null) => {
     setNativeMember(user);
@@ -2981,6 +3669,25 @@ export default function HomeScreen() {
     try {
       const endpoint =
         signup.role === 'vendor' ? 'bd-vendor-signup' : 'bd-couple-signup';
+      const signupPayload = {
+        first_name: signup.firstName,
+        email: signup.email,
+        password: signup.password,
+        ...(signup.role === 'couple' && signup.weddingDate
+          ? { wedding_date: signup.weddingDate }
+          : {}),
+        accepted_terms: signup.consent.acceptedTerms,
+        accepted_privacy: signup.consent.acceptedPrivacy,
+        accepted_at: signup.consent.acceptedAt,
+        terms_version: signup.consent.termsVersion,
+        privacy_version: signup.consent.privacyVersion,
+        client_context: {
+          appOwnership: Constants.appOwnership,
+          platform: Platform.OS,
+          nativeAppVersion: Constants.nativeAppVersion,
+          runtimeVersion: Constants.expoConfig?.runtimeVersion,
+        },
+      };
       const response = await fetch(`${APP_BACKEND_URL}/functions/v1/${endpoint}`, {
         method: 'POST',
         headers: {
@@ -2988,23 +3695,7 @@ export default function HomeScreen() {
           apikey: APP_BACKEND_PUBLISHABLE_KEY,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          first_name: signup.firstName,
-          email: signup.email,
-          password: signup.password,
-          wedding_date: signup.weddingDate,
-          accepted_terms: signup.consent.acceptedTerms,
-          accepted_privacy: signup.consent.acceptedPrivacy,
-          accepted_at: signup.consent.acceptedAt,
-          terms_version: signup.consent.termsVersion,
-          privacy_version: signup.consent.privacyVersion,
-          client_context: {
-            appOwnership: Constants.appOwnership,
-            platform: Platform.OS,
-            nativeAppVersion: Constants.nativeAppVersion,
-            runtimeVersion: Constants.expoConfig?.runtimeVersion,
-          },
-        }),
+        body: JSON.stringify(signupPayload),
       });
       const data = await response.json();
 
@@ -3027,19 +3718,13 @@ export default function HomeScreen() {
           data.user?.subscription_id || membershipPlanForRole(signup.role),
       };
       saveNativeSession(signedUpUser, data.native_session || null);
-      if (isCoupleAccount(signedUpUser)) {
-        setShowBrowser(false);
-        return;
-      }
-
-      startBridgeRedirect();
-      openAbsoluteUrl(data.app_login_url || `${TARGET_URL}/account/home`);
+      setShowBrowser(false);
     } catch {
       Alert.alert('Signup unavailable', 'Please check your connection and try again.');
     } finally {
       setSignupLoading(false);
     }
-  }, [addDebugLine, openAbsoluteUrl, saveNativeSession, startBridgeRedirect]);
+  }, [addDebugLine, saveNativeSession]);
 
   const runCompleteProfile = useCallback(async (profile: ContactProfile) => {
     if (!nativeBridgeSession?.user_id || !nativeBridgeSession?.token) {
@@ -3050,6 +3735,11 @@ export default function HomeScreen() {
     setProfileSaveLoading(true);
 
     try {
+      const profilePayload = {
+        first_name: profile.firstName,
+        email: profile.email,
+        ...(profile.weddingDate ? { wedding_date: profile.weddingDate } : {}),
+      };
       const response = await fetch(`${APP_BACKEND_URL}/functions/v1/bd-complete-profile`, {
         method: 'POST',
         headers: {
@@ -3059,11 +3749,7 @@ export default function HomeScreen() {
         },
         body: JSON.stringify({
           native_session: nativeBridgeSession,
-          profile: {
-            first_name: profile.firstName,
-            email: profile.email,
-            wedding_date: profile.weddingDate,
-          },
+          profile: profilePayload,
         }),
       });
       const data = await response.json();
@@ -3097,7 +3783,7 @@ export default function HomeScreen() {
         ...(data.user || {}),
         first_name: data.user?.first_name || profile.firstName,
         email: data.user?.email || profile.email,
-        wedding_date: data.user?.wedding_date || profile.weddingDate,
+        wedding_date: data.user?.wedding_date || profile.weddingDate || nativeMember?.wedding_date,
         subscription_id:
           data.user?.subscription_id ||
           nativeMember?.subscription_id ||
@@ -3156,6 +3842,107 @@ export default function HomeScreen() {
     openAbsoluteUrl(buildTokenLoginUrl(nativeBridgeSession.token, '/builder-sso'));
   }, [addDebugLine, nativeBridgeSession, nativeMember, openAbsoluteUrl, startBridgeRedirect]);
 
+  const requestWebsiteSessionBridge = useCallback(() => {
+    webviewRef.current?.injectJavaScript(`
+(function() {
+  try {
+    var pairs = {};
+    var decode = function(value) {
+      try { return decodeURIComponent(value); } catch (e) { return value; }
+    };
+    String(document.cookie || '').split(';').forEach(function(part) {
+      var index = part.indexOf('=');
+      if (index < 0) return;
+      var key = decode(part.slice(0, index).trim());
+      var value = decode(part.slice(index + 1).trim());
+      if (key) pairs[key] = value;
+    });
+    var session = {
+      user_id: pairs.user_id || '',
+      token: pairs.token || '',
+      cookie: pairs.cookie || ''
+    };
+    if (session.user_id && (session.token || session.cookie)) {
+      window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'bd-cookie-session',
+        native_session: session
+      }));
+    }
+  } catch (e) {}
+  return true;
+})();
+true;
+`);
+  }, []);
+
+  const waitForWebsiteSessionBridge = useCallback((timeoutMs = 650) => {
+    requestWebsiteSessionBridge();
+
+    return new Promise<NativeBridgeSession | null>((resolve) => {
+      let finished = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+
+      const finish = (session: NativeBridgeSession | null) => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        resolve(session);
+      };
+
+      bridgeSessionWaitersRef.current.push(finish);
+      timer = setTimeout(() => {
+        bridgeSessionWaitersRef.current = bridgeSessionWaitersRef.current.filter(
+          (waiter) => waiter !== finish
+        );
+        finish(nativeBridgeSessionRef.current);
+      }, timeoutMs);
+    });
+  }, [requestWebsiteSessionBridge]);
+
+  const refreshNativeBridgeSession = useCallback(async (
+    session: NativeBridgeSession | null | undefined
+  ) => {
+    if (!hasNativeBridgeSession(session)) return null;
+    const bridgeSession = session as NativeBridgeSession;
+
+    try {
+      const sessionForRefresh = {
+        ...bridgeSession,
+        email: bridgeSession.email || nativeBridgeSessionRef.current?.email || nativeMember?.email || '',
+      };
+      const response = await fetch(`${APP_BACKEND_URL}/functions/v1/bd-email-login`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+          apikey: APP_BACKEND_PUBLISHABLE_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ native_session: sessionForRefresh }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.ok || !data?.native_session) return null;
+
+      const refreshedSession = data.native_session as NativeBridgeSession;
+      const refreshedUser = data.user as NativeMember | undefined;
+      nativeBridgeSessionRef.current = refreshedSession;
+      setNativeBridgeSession(refreshedSession);
+      SecureStore.setItemAsync(
+        NATIVE_BRIDGE_SESSION_KEY,
+        JSON.stringify(refreshedSession)
+      ).catch(() => {});
+      if (refreshedUser?.email) {
+        setNativeMember(refreshedUser);
+        SecureStore.setItemAsync(
+          NATIVE_MEMBER_SESSION_KEY,
+          JSON.stringify(refreshedUser)
+        ).catch(() => {});
+      }
+      return refreshedSession;
+    } catch {
+      return null;
+    }
+  }, [nativeMember?.email]);
+
   const handleNativeQrScan = useCallback((rawValue: string) => {
     const value = rawValue.trim();
     if (!value) return;
@@ -3164,10 +3951,25 @@ export default function HomeScreen() {
   }, [playChatNotificationCue]);
 
   const syncNativeChat = useCallback(async (
-    action: 'list' | 'read' | 'send' = 'list',
-    options: { threadToken?: string; message?: string; imageDataUri?: string; quiet?: boolean } = {}
+    action: NativeChatSyncAction = 'list',
+    options: {
+      threadToken?: string;
+      threadId?: string;
+      requestUri?: string;
+      message?: string;
+      imageDataUri?: string;
+      connectUrl?: string;
+      threadTitle?: string;
+      nativeSession?: NativeBridgeSession | null;
+      sessionRetryAttempted?: boolean;
+      quiet?: boolean;
+      fallbackToWebsite?: boolean;
+    } = {}
   ) => {
-    if (!nativeBridgeSession?.user_id || !nativeBridgeSession?.token) {
+    const activeNativeSession = options.nativeSession || nativeBridgeSessionRef.current || nativeBridgeSession;
+    requestWebsiteSessionBridge();
+
+    if (!hasNativeBridgeSession(activeNativeSession)) {
       if (!options.quiet) {
         setNativeChatError('Please sign in to use WeddingWin messages.');
       }
@@ -3175,7 +3977,7 @@ export default function HomeScreen() {
     }
 
     if (!options.quiet) {
-      setNativeChatLoading(action === 'list');
+      setNativeChatLoading(action === 'list' || action === 'open_vendor_profile');
       setNativeChatError(null);
     }
 
@@ -3189,10 +3991,14 @@ export default function HomeScreen() {
         },
         body: JSON.stringify({
           action,
-          native_session: nativeBridgeSession,
+          native_session: activeNativeSession,
           thread_token: options.threadToken || selectedChatThreadToken,
+          selected_thread_id: options.threadId,
+          selected_thread_title: options.threadTitle,
+          selected_thread_request_uri: options.requestUri,
           message: options.message,
           image_data_uri: options.imageDataUri,
+          connect_url: options.connectUrl,
         }),
       });
       const data = (await response.json()) as NativeChatSyncResponse;
@@ -3203,10 +4009,19 @@ export default function HomeScreen() {
       }
 
       const threads = data.threads || [];
+      setNativeChatSyncDebug(data.sync_debug || null);
       const nextThreadToken = data.selected_thread_token || options.threadToken || threads[0]?.token || '';
       setNativeChatThreads(threads);
       setSelectedChatThreadToken(nextThreadToken);
       setNativeChatMessages(data.messages || []);
+      setNativeChatError((current) =>
+        current && /login needs to be refreshed|native session expired|sign in again/i.test(current)
+          ? null
+          : current
+      );
+      if (action === 'open_vendor_profile') {
+        setNativeChatOpeningLabel('');
+      }
       const unreadCount = Number(data.unread_count || 0);
       const shouldSuppressAlert =
         action === 'read' ||
@@ -3234,8 +4049,41 @@ export default function HomeScreen() {
       return data;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Chat sync failed.';
+      if (/native session expired/i.test(message) && !options.sessionRetryAttempted) {
+        const backendRefreshedSession = await refreshNativeBridgeSession(activeNativeSession);
+        if (hasNativeBridgeSession(backendRefreshedSession)) {
+          return syncNativeChat(action, {
+            ...options,
+            nativeSession: backendRefreshedSession,
+            fallbackToWebsite: false,
+            sessionRetryAttempted: true,
+          });
+        }
+
+        const refreshedSession = await waitForWebsiteSessionBridge(1200);
+        if (hasNativeBridgeSession(refreshedSession)) {
+          return syncNativeChat(action, {
+            ...options,
+            nativeSession: refreshedSession,
+            fallbackToWebsite: false,
+            sessionRetryAttempted: true,
+          });
+        }
+      }
+      if (!options.quiet && options.fallbackToWebsite && /native session expired/i.test(message)) {
+        addDebugLine('native chat session expired');
+        setNativeChatError('Your app login needs to be refreshed before messages can open. Please sign out and sign back in, then try Send Message again.');
+        return null;
+      }
       if (!options.quiet) {
-        setNativeChatError(message);
+        setNativeChatError(
+          /native session expired/i.test(message)
+            ? 'Your app login needs to be refreshed before messages can open. Please sign out and sign back in, then try Send Message again.'
+            : message
+        );
+        if (action === 'open_vendor_profile') {
+          setNativeChatOpeningLabel('');
+        }
       }
       return null;
     } finally {
@@ -3243,12 +4091,22 @@ export default function HomeScreen() {
         setNativeChatLoading(false);
       }
     }
-  }, [nativeBridgeSession, playChatNotificationCue, selectedChatThreadToken]);
+  }, [
+    addDebugLine,
+    chatInboxPath,
+    nativeBridgeSession,
+    openUrl,
+    playChatNotificationCue,
+    refreshNativeBridgeSession,
+    requestWebsiteSessionBridge,
+    selectedChatThreadToken,
+    waitForWebsiteSessionBridge,
+  ]);
 
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
       if (response.notification.request.content.data?.screen !== 'chat') return;
-      if (!nativeBridgeSession?.user_id || !nativeBridgeSession?.token) return;
+      if (!hasNativeBridgeSession(nativeBridgeSession)) return;
       setShowNativeChat(true);
       syncNativeChat('list');
     });
@@ -3257,16 +4115,78 @@ export default function HomeScreen() {
   }, [nativeBridgeSession, syncNativeChat]);
 
   const openChatWithBridge = useCallback(() => {
-    if (!nativeBridgeSession?.user_id || !nativeBridgeSession?.token) {
+    const activeNativeSession = nativeBridgeSessionRef.current || nativeBridgeSession;
+    if (!hasNativeBridgeSession(activeNativeSession)) {
       openUrl(chatInboxPath || DEFAULT_CHAT_INBOX_PATH);
       return;
     }
 
+    requestWebsiteSessionBridge();
     addDebugLine('open native messages');
+    setNativeChatOpenRequestId(0);
     setNativeChatThreadOpen(false);
     setShowNativeChat(true);
-    syncNativeChat('list');
-  }, [addDebugLine, chatInboxPath, nativeBridgeSession, openUrl, syncNativeChat]);
+    syncNativeChat('list', { fallbackToWebsite: true });
+  }, [addDebugLine, chatInboxPath, nativeBridgeSession, openUrl, requestWebsiteSessionBridge, syncNativeChat]);
+
+  const openVendorConnectChat = useCallback(async (connectUrl: string) => {
+    if (vendorConnectNativeUrlRef.current === connectUrl) return;
+    vendorConnectNativeUrlRef.current = connectUrl;
+    if (vendorConnectNativeTimerRef.current) {
+      clearTimeout(vendorConnectNativeTimerRef.current);
+    }
+    vendorConnectNativeTimerRef.current = setTimeout(() => {
+      vendorConnectNativeUrlRef.current = '';
+      vendorConnectNativeTimerRef.current = null;
+    }, 2200);
+
+    addDebugLine('open native vendor conversation');
+    setNativeChatOpeningLabel(vendorNameFromConnectUrl(connectUrl));
+    setLoading(false);
+    setError(null);
+    setNativeChatError(null);
+    setNativeChatOpenRequestId(0);
+    setNativeChatThreadOpen(false);
+    setShowNativeChat(true);
+    requestWebsiteSessionBridge();
+
+    try {
+      let activeNativeSession = nativeBridgeSessionRef.current || nativeBridgeSession;
+      if (!hasNativeBridgeSession(activeNativeSession)) {
+        activeNativeSession = await waitForWebsiteSessionBridge(350);
+      }
+      if (!hasNativeBridgeSession(activeNativeSession)) {
+        setNativeChatError('Please sign in through the app before starting a private message.');
+        setNativeChatOpeningLabel('');
+        return;
+      }
+
+      const data = await syncNativeChat('open_vendor_profile', {
+        connectUrl,
+        nativeSession: activeNativeSession,
+      });
+
+      if (data?.selected_thread_token) {
+        setNativeChatOpenRequestId((value) => value + 1);
+      }
+    } finally {
+      if (vendorConnectNativeTimerRef.current) {
+        clearTimeout(vendorConnectNativeTimerRef.current);
+      }
+      vendorConnectNativeTimerRef.current = setTimeout(() => {
+        vendorConnectNativeUrlRef.current = '';
+        vendorConnectNativeTimerRef.current = null;
+      }, 600);
+    }
+  }, [addDebugLine, nativeBridgeSession, requestWebsiteSessionBridge, syncNativeChat, waitForWebsiteSessionBridge]);
+
+  const interceptVendorConnectChat = useCallback((connectUrl: string) => {
+    if (vendorConnectNativeUrlRef.current === connectUrl) {
+      setLoading(false);
+      return;
+    }
+    openVendorConnectChat(connectUrl);
+  }, [openVendorConnectChat]);
 
   const selectNativeChatThread = useCallback((threadToken: string) => {
     setSelectedChatThreadToken(threadToken);
@@ -3276,18 +4196,31 @@ export default function HomeScreen() {
   const sendNativeChatMessage = useCallback(async () => {
     const message = nativeChatDraft.trim();
     if (!message || !selectedChatThreadToken) return;
+    const selectedThread = nativeChatThreads.find((thread) => thread.token === selectedChatThreadToken);
+    if (selectedThread?.closed || selectedThread?.reported) {
+      setNativeChatError(selectedThread.report_notice || CHAT_REPORTED_NOTICE);
+      return;
+    }
 
     setNativeChatSending(true);
     const sent = await syncNativeChat('send', {
       threadToken: selectedChatThreadToken,
+      threadId: selectedThread?.thread_id || selectedThread?.id,
+      threadTitle: selectedThread?.title,
+      requestUri: selectedThread?.request_uri,
       message,
     });
     if (sent) setNativeChatDraft('');
     setNativeChatSending(false);
-  }, [nativeChatDraft, selectedChatThreadToken, syncNativeChat]);
+  }, [nativeChatDraft, nativeChatThreads, selectedChatThreadToken, syncNativeChat]);
 
   const sendNativeChatImage = useCallback(async () => {
     if (!selectedChatThreadToken) return;
+    const selectedThread = nativeChatThreads.find((thread) => thread.token === selectedChatThreadToken);
+    if (selectedThread?.closed || selectedThread?.reported) {
+      setNativeChatError(selectedThread.report_notice || CHAT_REPORTED_NOTICE);
+      return;
+    }
 
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
@@ -3318,12 +4251,15 @@ export default function HomeScreen() {
     setNativeChatSending(true);
     const sent = await syncNativeChat('send', {
       threadToken: selectedChatThreadToken,
+      threadId: selectedThread?.thread_id || selectedThread?.id,
+      threadTitle: selectedThread?.title,
+      requestUri: selectedThread?.request_uri,
       message: nativeChatDraft.trim(),
       imageDataUri,
     });
     if (sent) setNativeChatDraft('');
     setNativeChatSending(false);
-  }, [nativeChatDraft, selectedChatThreadToken, syncNativeChat]);
+  }, [nativeChatDraft, nativeChatThreads, selectedChatThreadToken, syncNativeChat]);
 
   const reportNativeChatConversation = useCallback(() => {
     if (!selectedChatThreadToken) {
@@ -3331,9 +4267,15 @@ export default function HomeScreen() {
       return;
     }
 
+    const selectedThread = nativeChatThreads.find((thread) => thread.token === selectedChatThreadToken);
+    if (selectedThread?.closed || selectedThread?.reported) {
+      Alert.alert('Chat already reported', selectedThread.report_notice || CHAT_REPORTED_NOTICE);
+      return;
+    }
+
     Alert.alert(
-      'Report conversation?',
-      'WeddingWin will open the report page for this message thread.',
+      'Report and close chat?',
+      "WeddingWin will close this conversation in the app while it's reviewed. Neither party will be able to continue chatting here.",
       [
         {
           text: 'Cancel',
@@ -3342,18 +4284,62 @@ export default function HomeScreen() {
         {
           text: 'Report',
           style: 'destructive',
-          onPress: () => {
-            setShowNativeChat(false);
-            const reportPath = `${chatInboxPath || DEFAULT_CHAT_INBOX_PATH}?thread_token=${encodeURIComponent(selectedChatThreadToken)}`;
-            openUrl(reportPath);
+          onPress: async () => {
+            setNativeChatReporting(true);
+            try {
+              const response = await fetch(`${APP_BACKEND_URL}/functions/v1/bd-chat-report`, {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+                  apikey: APP_BACKEND_PUBLISHABLE_KEY,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  native_session: nativeBridgeSession,
+                  thread_token: selectedChatThreadToken,
+                }),
+              });
+              const reported = (await response.json()) as NativeChatReportResponse;
+              if (!response.ok || reported?.ok === false) {
+                const detail = reported?.detail ? ` ${reported.detail}` : '';
+                throw new Error(`${reported?.error || 'Chat report failed.'}${detail}`);
+              }
+              const closedToken = reported.selected_thread_token || selectedChatThreadToken;
+              const notice = reported.report_notice || CHAT_REPORTED_NOTICE;
+              setNativeChatThreads((threads) =>
+                threads.map((thread) =>
+                  thread.token === selectedChatThreadToken || thread.token === closedToken
+                    ? {
+                        ...thread,
+                        token: thread.token === selectedChatThreadToken ? closedToken : thread.token,
+                        subtitle: notice,
+                        unread_count: 0,
+                        reported: true,
+                        closed: true,
+                        report_notice: notice,
+                      }
+                    : thread
+                )
+              );
+              setSelectedChatThreadToken(closedToken);
+              setNativeChatDraft('');
+              setNativeChatError(null);
+              Alert.alert('Chat reported', notice);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Chat report failed.';
+              setNativeChatError(message);
+            } finally {
+              setNativeChatReporting(false);
+            }
           },
         },
       ]
     );
-  }, [chatInboxPath, openUrl, selectedChatThreadToken]);
+  }, [nativeBridgeSession, nativeChatThreads, selectedChatThreadToken]);
 
   const refreshChatStatus = useCallback(async () => {
-    if (!nativeBridgeSession?.user_id || !nativeBridgeSession?.token) {
+    let activeNativeSession = nativeBridgeSessionRef.current || nativeBridgeSession;
+    if (!hasNativeBridgeSession(activeNativeSession)) {
       setChatUnreadCount(0);
       setChatStatusLabel('Synced with website chat');
       setChatInboxPath(DEFAULT_CHAT_INBOX_PATH);
@@ -3362,7 +4348,8 @@ export default function HomeScreen() {
     }
 
     try {
-      const response = await fetch(`${APP_BACKEND_URL}/functions/v1/bd-chat-status`, {
+      const initialStatusSession = activeNativeSession as NativeBridgeSession;
+      const requestStatus = (session: NativeBridgeSession) => fetch(`${APP_BACKEND_URL}/functions/v1/bd-chat-status`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
@@ -3370,13 +4357,24 @@ export default function HomeScreen() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          native_session: nativeBridgeSession,
+          native_session: session,
           active_thread_token: nativeChatThreadOpenRef.current
             ? selectedChatThreadTokenRef.current
             : '',
         }),
       });
-      const data = (await response.json()) as ChatStatus & { ok?: boolean; error?: string };
+
+      let response = await requestStatus(initialStatusSession);
+      let data = (await response.json()) as ChatStatus & { ok?: boolean; error?: string };
+
+      if (!response.ok && /native session expired/i.test(String(data?.error || ''))) {
+        const refreshedSession = await refreshNativeBridgeSession(activeNativeSession);
+        if (hasNativeBridgeSession(refreshedSession)) {
+          activeNativeSession = refreshedSession as NativeBridgeSession;
+          response = await requestStatus(activeNativeSession);
+          data = (await response.json()) as ChatStatus & { ok?: boolean; error?: string };
+        }
+      }
 
       if (!response.ok || data?.ok === false) {
         setChatStatusLabel('Website chat sync paused');
@@ -3411,10 +4409,10 @@ export default function HomeScreen() {
     } catch {
       setChatStatusLabel('Website chat sync paused');
     }
-  }, [nativeBridgeSession, playChatNotificationCue]);
+  }, [nativeBridgeSession, playChatNotificationCue, refreshNativeBridgeSession]);
 
   useEffect(() => {
-    if (!nativeBridgeSession?.user_id || !nativeBridgeSession?.token) {
+    if (!hasNativeBridgeSession(nativeBridgeSession)) {
       setChatUnreadCount(0);
       setChatStatusLabel('Synced with website chat');
       setChatInboxPath(DEFAULT_CHAT_INBOX_PATH);
@@ -3435,7 +4433,7 @@ export default function HomeScreen() {
       alive = false;
       clearInterval(poll);
     };
-  }, [nativeBridgeSession?.token, nativeBridgeSession?.user_id, refreshChatStatus]);
+  }, [nativeBridgeSession?.cookie, nativeBridgeSession?.token, nativeBridgeSession?.user_id, refreshChatStatus]);
 
   useEffect(() => {
     if (!showNativeChat) return;
@@ -3530,7 +4528,7 @@ export default function HomeScreen() {
         return;
       }
 
-      if (data?.user?.email && isCoupleAccount(data.user)) {
+      if (data?.user?.email) {
         setShowBrowser(false);
         return;
       }
@@ -3603,13 +4601,7 @@ export default function HomeScreen() {
       if (appLoginUrl && user?.email) {
         addDebugLine('Google login ok -> app-login bridge');
         saveNativeSession(user, nativeSession || null);
-        if (isCoupleAccount(user)) {
-          setShowBrowser(false);
-          return;
-        }
-
-        startBridgeRedirect();
-        openAbsoluteUrl(appLoginUrl);
+        setShowBrowser(false);
         return;
       }
 
@@ -3678,6 +4670,13 @@ true;
       if (isWeddingWinLogoutActionUrl(url)) {
         finishLogoutInApp('website logout started');
         return true;
+      }
+
+      if (weddingWinPath && isVendorConnectPath(weddingWinPath)) {
+        addDebugLine('intercept vendor connect -> native chat');
+        setLoading(false);
+        interceptVendorConnectChat(url);
+        return false;
       }
 
       if (
@@ -3749,6 +4748,7 @@ true;
       nativeBridgeSession,
       nativeMember,
       openDashboardWithBridge,
+      interceptVendorConnectChat,
       pendingDashboardRedirect,
       runBdGoogleLoginInSystemBrowser,
       runOAuthInSystemBrowser,
@@ -3765,6 +4765,13 @@ true;
 
     if (weddingWinPath) {
       addDebugLine(`nav ${weddingWinPath}`);
+    }
+
+    if (weddingWinPath && isVendorConnectPath(weddingWinPath)) {
+      addDebugLine('vendor connect reached -> native chat');
+      setLoading(false);
+      interceptVendorConnectChat(s.url);
+      return;
     }
 
     if (isWeddingWinLoggedOutUrl(s.url)) {
@@ -3823,6 +4830,7 @@ true;
       );
     } else if (weddingWinPath.startsWith('/account')) {
       addDebugLine('account page reached');
+      requestWebsiteSessionBridge();
       const pendingLogin = pendingBdFormLoginRef.current;
       if (pendingLogin) {
         pendingBdFormLoginRef.current = null;
@@ -3843,8 +4851,10 @@ true;
     applyChatPageChrome,
     clearNativeSession,
     finishLogoutInApp,
+    interceptVendorConnectChat,
     pendingBridgeTargetPath,
     pendingDashboardRedirect,
+    requestWebsiteSessionBridge,
   ]);
 
   const handleMessage = useCallback(
@@ -3859,6 +4869,29 @@ true;
         const message = JSON.parse(data) as { type?: string };
         if (message.type === 'bd-app-login-cookies-set') {
           addDebugLine('BD bridge reported cookies set');
+        } else if (message.type === 'bd-cookie-session') {
+          const bridged = (message as { native_session?: NativeBridgeSession }).native_session;
+          if (bridged?.user_id && (bridged.token || bridged.cookie)) {
+            const confirmedBridge = bridged;
+            const currentMemberId = String(nativeMember?.user_id || '').trim();
+            const bridgedMemberId = String(confirmedBridge.user_id || '').trim();
+            if (!currentMemberId || currentMemberId === bridgedMemberId) {
+              const refreshedSession = {
+                ...nativeBridgeSession,
+                ...confirmedBridge,
+                email: confirmedBridge.email || nativeMember?.email || nativeBridgeSession?.email,
+              };
+              nativeBridgeSessionRef.current = refreshedSession;
+              setNativeBridgeSession(refreshedSession);
+              SecureStore.setItemAsync(
+                NATIVE_BRIDGE_SESSION_KEY,
+                JSON.stringify(refreshedSession)
+              ).catch(() => {});
+              const waiters = bridgeSessionWaitersRef.current.splice(0);
+              waiters.forEach((resolve) => resolve(refreshedSession));
+              addDebugLine('BD cookie session refreshed');
+            }
+          }
         } else if (message.type === 'bd-app-logout') {
           finishLogoutInApp('website logout message');
         }
@@ -3866,7 +4899,7 @@ true;
         // Ignore unrelated website messages.
       }
     },
-    [addDebugLine, finishLogoutInApp]
+    [addDebugLine, finishLogoutInApp, nativeBridgeSession, nativeMember]
   );
 
   const handleOpenWindow = useCallback(
@@ -3887,10 +4920,17 @@ true;
       }
 
       if (target.startsWith('http://') || target.startsWith('https://')) {
+        const weddingWinPath = getWeddingWinPath(target);
+        if (weddingWinPath && isVendorConnectPath(weddingWinPath)) {
+          setLoading(false);
+          interceptVendorConnectChat(target);
+          return;
+        }
+
         addDebugLine(`open window ${target.replace(TARGET_URL, '')}`);
         setError(null);
         setLoading(true);
-        setIsChatPage(isChatInboxPath(getWeddingWinPath(target)));
+        setIsChatPage(isChatInboxPath(weddingWinPath));
         setIsWedWebsiteSite(isWedWebsiteUrl(target));
         currentUrlRef.current = target;
         setSourceUri(target);
@@ -3900,7 +4940,7 @@ true;
       setLoading(false);
       Linking.openURL(target).catch(() => {});
     },
-    [addDebugLine, runBdGoogleLoginInSystemBrowser, runOAuthInSystemBrowser]
+    [addDebugLine, interceptVendorConnectChat, runBdGoogleLoginInSystemBrowser, runOAuthInSystemBrowser]
   );
 
   const submitPendingBdFormLogin = useCallback(() => {
@@ -3969,6 +5009,10 @@ true;
         clearTimeout(historyNavigationTimerRef.current);
         historyNavigationTimerRef.current = null;
       }
+      if (vendorConnectNativeTimerRef.current) {
+        clearTimeout(vendorConnectNativeTimerRef.current);
+        vendorConnectNativeTimerRef.current = null;
+      }
       clearLoadingTimeout();
     };
   }, [clearLoadingTimeout]);
@@ -3986,10 +5030,24 @@ true;
     clearLoadingTimeout();
     setLoading(false);
     applyChatPageChrome();
+    const weddingWinPath = getWeddingWinPath(currentUrlRef.current);
+    if (weddingWinPath && isVendorConnectPath(weddingWinPath)) {
+      interceptVendorConnectChat(currentUrlRef.current);
+      return;
+    }
+    if (weddingWinPath.startsWith('/account')) {
+      requestWebsiteSessionBridge();
+    }
     if (pendingBdFormLoginRef.current && getWeddingWinPath(currentUrlRef.current) === '/login') {
       submitPendingBdFormLogin();
     }
-  }, [applyChatPageChrome, clearLoadingTimeout, submitPendingBdFormLogin]);
+  }, [
+    applyChatPageChrome,
+    clearLoadingTimeout,
+    interceptVendorConnectChat,
+    requestWebsiteSessionBridge,
+    submitPendingBdFormLogin,
+  ]);
 
   const handleError = useCallback(
     ({ nativeEvent }: { nativeEvent: { description?: string; code?: number } }) => {
@@ -4049,7 +5107,7 @@ true;
     openAbsoluteUrl(`${WEBSITE_LOGOUT_URL}?ww_app_logout=${Date.now()}`);
   }, [addDebugLine, clearNativeSession, clearWebsiteStorage, openAbsoluteUrl]);
 
-  const returnToCoupleMenu = useCallback(() => {
+  const openVendorDrawSettings = useCallback(() => {
     if (historyNavigationTimerRef.current) {
       clearTimeout(historyNavigationTimerRef.current);
       historyNavigationTimerRef.current = null;
@@ -4061,6 +5119,7 @@ true;
     setError(null);
     setLoading(false);
     setShowBrowser(false);
+    setVendorDrawOpenRequestId((requestId) => requestId + 1);
   }, [clearLoadingTimeout]);
 
   const renderLoading = useCallback(function renderLoading() {
@@ -4075,12 +5134,16 @@ true;
     showNativeChat ? (
       <View style={styles.nativeChatOverlay}>
       <NativeChatScreen
+        member={nativeMember}
+        nativeSession={nativeBridgeSession}
         threads={nativeChatThreads}
         messages={nativeChatMessages}
         selectedThreadToken={selectedChatThreadToken}
         loading={nativeChatLoading}
         sending={nativeChatSending}
+        reporting={nativeChatReporting}
         error={nativeChatError}
+        syncDebug={nativeChatSyncDebug}
         draft={nativeChatDraft}
         onDraftChange={setNativeChatDraft}
         onSelectThread={selectNativeChatThread}
@@ -4089,15 +5152,19 @@ true;
         onReport={reportNativeChatConversation}
         onRefresh={() => syncNativeChat('list')}
         onClose={() => {
+          setNativeChatOpenRequestId(0);
           setNativeChatThreadOpen(false);
           setShowNativeChat(false);
         }}
         onThreadViewChange={setNativeChatThreadOpen}
         chatUnreadCount={chatUnreadCount}
+        openThreadRequestId={nativeChatOpenRequestId}
+        openingConversationLabel={nativeChatOpeningLabel}
       />
       </View>
     ) : null
   );
+  const nativeMemberIsCouple = isCoupleAccount(nativeMember);
 
   if (!showBrowser) {
     return (
@@ -4123,24 +5190,8 @@ true;
           websiteSessionReady={true}
           onSignOut={signOutEverywhere}
           nativeSession={nativeBridgeSession}
+          vendorDrawOpenRequestId={vendorDrawOpenRequestId}
         />
-        {nativeMember && chatUnreadCount > 0 ? (
-          <TouchableOpacity
-            style={styles.chatBubble}
-            activeOpacity={0.82}
-            onPress={openChatWithBridge}
-            accessibilityRole="button"
-            accessibilityLabel="Open WeddingWin messages">
-            <MessageCircle size={27} color="#FFFFFF" strokeWidth={2.2} />
-            {chatUnreadCount > 0 ? (
-              <View style={styles.chatBubbleBadge}>
-                <Text style={styles.chatBubbleBadgeText}>
-                  {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
-                </Text>
-              </View>
-            ) : null}
-          </TouchableOpacity>
-        ) : null}
         {renderNativeChatOverlay()}
         <NativeQrScanner
           visible={showNativeQrScanner}
@@ -4205,6 +5256,7 @@ true;
           style={[
             styles.webview,
             isWedWebsiteSite && !isChatPage && styles.wedWebsiteWebview,
+            nativeMember && !showNativeChat && styles.webviewWithCoupleBottomNav,
           ]}
         />
 
@@ -4274,33 +5326,21 @@ true;
           </View>
         )}
 
-        {nativeMember && !showNativeChat ? (
-          <TouchableOpacity
-            style={styles.coupleMenuPill}
-            activeOpacity={0.78}
-            onPress={returnToCoupleMenu}
-            accessibilityRole="button"
-            accessibilityLabel="Back to app menu">
-            <Text style={styles.coupleMenuPillText}>App Menu</Text>
-          </TouchableOpacity>
-        ) : null}
-
-        {nativeMember && chatUnreadCount > 0 ? (
-          <TouchableOpacity
-            style={styles.chatBubble}
-            activeOpacity={0.82}
-            onPress={openChatWithBridge}
-            accessibilityRole="button"
-            accessibilityLabel="Open WeddingWin messages">
-            <MessageCircle size={27} color="#FFFFFF" strokeWidth={2.2} />
-            {chatUnreadCount > 0 ? (
-              <View style={styles.chatBubbleBadge}>
-                <Text style={styles.chatBubbleBadgeText}>
-                  {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
-                </Text>
-              </View>
-            ) : null}
-          </TouchableOpacity>
+        {nativeMember && nativeMemberIsCouple && !showNativeChat ? (
+          <CoupleBottomNav
+            onOpenWebsiteBuilder={openWebsiteBuilderWithBridge}
+            onOpenDashboard={openDashboardWithBridge}
+            onOpenChat={openChatWithBridge}
+            onOpenQrScanner={openNativeQrScanner}
+            chatUnreadCount={chatUnreadCount}
+          />
+        ) : nativeMember && !showNativeChat ? (
+          <VendorBottomNav
+            onOpenVendorDashboard={openDashboardWithBridge}
+            onOpenChat={openChatWithBridge}
+            onOpenVendorDraw={openVendorDrawSettings}
+            chatUnreadCount={chatUnreadCount}
+          />
         ) : null}
 
         {renderNativeChatOverlay()}
@@ -4342,6 +5382,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#FFF8F5',
+  },
+  loginBackdropCompact: {
+    paddingHorizontal: 16,
+    paddingTop: 5,
+    paddingBottom: 5,
   },
   backdropWash: {
     ...StyleSheet.absoluteFillObject,
@@ -4406,9 +5451,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-start',
   },
+  logoWrapCompact: {
+    maxWidth: 218,
+    height: 48,
+    marginBottom: 0,
+  },
   brandLogo: {
     width: '100%',
     height: 72,
+  },
+  brandLogoCompact: {
+    height: 48,
   },
   countryLabel: {
     position: 'absolute',
@@ -4667,6 +5720,14 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 9 },
     elevation: 8,
   },
+  oneAppLoginCard: {
+    maxWidth: 352,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingTop: 9,
+    paddingBottom: 7,
+    marginTop: 5,
+  },
   wizardBackButton: {
     alignSelf: 'flex-start',
     minHeight: 28,
@@ -4829,6 +5890,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 4,
   },
+  oneAppSignedInPanel: {
+    paddingVertical: 0,
+  },
   signedInTitle: {
     color: BRAND_COLOR,
     fontSize: 14,
@@ -4845,6 +5909,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 8,
     marginBottom: 14,
+  },
+  oneAppSignedInName: {
+    fontSize: 15,
+    lineHeight: 19,
+    marginTop: 3,
+    marginBottom: 7,
   },
   coupleMenuCard: {
     width: '100%',
@@ -4863,6 +5933,16 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 7 },
     elevation: 5,
+  },
+  oneAppMenuCard: {
+    minHeight: 76,
+    borderRadius: 14,
+    padding: 8,
+    gap: 8,
+    marginBottom: 7,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   coupleMenuCopy: {
     flex: 1,
@@ -4897,10 +5977,14 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   coupleMenuImage: {
-    width: 94,
-    height: 94,
-    borderRadius: 16,
-    backgroundColor: '#FFF3EF',
+    width: 102,
+    height: 102,
+    marginLeft: 8,
+  },
+  oneAppMenuImage: {
+    width: 70,
+    height: 70,
+    marginLeft: 4,
   },
   qrMenuCard: {
     backgroundColor: '#FFFCFA',
@@ -4919,14 +6003,6 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     fontWeight: '800',
     marginTop: 1,
-  },
-  qrMenuIconWrap: {
-    width: 94,
-    height: 94,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: BRAND_COLOR,
   },
   vendorMenuIconWrap: {
     width: 94,
@@ -5054,8 +6130,9 @@ const styles = StyleSheet.create({
   vendorRaffleHeader: {
     minHeight: 48,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    gap: 12,
     marginBottom: 12,
   },
   vendorRaffleEyebrow: {
@@ -5071,6 +6148,14 @@ const styles = StyleSheet.create({
     fontSize: 24,
     lineHeight: 29,
     fontWeight: '900',
+  },
+  vendorRaffleHeaderText: {
+    color: '#756662',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+    marginTop: 4,
+    maxWidth: 292,
   },
   vendorRaffleClose: {
     width: 42,
@@ -5093,6 +6178,67 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: '900',
     marginBottom: 10,
+  },
+  vendorRaffleInfographicFrame: {
+    alignSelf: 'center',
+    marginBottom: 14,
+  },
+  vendorRaffleInfographicTrack: {
+    alignItems: 'center',
+  },
+  vendorRaffleInfographic: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EAD2CC',
+  },
+  vendorRaffleCarouselCue: {
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 7,
+  },
+  vendorRaffleCarouselCueText: {
+    color: '#AA565D',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  vendorRaffleCarouselDots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  vendorRaffleCarouselDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#E7C9C3',
+  },
+  vendorRaffleCarouselDotActive: {
+    width: 18,
+    backgroundColor: '#AA565D',
+  },
+  vendorRaffleScrollCue: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 0,
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#FFF0ED',
+    borderWidth: 1,
+    borderColor: '#EACBC6',
+  },
+  vendorRaffleScrollCueText: {
+    color: '#AA565D',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
   },
   vendorRaffleToggleRow: {
     minHeight: 74,
@@ -5141,6 +6287,80 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 2,
   },
+  vendorRaffleRulesLink: {
+    color: '#AA565D',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '900',
+    textDecorationLine: 'underline',
+    marginTop: 5,
+  },
+  vendorRaffleInfoCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#EAD2CC',
+    backgroundColor: '#FFF8F6',
+    padding: 13,
+    marginBottom: 14,
+  },
+  vendorRaffleInfoTitle: {
+    color: '#2E2E32',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '900',
+    marginBottom: 5,
+  },
+  vendorRaffleInfoText: {
+    color: '#655956',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  vendorRaffleProcessRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  vendorRaffleProcessPill: {
+    flexGrow: 1,
+    minWidth: '46%',
+    minHeight: 38,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#F0D5D1',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+  },
+  vendorRaffleProcessNumber: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#AA565D',
+    color: '#FFFFFF',
+    fontSize: 11,
+    lineHeight: 20,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  vendorRaffleProcessText: {
+    color: '#2E2E32',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+  },
+  vendorRaffleGrandPrizeText: {
+    color: '#7C5C57',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
+    marginTop: 12,
+  },
   vendorRaffleTextAreaShell: {
     minHeight: 92,
     alignItems: 'flex-start',
@@ -5148,6 +6368,113 @@ const styles = StyleSheet.create({
   vendorRaffleTextArea: {
     minHeight: 72,
     textAlignVertical: 'top',
+  },
+  vendorRaffleFieldHelp: {
+    color: '#756662',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+    marginTop: 7,
+  },
+  vendorRaffleDisabledContent: {
+    opacity: 0.42,
+  },
+  vendorRaffleEmailPreview: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#F0D4D1',
+    backgroundColor: '#FFF8F7',
+    padding: 10,
+    marginTop: 14,
+    marginBottom: 12,
+  },
+  vendorRafflePreviewEyebrow: {
+    color: '#AA565D',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  vendorRafflePreviewMeta: {
+    color: '#AA565D',
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  vendorRafflePreviewPaper: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#EFE2DE',
+    backgroundColor: '#FFFFFF',
+    padding: 14,
+  },
+  vendorRafflePreviewLogo: {
+    width: 142,
+    height: 42,
+    alignSelf: 'flex-start',
+  },
+  vendorRafflePreviewDivider: {
+    height: 1,
+    backgroundColor: '#E6DED9',
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  vendorRafflePreviewSubject: {
+    color: '#2E2E32',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+    marginBottom: 10,
+  },
+  vendorRafflePreviewBody: {
+    color: '#2F2B2C',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+    marginTop: 5,
+  },
+  vendorRafflePreviewBox: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#EED4D1',
+    backgroundColor: '#FFF7F6',
+    padding: 11,
+    marginTop: 13,
+    marginBottom: 8,
+  },
+  vendorRafflePreviewSection: {
+    color: '#AA565D',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginTop: 10,
+    marginBottom: 1,
+  },
+  vendorRafflePreviewButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 7,
+    backgroundColor: '#AA565D',
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  vendorRafflePreviewButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: '900',
+  },
+  vendorRafflePreviewFooter: {
+    color: '#2F2B2C',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    marginTop: 12,
   },
   vendorRaffleStatsRow: {
     flexDirection: 'row',
@@ -5182,6 +6509,28 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 10,
   },
+  vendorRaffleAutosaveRow: {
+    minHeight: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#EFD8D6',
+    backgroundColor: '#FFF5F4',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+  },
+  vendorRaffleSaveHint: {
+    color: '#756662',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '800',
+    textAlign: 'center',
+    flexShrink: 1,
+  },
   vendorRaffleHint: {
     color: '#756662',
     fontSize: 12,
@@ -5189,6 +6538,116 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     marginTop: 8,
+  },
+  vendorRaffleSectionEyebrow: {
+    color: '#AA565D',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginTop: 14,
+  },
+  vendorRaffleSectionTitle: {
+    color: '#2E2E32',
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  vendorRaffleDrawStatusCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#EFD8D6',
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    marginTop: 10,
+  },
+  vendorRaffleDrawStatusLabel: {
+    color: '#AA565D',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  vendorRaffleDrawStatusText: {
+    color: '#2E2E32',
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '800',
+    marginTop: 3,
+  },
+  vendorRaffleWinnerSteps: {
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  vendorRaffleWinnerStep: {
+    minHeight: 70,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#EFD8D6',
+    backgroundColor: '#FFF8F7',
+    flexDirection: 'row',
+    gap: 10,
+    padding: 11,
+  },
+  vendorRaffleWinnerStepNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#AA565D',
+    color: '#FFFFFF',
+    fontSize: 12,
+    lineHeight: 24,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  vendorRaffleWinnerStepCopy: {
+    flex: 1,
+  },
+  vendorRaffleWinnerStepTitle: {
+    color: '#2E2E32',
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '900',
+  },
+  vendorRaffleWinnerStepText: {
+    color: '#756662',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  vendorRaffleExplainGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  vendorRaffleExplainCard: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    minHeight: 78,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#EFD8D6',
+    backgroundColor: '#FFF8F7',
+    padding: 11,
+  },
+  vendorRaffleExplainTitle: {
+    color: '#2E2E32',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+  },
+  vendorRaffleExplainText: {
+    color: '#756662',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+    marginTop: 3,
   },
   vendorRaffleWinnerCard: {
     borderRadius: 14,
@@ -5671,6 +7130,64 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     fontWeight: '900',
   },
+  coupleBottomNav: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: Platform.OS === 'ios' ? 7 : 5,
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 5,
+    paddingVertical: 4,
+    zIndex: 70,
+  },
+  coupleBottomNavItem: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    borderRadius: 13,
+  },
+  coupleBottomNavIconWrap: {
+    width: 25,
+    height: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  coupleBottomNavLabel: {
+    color: '#3A3332',
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  coupleBottomNavBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -7,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#AA565D',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  coupleBottomNavBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: '900',
+  },
+  coupleBottomNavSpacer: {
+    height: 8,
+  },
   coupleMenuPill: {
     position: 'absolute',
     bottom: Platform.OS === 'ios' ? 38 : 26,
@@ -5734,6 +7251,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
+  },
+  chatReportedNotice: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F2C6BE',
+    backgroundColor: '#FFF1EE',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  chatReportedNoticeText: {
+    flex: 1,
+    color: '#8A514C',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
   },
   chatNativeBody: {
     flex: 1,
@@ -6020,6 +7558,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
+  chatEmptyHint: {
+    color: '#8A7672',
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
   chatMessages: {
     flex: 1,
   },
@@ -6115,6 +7659,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 10,
     paddingBottom: Platform.OS === 'ios' ? 24 : 12,
+  },
+  chatClosedComposer: {
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#F0E2DE',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 14,
+  },
+  chatClosedComposerText: {
+    flex: 1,
+    color: '#8A514C',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
   },
   chatImageButton: {
     width: 44,
@@ -6230,6 +7792,10 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingVertical: 8,
     paddingHorizontal: 14,
+  },
+  oneAppSignOutButton: {
+    marginTop: 0,
+    paddingVertical: 5,
   },
   signOutText: {
     color: '#7D7D80',
@@ -6379,6 +7945,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     marginRight: 8,
   },
+  chatReportButtonDisabled: {
+    opacity: 0.62,
+  },
   chatReportText: {
     color: '#8A514C',
     fontSize: 12,
@@ -6391,6 +7960,9 @@ const styles = StyleSheet.create({
   webview: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  webviewWithCoupleBottomNav: {
+    marginBottom: Platform.OS === 'ios' ? 66 : 60,
   },
   wedWebsiteWebview: {
     marginTop: 36,

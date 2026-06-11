@@ -324,6 +324,13 @@ function createBdSessionCookie(): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function createBdLoginToken(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+}
+
 function splitName(fullName?: string | null): { firstName: string; lastName: string } {
   const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
   return {
@@ -505,14 +512,18 @@ async function createBdUserForApple(
 export async function ensureBdSessionCookie(user: BdUser | undefined): Promise<BdUser | undefined> {
   if (!user?.user_id) return user;
 
+  const existingToken = typeof user.token === "string" ? user.token.trim() : "";
   const existingCookie = typeof user.cookie === "string" ? user.cookie.trim() : "";
-  if (existingCookie) return user;
+  if (existingToken && existingCookie) return user;
 
+  const loginToken = existingToken || createBdLoginToken();
   const sessionCookie = createBdSessionCookie();
-  const updateBody = new URLSearchParams({
+  const updateValues: Record<string, string> = {
     user_id: String(user.user_id),
-    cookie: sessionCookie,
-  });
+  };
+  if (!existingToken) updateValues.token = loginToken;
+  if (!existingCookie) updateValues.cookie = sessionCookie;
+  const updateBody = new URLSearchParams(updateValues);
 
   const update = await callBd("/api/v2/user/update", {
     method: "PUT",
@@ -524,7 +535,7 @@ export async function ensureBdSessionCookie(user: BdUser | undefined): Promise<B
     return user;
   }
 
-  return { ...user, cookie: sessionCookie };
+  return { ...user, token: loginToken, cookie: existingCookie || sessionCookie };
 }
 
 export async function createAppLoginUrl(user: BdUser | undefined, email: string): Promise<string> {

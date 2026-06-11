@@ -13,6 +13,7 @@
       "bundleIdentifier": "ca.weddingwin.app",
       "infoPlist": {
         "NSCameraUsageDescription": "WeddingWin uses the camera to scan QR bingo codes at wedding shows.",
+        "NSPhotoLibraryUsageDescription": "WeddingWin uses your photo library only when you choose an image to send in a private chat message.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSExceptionDomains": {
@@ -26,7 +27,8 @@
       }
     },
     "android": {
-      "package": "ca.weddingwin.app"
+      "package": "ca.weddingwin.app",
+      "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
       "bundler": "metro",

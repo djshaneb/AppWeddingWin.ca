@@ -27,6 +27,11 @@ type PushTokenRow = {
   expo_push_token: string;
   last_unread_count: number;
 };
+type AppChatThreadReport = {
+  thread_token: string;
+  app_thread_token?: string | null;
+  bd_thread_token?: string | null;
+};
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -84,12 +89,12 @@ async function fetchFullBdUserById(userId: string) {
 
 function participantTokens(user: BdRow, bdMemberId: string, bdMemberToken: string) {
   return [...new Set([
-    user.token,
-    bdMemberToken,
-    user.cookie,
     user.user_id,
     bdMemberId,
     user.email,
+    user.token,
+    bdMemberToken,
+    user.cookie,
   ]
     .map((value) => String(value || "").trim())
     .filter(Boolean))];
@@ -107,11 +112,39 @@ function threadBelongsToUser(thread: BdRow, tokens: string[]) {
   );
 }
 
+function threadToken(thread: BdRow) {
+  return String(thread.thread_token || "").trim();
+}
+
+function threadIsClosed(thread: BdRow) {
+  const status = String(thread.thread_status ?? "").trim().toLowerCase();
+  return status === "0" || status === "closed";
+}
+
+async function listThreadReportsByTokens(tokens: string[]) {
+  const uniqueTokens = [...new Set(tokens.map((token) => token.trim()).filter(Boolean))];
+  const reported = new Set<string>();
+  if (!uniqueTokens.length) return reported;
+  const { data, error } = await admin
+    .from("app_chat_thread_reports")
+    .select("thread_token, app_thread_token, bd_thread_token")
+    .in("thread_token", uniqueTokens)
+    .neq("status", "resolved");
+  if (error) return reported;
+  for (const report of (data || []) as AppChatThreadReport[]) {
+    for (const alias of [report.thread_token, report.app_thread_token, report.bd_thread_token]) {
+      const clean = String(alias || "").trim();
+      if (clean) reported.add(clean);
+    }
+  }
+  return reported;
+}
+
 async function listChatThreads(tokens: string[]) {
   const byToken = new Map<string, BdRow>();
   const attempts: string[] = [];
 
-  for (const token of tokens.slice(0, 2)) {
+  for (const token of tokens.slice(0, 4)) {
     attempts.push(
       buildListPath("chat_message_threads", {
         limit: 100,
@@ -227,7 +260,11 @@ Deno.serve(async (request) => {
 
       const tokens = participantTokens(user, bdMemberId, rows[0]?.bd_member_token || "");
       const threads = await listChatThreads(tokens);
-      const unreadCount = await countUnreadMessages(threads, tokens);
+      const reportedThreads = await listThreadReportsByTokens(threads.map((thread) => threadToken(thread)));
+      const unreadCount = await countUnreadMessages(
+        threads.filter((thread) => !threadIsClosed(thread) && !reportedThreads.has(threadToken(thread))),
+        tokens,
+      );
       const rowsToNotify = rows.filter((row) => unreadCount > Number(row.last_unread_count || 0));
       const rowIds = rows.map((row) => row.id).filter(Boolean);
 

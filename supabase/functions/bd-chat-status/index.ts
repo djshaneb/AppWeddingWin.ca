@@ -27,6 +27,17 @@ type NativeSession = {
   token?: string;
   cookie?: string;
 };
+type AppNativeThread = {
+  thread_token: string;
+  member_a_bd_user_id: string;
+  member_b_bd_user_id: string;
+  bd_thread_token?: string | null;
+};
+type AppChatThreadReport = {
+  thread_token: string;
+  app_thread_token?: string | null;
+  bd_thread_token?: string | null;
+};
 
 function chatPermissionError(path: string, message: unknown) {
   const endpoint = path.split("?")[0];
@@ -73,17 +84,25 @@ function nativeSessionMatchesBdUser(session: NativeSession, user: BdRow | undefi
 
   const sessionToken = String(session.token || "").trim();
   const userToken = String(user.token || "").trim();
-  if (!sessionToken || !userToken || sessionToken !== userToken) {
-    return false;
-  }
-
   const sessionCookie = String(session.cookie || "").trim();
   const userCookie = String(user.cookie || "").trim();
-  if (sessionCookie && userCookie && sessionCookie !== userCookie) {
+  return (sessionToken && userToken && sessionToken === userToken) ||
+    (sessionCookie && userCookie && sessionCookie === userCookie);
+}
+
+function nativeSessionCanRefreshBdUser(session: NativeSession, user: BdRow | undefined) {
+  if (nativeSessionMatchesBdUser(session, user)) return true;
+  if (!user?.user_id || String(user.user_id) !== String(session.user_id || "")) {
     return false;
   }
 
-  return true;
+  const sessionEmail = String(session.email || "").trim().toLowerCase();
+  const userEmail = String(user.email || "").trim().toLowerCase();
+  const hadIssuedSecret =
+    String(session.token || "").trim().length >= 16 ||
+    String(session.cookie || "").trim().length >= 16;
+
+  return hadIssuedSecret && !!sessionEmail && sessionEmail === userEmail;
 }
 
 async function callBd(path: string, init: RequestInit = {}) {
@@ -119,16 +138,41 @@ async function fetchFullBdUserById(userId: string | number) {
   return undefined;
 }
 
+async function fetchBdUserByNativeSession(session: NativeSession) {
+  const userId = String(session.user_id || "").trim();
+  const sessionLookups = [
+    ["token", String(session.token || "").trim()],
+    ["cookie", String(session.cookie || "").trim()],
+  ] as const;
+
+  for (const [property, value] of sessionLookups) {
+    if (!value) continue;
+    const result = await callBd(buildListPath("user", {
+      limit: 1,
+      property,
+      property_value: value,
+      property_operator: "eq",
+    }));
+    const user = result.response.ok && result.body.status === "success"
+      ? rowsFromMessage(result.body.message)[0]
+      : undefined;
+    if (user?.user_id && String(user.user_id) === userId) return user;
+  }
+
+  const user = await fetchFullBdUserById(session.user_id);
+  return nativeSessionCanRefreshBdUser(session, user) ? user : undefined;
+}
+
 function participantTokens(user: BdRow, session: NativeSession) {
   return [...new Set([
-    user.token,
-    session.token,
-    user.cookie,
-    session.cookie,
     user.user_id,
     session.user_id,
     user.email,
     session.email,
+    user.token,
+    session.token,
+    user.cookie,
+    session.cookie,
   ]
     .map((value) => String(value || "").trim())
     .filter(Boolean))];
@@ -146,11 +190,39 @@ function threadBelongsToUser(thread: BdRow, tokens: string[]) {
   );
 }
 
+function threadToken(thread: BdRow) {
+  return String(thread.thread_token || "").trim();
+}
+
+function threadIsClosed(thread: BdRow) {
+  const status = String(thread.thread_status ?? "").trim().toLowerCase();
+  return status === "0" || status === "closed";
+}
+
+async function listThreadReportsByTokens(tokens: string[]) {
+  const uniqueTokens = [...new Set(tokens.map((token) => token.trim()).filter(Boolean))];
+  const byToken = new Map<string, AppChatThreadReport>();
+  if (!uniqueTokens.length) return byToken;
+  const { data, error } = await admin
+    .from("app_chat_thread_reports")
+    .select("thread_token, app_thread_token, bd_thread_token")
+    .in("thread_token", uniqueTokens)
+    .neq("status", "resolved");
+  if (error) return byToken;
+  for (const report of (data || []) as AppChatThreadReport[]) {
+    for (const alias of [report.thread_token, report.app_thread_token, report.bd_thread_token]) {
+      const clean = String(alias || "").trim();
+      if (clean && !byToken.has(clean)) byToken.set(clean, report);
+    }
+  }
+  return byToken;
+}
+
 async function listChatThreads(tokens: string[]) {
   const byToken = new Map<string, BdRow>();
   const attempts: string[] = [];
 
-  for (const token of tokens.slice(0, 2)) {
+  for (const token of tokens.slice(0, 4)) {
     attempts.push(
       buildListPath("chat_message_threads", {
         limit: 100,
@@ -225,6 +297,49 @@ async function countUnreadMessages(threads: BdRow[], tokens: string[], ignoredTh
   }).length;
 }
 
+function isAppNativeThreadToken(value: unknown) {
+  return String(value || "").startsWith("app:");
+}
+
+async function listAppThreadsForUser(currentUserId: string | number) {
+  const id = String(currentUserId || "").trim();
+  if (!id) return [];
+
+  const { data, error } = await admin
+    .from("app_native_chat_threads")
+    .select("thread_token, member_a_bd_user_id, member_b_bd_user_id, bd_thread_token")
+    .or(`member_a_bd_user_id.eq.${id},member_b_bd_user_id.eq.${id}`)
+    .limit(100);
+  if (error) throw new Error(error.message);
+  return (data || []) as AppNativeThread[];
+}
+
+async function countUnreadAppMessages(
+  threads: AppNativeThread[],
+  currentUserId: string | number,
+  ignoredThreadToken = "",
+) {
+  const threadTokens = threads
+    .filter((thread) => !String(thread.bd_thread_token || "").trim())
+    .map((thread) => thread.thread_token)
+    .filter(Boolean);
+  const activeThreadToken = isAppNativeThreadToken(ignoredThreadToken) ? ignoredThreadToken : "";
+  const countableTokens = activeThreadToken
+    ? threadTokens.filter((threadToken) => threadToken !== activeThreadToken)
+    : threadTokens;
+  if (countableTokens.length === 0) return 0;
+
+  const { data, error } = await admin
+    .from("app_native_chat_messages")
+    .select("id")
+    .in("thread_token", countableTokens)
+    .neq("sender_bd_user_id", String(currentUserId || ""))
+    .is("read_at", null)
+    .is("bd_synced_at", null);
+  if (error) return 0;
+  return Array.isArray(data) ? data.length : 0;
+}
+
 async function sendExpoPushNotifications(bdMemberId: string, unreadCount: number) {
   const { data: rows, error } = await admin
     .from("app_push_tokens")
@@ -290,26 +405,57 @@ Deno.serve(async (request) => {
     const nativeSession = body?.native_session as NativeSession | undefined;
     const activeThreadToken = String(body?.active_thread_token || "").trim();
 
-    if (!nativeSession?.user_id || !nativeSession?.token) {
+    if (!nativeSession?.user_id || (!nativeSession?.token && !nativeSession?.cookie)) {
       return jsonResponse({ ok: false, error: "Native session required" }, 401);
     }
 
-    const user = await fetchFullBdUserById(nativeSession.user_id);
-    if (!nativeSessionMatchesBdUser(nativeSession, user)) {
+    const user = await fetchBdUserByNativeSession(nativeSession);
+    if (!user?.user_id) {
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
     }
 
     const tokens = participantTokens(user!, nativeSession);
     let threads: BdRow[] = [];
-    let syncDetail = "";
+    let appThreads: AppNativeThread[] = [];
+    let bdSyncDetail = "";
+    let appSyncDetail = "";
 
     try {
       threads = await listChatThreads(tokens);
     } catch (error) {
-      syncDetail = error instanceof Error ? error.message : String(error);
+      bdSyncDetail = error instanceof Error ? error.message : String(error);
+    }
+    try {
+      appThreads = await listAppThreadsForUser(nativeSession.user_id);
+    } catch (error) {
+      appSyncDetail = error instanceof Error ? error.message : String(error);
     }
 
-    const unreadCount = syncDetail ? 0 : await countUnreadMessages(threads, tokens, activeThreadToken);
+    const syncDetail = bdSyncDetail || appSyncDetail;
+    const bdThreadTokens = new Set(
+      threads.map((thread) => String(thread.thread_token || "").trim()).filter(Boolean),
+    );
+    const visibleAppThreads = appThreads.filter((thread) => {
+      const mirroredToken = String(thread.bd_thread_token || "").trim();
+      return !mirroredToken || !bdThreadTokens.has(mirroredToken);
+    });
+    const reportMap = await listThreadReportsByTokens([
+      ...threads.map((thread) => threadToken(thread)),
+      ...visibleAppThreads.flatMap((thread) => [
+        thread.thread_token,
+        String(thread.bd_thread_token || "").trim(),
+      ]),
+    ]);
+    const openBdThreads = threads.filter((thread) => !threadIsClosed(thread) && !reportMap.has(threadToken(thread)));
+    const openAppThreads = visibleAppThreads.filter((thread) => {
+      const mirroredToken = String(thread.bd_thread_token || "").trim();
+      return !reportMap.has(thread.thread_token) && (!mirroredToken || !reportMap.has(mirroredToken));
+    });
+    const bdUnreadCount = bdSyncDetail ? 0 : await countUnreadMessages(openBdThreads, tokens, activeThreadToken);
+    const appUnreadCount = appSyncDetail
+      ? 0
+      : await countUnreadAppMessages(openAppThreads, nativeSession.user_id, activeThreadToken);
+    const unreadCount = bdUnreadCount + appUnreadCount;
     if (!activeThreadToken) {
       await sendExpoPushNotifications(String(nativeSession.user_id), unreadCount);
     }
@@ -317,7 +463,7 @@ Deno.serve(async (request) => {
     return jsonResponse({
       ok: true,
       unread_count: unreadCount,
-      total_count: threads.length,
+      total_count: threads.length + visibleAppThreads.length,
       sync_available: !syncDetail,
       sync_detail: syncDetail,
       latest_label:
