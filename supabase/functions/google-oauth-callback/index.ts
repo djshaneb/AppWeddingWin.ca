@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
+import { ensureStableBdIdentity } from "../_shared/bd_identity.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -96,19 +97,6 @@ function base64UrlFromBytes(bytes: Uint8Array): string {
 
 function base64UrlFromString(value: string): string {
   return base64UrlFromBytes(new TextEncoder().encode(value));
-}
-
-function createBdSessionCookie(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function createBdLoginToken(): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
 }
 
 function splitName(fullName?: string | null): { firstName: string; lastName: string } {
@@ -269,32 +257,8 @@ async function createBdUserForGoogle(
 }
 
 async function ensureBdSessionCookie(user: BdUser | undefined): Promise<BdUser | undefined> {
-  if (!user?.user_id) return user;
-
-  const existingToken = typeof user.token === "string" ? user.token.trim() : "";
-  const existingCookie = typeof user.cookie === "string" ? user.cookie.trim() : "";
-  if (existingToken && existingCookie) return user;
-
-  const loginToken = existingToken || createBdLoginToken();
-  const sessionCookie = createBdSessionCookie();
-  const updateValues: Record<string, string> = {
-    user_id: String(user.user_id),
-  };
-  if (!existingToken) updateValues.token = loginToken;
-  if (!existingCookie) updateValues.cookie = sessionCookie;
-  const updateBody = new URLSearchParams(updateValues);
-
-  const update = await callBd("/api/v2/user/update", {
-    method: "PUT",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: updateBody.toString(),
-  });
-
-  if (!update.response.ok || update.body.status !== "success") {
-    return user;
-  }
-
-  return { ...user, token: loginToken, cookie: existingCookie || sessionCookie };
+  // Token must stay stable across logins or website chat threads orphan.
+  return (await ensureStableBdIdentity(user, callBd)) as BdUser | undefined;
 }
 
 async function createAppLoginUrl(user: BdUser | undefined, email: string): Promise<string> {

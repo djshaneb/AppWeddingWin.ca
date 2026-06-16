@@ -4,7 +4,7 @@ import {
   ActivityIndicator,
   Image,
   ImageBackground,
-  KeyboardAvoidingView,
+  Keyboard,
   Linking,
   Modal,
   Platform,
@@ -2849,6 +2849,33 @@ function NativeChatScreen({
   const [threadSort, setThreadSort] = useState<ChatThreadSort>('recent');
   const [chatView, setChatView] = useState<'list' | 'thread'>('list');
   const handledOpenThreadRequestRef = useRef(0);
+  // Expo SDK 54 forces Android edge-to-edge, which breaks adjustResize and
+  // KeyboardAvoidingView - the keyboard just covers the composer. Track the
+  // keyboard frame ourselves and pad the chat body to keep the input and
+  // send button visible. Seeding from Keyboard.metrics() also covers the
+  // case where the keyboard is already open when this overlay mounts
+  // (e.g. tapping Send Message while a website form field has focus).
+  const [keyboardHeight, setKeyboardHeight] = useState(
+    () => Keyboard.metrics()?.height ?? 0
+  );
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(Math.max(0, event.endCoordinates?.height ?? 0));
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+  const messagesScrollRef = useRef<ScrollView>(null);
+  useEffect(() => {
+    if (keyboardHeight > 0) {
+      messagesScrollRef.current?.scrollToEnd({ animated: true });
+    }
+  }, [keyboardHeight]);
   const displayThreads = useMemo(() => {
     return threads
       .map((thread) => {
@@ -2979,10 +3006,7 @@ function NativeChatScreen({
         </View>
       ) : null}
 
-      <KeyboardAvoidingView
-        style={styles.chatNativeBody}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}>
+      <View style={[styles.chatNativeBody, { paddingBottom: keyboardHeight }]}>
         {!isThreadView ? (
           <View style={styles.chatConversationList}>
           {!isOpeningConversation ? (
@@ -3122,10 +3146,14 @@ function NativeChatScreen({
         </View>
 
         <ScrollView
+          ref={messagesScrollRef}
           style={styles.chatMessages}
           contentContainerStyle={styles.chatMessagesContent}
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => {
+            messagesScrollRef.current?.scrollToEnd({ animated: false });
+          }}
           showsVerticalScrollIndicator={false}>
           {selectedThreadClosed ? (
             <View style={styles.chatReportedNotice}>
@@ -3269,7 +3297,7 @@ function NativeChatScreen({
         )}
           </>
         )}
-      </KeyboardAvoidingView>
+      </View>
       {chatUnreadCount > 0 ? (
         <TouchableOpacity
           style={styles.chatBubble}
@@ -4008,6 +4036,12 @@ true;
         throw new Error(`${data?.error || 'Chat sync failed.'}${detail}`);
       }
 
+      if ((data as { partial?: boolean }).partial) {
+        // Send succeeded but the backend hit the website API rate limit while
+        // rebuilding the thread list. Keep the current UI; next poll refreshes.
+        return data;
+      }
+
       const threads = data.threads || [];
       setNativeChatSyncDebug(data.sync_debug || null);
       const nextThreadToken = data.selected_thread_token || options.threadToken || threads[0]?.token || '';
@@ -4114,6 +4148,16 @@ true;
     return () => subscription.remove();
   }, [nativeBridgeSession, syncNativeChat]);
 
+  // A keyboard opened by a website form must never linger under the native
+  // chat overlay - blur the WebView's focused field and dismiss it before the
+  // overlay mounts, otherwise it covers the composer and send button.
+  const dismissAnyKeyboard = useCallback(() => {
+    webviewRef.current?.injectJavaScript(
+      '(function(){try{if(document.activeElement&&document.activeElement.blur){document.activeElement.blur();}}catch(e){}})();true;'
+    );
+    Keyboard.dismiss();
+  }, []);
+
   const openChatWithBridge = useCallback(() => {
     const activeNativeSession = nativeBridgeSessionRef.current || nativeBridgeSession;
     if (!hasNativeBridgeSession(activeNativeSession)) {
@@ -4123,11 +4167,12 @@ true;
 
     requestWebsiteSessionBridge();
     addDebugLine('open native messages');
+    dismissAnyKeyboard();
     setNativeChatOpenRequestId(0);
     setNativeChatThreadOpen(false);
     setShowNativeChat(true);
     syncNativeChat('list', { fallbackToWebsite: true });
-  }, [addDebugLine, chatInboxPath, nativeBridgeSession, openUrl, requestWebsiteSessionBridge, syncNativeChat]);
+  }, [addDebugLine, chatInboxPath, dismissAnyKeyboard, nativeBridgeSession, openUrl, requestWebsiteSessionBridge, syncNativeChat]);
 
   const openVendorConnectChat = useCallback(async (connectUrl: string) => {
     if (vendorConnectNativeUrlRef.current === connectUrl) return;
@@ -4141,6 +4186,7 @@ true;
     }, 2200);
 
     addDebugLine('open native vendor conversation');
+    dismissAnyKeyboard();
     setNativeChatOpeningLabel(vendorNameFromConnectUrl(connectUrl));
     setLoading(false);
     setError(null);
@@ -4178,7 +4224,7 @@ true;
         vendorConnectNativeTimerRef.current = null;
       }, 600);
     }
-  }, [addDebugLine, nativeBridgeSession, requestWebsiteSessionBridge, syncNativeChat, waitForWebsiteSessionBridge]);
+  }, [addDebugLine, dismissAnyKeyboard, nativeBridgeSession, requestWebsiteSessionBridge, syncNativeChat, waitForWebsiteSessionBridge]);
 
   const interceptVendorConnectChat = useCallback((connectUrl: string) => {
     if (vendorConnectNativeUrlRef.current === connectUrl) {

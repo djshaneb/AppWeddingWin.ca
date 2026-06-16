@@ -28,7 +28,7 @@
     },
     "android": {
       "package": "ca.weddingwin.app",
-      "softwareKeyboardLayoutMode": "pan"
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "bundler": "metro",

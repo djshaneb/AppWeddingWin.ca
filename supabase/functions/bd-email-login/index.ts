@@ -1,4 +1,5 @@
 import bcrypt from "npm:bcryptjs@2.4.3";
+import { ensureStableBdIdentity } from "../_shared/bd_identity.ts";
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY");
@@ -91,19 +92,6 @@ function buildNativeSession(user: BdUser | undefined, email: string) {
   }
 
   return session;
-}
-
-function createBdSessionCookie() {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function createBdLoginToken() {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
 }
 
 function getPasswordHash(user: BdUser | undefined) {
@@ -217,49 +205,10 @@ async function fetchFullUserById(userId: string | number) {
 }
 
 async function ensureBdSessionCookie(user: BdUser | undefined) {
-  if (!user?.user_id) {
-    return user;
-  }
-
-  const existingToken = typeof user.token === "string" ? user.token.trim() : "";
-  const existingCookie = typeof user.cookie === "string" ? user.cookie.trim() : "";
-  if (existingToken && existingCookie) {
-    return user;
-  }
-
-  const loginToken = existingToken || createBdLoginToken();
-  const sessionCookie = createBdSessionCookie();
-  const updateValues: Record<string, string> = {
-    user_id: String(user.user_id),
-  };
-  if (!existingToken) updateValues.token = loginToken;
-  if (!existingCookie) updateValues.cookie = sessionCookie;
-  const updateBody = new URLSearchParams(updateValues);
-
-  const update = await callBd("/api/v2/user/update", {
-    method: "PUT",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: updateBody.toString(),
-  });
-
-  if (!update.response.ok || update.body.status !== "success") {
-    console.error("Unable to persist BD session cookie", {
-      user_id: user.user_id,
-      http_status: update.response.status,
-      bd_status: update.body.status,
-      bd_message:
-        typeof update.body.message === "string"
-          ? update.body.message.slice(0, 180)
-          : JSON.stringify(update.body.message).slice(0, 180),
-    });
-    return user;
-  }
-
-  return {
-    ...user,
-    token: loginToken,
-    cookie: existingCookie || sessionCookie,
-  };
+  // BD strips token/cookie from API reads, so the stable identity lives in
+  // bd_users_cache. Never regenerate a token for a user who already has one -
+  // doing so orphans their chat threads from the website inbox.
+  return (await ensureStableBdIdentity(user, callBd)) as BdUser | undefined;
 }
 
 function nativeSessionMatchesUser(session: NativeSession, user: BdUser | undefined) {
