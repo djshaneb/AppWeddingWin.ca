@@ -414,6 +414,43 @@ const CLOAK_INJECTION = `
 
     if (isOwnSite) {
       try {
+        var hideWrappedAuthMenuItems = function() {
+          var selector = [
+            '#link450-mobile',
+            '#link453-mobile',
+            '#link450',
+            '#link453',
+            '.sidebar-nav a[href="/sign-up"]',
+            '.sidebar-nav a[href="/login"]',
+            '.tablet-menu-ul a[href="/sign-up"]',
+            '.tablet-menu-ul a[href="/login"]'
+          ].join(',');
+          document.querySelectorAll(selector).forEach(function(link) {
+            var menuItem = link.closest ? link.closest('li') : link.parentElement;
+            if (!menuItem) return;
+            menuItem.setAttribute('data-ww-app-hidden-auth-menu-item', '1');
+            menuItem.style.setProperty('display', 'none', 'important');
+          });
+        };
+        var authMenuCleanupQueued = false;
+        var scheduleAuthMenuCleanup = function() {
+          if (authMenuCleanupQueued) return;
+          authMenuCleanupQueued = true;
+          window.requestAnimationFrame(function() {
+            authMenuCleanupQueued = false;
+            hideWrappedAuthMenuItems();
+          });
+        };
+
+        hideWrappedAuthMenuItems();
+        document.addEventListener('DOMContentLoaded', hideWrappedAuthMenuItems);
+        if (document.documentElement) {
+          var authMenuObserver = new MutationObserver(scheduleAuthMenuCleanup);
+          authMenuObserver.observe(document.documentElement, { childList: true, subtree: true });
+        }
+      } catch(e) {}
+
+      try {
         var blockMetaPixelScript = function(value) {
           return /connect\\.facebook\\.net\\/.*fbevents\\.js/i.test(String(value || ''));
         };
@@ -1203,7 +1240,7 @@ function CoupleBottomNav({
   );
 
   return (
-    <View style={styles.coupleBottomNav} pointerEvents="box-none">
+    <View style={styles.coupleBottomNav} pointerEvents="auto">
       {renderItem('Website', 'Open wedding website builder', Globe2, onOpenWebsiteBuilder)}
       {renderItem('Vendors', 'Open vendor search dashboard', Search, onOpenDashboard)}
       {renderItem('Messages', 'Open private messages', MessageCircle, onOpenChat, chatUnreadCount)}
@@ -1253,7 +1290,7 @@ function VendorBottomNav({
   );
 
   return (
-    <View style={styles.coupleBottomNav} pointerEvents="box-none">
+    <View style={styles.coupleBottomNav} pointerEvents="auto">
       {renderItem('Dashboard', 'Open vendor dashboard', LayoutDashboard, onOpenVendorDashboard)}
       {renderItem('Messages', 'Open private messages', MessageCircle, onOpenChat, chatUnreadCount)}
       {renderItem('Draw', 'Open QR Bingo vendor draw settings', QrCode, onOpenVendorDraw)}
@@ -3321,6 +3358,7 @@ export default function HomeScreen() {
   const webviewRef = useRef<WebView>(null);
   const navigation = useNavigation();
   const currentUrlRef = useRef(TARGET_URL);
+  const sourceUriRef = useRef(TARGET_URL);
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyNavigationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showBrowser, setShowBrowser] = useState(false);
@@ -3375,6 +3413,41 @@ export default function HomeScreen() {
   const vendorConnectNativeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const addDebugLine = useCallback((_line: string) => {}, []);
+
+  const clearLoadingTimeout = useCallback(() => {
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startLoadingFeedback = useCallback(() => {
+    clearLoadingTimeout();
+    setLoading(true);
+    loadingTimeoutRef.current = setTimeout(() => {
+      setLoading(false);
+      loadingTimeoutRef.current = null;
+    }, 12000);
+  }, [clearLoadingTimeout]);
+
+  const navigateWebViewTo = useCallback((nextUrl: string) => {
+    const shouldForceNavigation =
+      sourceUriRef.current === nextUrl && !!webviewRef.current;
+    sourceUriRef.current = nextUrl;
+
+    if (shouldForceNavigation) {
+      webviewRef.current?.stopLoading();
+      webviewRef.current?.injectJavaScript(`
+(function() {
+  try { window.location.assign(${JSON.stringify(nextUrl)}); } catch (e) {}
+})();
+true;
+`);
+      return;
+    }
+
+    setSourceUri(nextUrl);
+  }, []);
 
   useEffect(() => {
     nativeChatThreadOpenRef.current = nativeChatThreadOpen;
@@ -3581,24 +3654,24 @@ export default function HomeScreen() {
     const url = new URL(path, TARGET_URL);
     const nextUrl = url.toString();
     setError(null);
-    setLoading(true);
+    startLoadingFeedback();
     setIsChatPage(isChatInboxPath(getWeddingWinPath(nextUrl)));
     setIsWedWebsiteSite(isWedWebsiteUrl(nextUrl));
     currentUrlRef.current = nextUrl;
-    setSourceUri(nextUrl);
+    navigateWebViewTo(nextUrl);
     setShowBrowser(true);
-  }, []);
+  }, [navigateWebViewTo, startLoadingFeedback]);
 
   const openAbsoluteUrl = useCallback((url: string) => {
     addDebugLine(`open ${url.replace(TARGET_URL, '')}`);
     setError(null);
-    setLoading(true);
+    startLoadingFeedback();
     setIsChatPage(isChatInboxPath(getWeddingWinPath(url)));
     setIsWedWebsiteSite(isWedWebsiteUrl(url));
     currentUrlRef.current = url;
-    setSourceUri(url);
+    navigateWebViewTo(url);
     setShowBrowser(true);
-  }, [addDebugLine]);
+  }, [addDebugLine, navigateWebViewTo, startLoadingFeedback]);
 
   const startBridgeRedirect = useCallback((targetPath = DEFAULT_BRIDGE_TARGET_PATH) => {
     setPendingBridgeTargetPath(targetPath);
@@ -4975,18 +5048,18 @@ true;
 
         addDebugLine(`open window ${target.replace(TARGET_URL, '')}`);
         setError(null);
-        setLoading(true);
+        startLoadingFeedback();
         setIsChatPage(isChatInboxPath(weddingWinPath));
         setIsWedWebsiteSite(isWedWebsiteUrl(target));
         currentUrlRef.current = target;
-        setSourceUri(target);
+        navigateWebViewTo(target);
         return;
       }
 
       setLoading(false);
       Linking.openURL(target).catch(() => {});
     },
-    [addDebugLine, interceptVendorConnectChat, runBdGoogleLoginInSystemBrowser, runOAuthInSystemBrowser]
+    [addDebugLine, interceptVendorConnectChat, navigateWebViewTo, runBdGoogleLoginInSystemBrowser, runOAuthInSystemBrowser, startLoadingFeedback]
   );
 
   const submitPendingBdFormLogin = useCallback(() => {
@@ -5042,12 +5115,6 @@ true;
 `);
   }, [addDebugLine]);
 
-  const clearLoadingTimeout = useCallback(() => {
-    if (loadingTimeoutRef.current) {
-      clearTimeout(loadingTimeoutRef.current);
-      loadingTimeoutRef.current = null;
-    }
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -5064,13 +5131,8 @@ true;
   }, [clearLoadingTimeout]);
 
   const handleLoadStart = useCallback(() => {
-    clearLoadingTimeout();
-    setLoading(true);
-    loadingTimeoutRef.current = setTimeout(() => {
-      setLoading(false);
-      loadingTimeoutRef.current = null;
-    }, 12000);
-  }, [clearLoadingTimeout]);
+    startLoadingFeedback();
+  }, [startLoadingFeedback]);
 
   const handleLoadEnd = useCallback(() => {
     clearLoadingTimeout();
@@ -5167,6 +5229,83 @@ true;
     setShowBrowser(false);
     setVendorDrawOpenRequestId((requestId) => requestId + 1);
   }, [clearLoadingTimeout]);
+
+  const dismissWrappedWebsiteMenus = useCallback(() => {
+    webviewRef.current?.injectJavaScript(`
+(function() {
+  try {
+    var openMenuSelector = [
+      '.mobile-main-menu.opened',
+      '.mobile-main-menu.open',
+      '.mobile-main-menu.show',
+      'header .dropdown.open',
+      '.header .dropdown.open',
+      'nav .dropdown.open',
+      '.mini-nav .open',
+      'header .navbar-collapse.in',
+      '.header .navbar-collapse.in',
+      'nav .navbar-collapse.in',
+      'header .navbar-collapse.show',
+      '.header .navbar-collapse.show',
+      'nav .navbar-collapse.show'
+    ].join(',');
+
+    document.querySelectorAll(openMenuSelector).forEach(function(node) {
+      node.classList.remove('opened', 'open', 'show', 'in');
+    });
+
+    document.querySelectorAll(
+      'header [aria-expanded="true"], .header [aria-expanded="true"], nav [aria-expanded="true"]'
+    ).forEach(function(toggle) {
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.classList.add('collapsed');
+    });
+
+    if (document.activeElement && document.activeElement.blur) {
+      document.activeElement.blur();
+    }
+  } catch (e) {}
+})();
+true;
+`);
+  }, []);
+
+  const runBottomNavigationAction = useCallback(
+    (action: () => void | Promise<void>) => {
+      if (historyNavigationTimerRef.current) {
+        clearTimeout(historyNavigationTimerRef.current);
+        historyNavigationTimerRef.current = null;
+      }
+      clearLoadingTimeout();
+      setLoading(false);
+      webviewRef.current?.stopLoading();
+      dismissWrappedWebsiteMenus();
+      requestAnimationFrame(() => {
+        void action();
+      });
+    },
+    [clearLoadingTimeout, dismissWrappedWebsiteMenus]
+  );
+
+  const openWebsiteBuilderFromBottomNav = useCallback(() => {
+    runBottomNavigationAction(openWebsiteBuilderWithBridge);
+  }, [openWebsiteBuilderWithBridge, runBottomNavigationAction]);
+
+  const openDashboardFromBottomNav = useCallback(() => {
+    runBottomNavigationAction(openDashboardWithBridge);
+  }, [openDashboardWithBridge, runBottomNavigationAction]);
+
+  const openChatFromBottomNav = useCallback(() => {
+    runBottomNavigationAction(openChatWithBridge);
+  }, [openChatWithBridge, runBottomNavigationAction]);
+
+  const openQrScannerFromBottomNav = useCallback(() => {
+    runBottomNavigationAction(openNativeQrScanner);
+  }, [openNativeQrScanner, runBottomNavigationAction]);
+
+  const openVendorDrawFromBottomNav = useCallback(() => {
+    runBottomNavigationAction(openVendorDrawSettings);
+  }, [openVendorDrawSettings, runBottomNavigationAction]);
 
   const renderLoading = useCallback(function renderLoading() {
     return (
@@ -5374,17 +5513,17 @@ true;
 
         {nativeMember && nativeMemberIsCouple && !showNativeChat ? (
           <CoupleBottomNav
-            onOpenWebsiteBuilder={openWebsiteBuilderWithBridge}
-            onOpenDashboard={openDashboardWithBridge}
-            onOpenChat={openChatWithBridge}
-            onOpenQrScanner={openNativeQrScanner}
+            onOpenWebsiteBuilder={openWebsiteBuilderFromBottomNav}
+            onOpenDashboard={openDashboardFromBottomNav}
+            onOpenChat={openChatFromBottomNav}
+            onOpenQrScanner={openQrScannerFromBottomNav}
             chatUnreadCount={chatUnreadCount}
           />
         ) : nativeMember && !showNativeChat ? (
           <VendorBottomNav
-            onOpenVendorDashboard={openDashboardWithBridge}
-            onOpenChat={openChatWithBridge}
-            onOpenVendorDraw={openVendorDrawSettings}
+            onOpenVendorDashboard={openDashboardFromBottomNav}
+            onOpenChat={openChatFromBottomNav}
+            onOpenVendorDraw={openVendorDrawFromBottomNav}
             chatUnreadCount={chatUnreadCount}
           />
         ) : null}
@@ -7187,6 +7326,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 5,
     paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    elevation: 70,
     zIndex: 70,
   },
   coupleBottomNavItem: {
