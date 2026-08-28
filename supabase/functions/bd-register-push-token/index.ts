@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { nativeSessionMatchesCachedBdIdentity } from "../_shared/bd_identity.ts";
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
@@ -69,18 +70,6 @@ async function fetchFullBdUserById(userId: string | number) {
   return undefined;
 }
 
-function nativeSessionMatchesBdUser(session: NativeSession, user: BdRow | undefined) {
-  if (!user?.user_id || String(user.user_id) !== String(session.user_id || "")) return false;
-
-  const sessionToken = String(session.token || "").trim();
-  const userToken = String(user.token || "").trim();
-  if (!sessionToken || !userToken || sessionToken !== userToken) return false;
-
-  const sessionCookie = String(session.cookie || "").trim();
-  const userCookie = String(user.cookie || "").trim();
-  return !(sessionCookie && userCookie && sessionCookie !== userCookie);
-}
-
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") {
@@ -90,35 +79,59 @@ Deno.serve(async (request) => {
   try {
     const body = await request.json().catch(() => ({}));
     const nativeSession = body?.native_session as NativeSession | undefined;
+    const action = String(body?.action || "register").trim().toLowerCase();
     const expoPushToken = String(body?.expo_push_token || "").trim();
     const platform = String(body?.platform || "").trim();
 
     if (!nativeSession?.user_id || !nativeSession?.token) {
       return jsonResponse({ ok: false, error: "Native session required" }, 401);
     }
+    if (action !== "register" && action !== "unregister") {
+      return jsonResponse({ ok: false, error: "Unsupported push token action" }, 400);
+    }
     if (!/^ExponentPushToken\[[^\]]+\]$/.test(expoPushToken) && !/^ExpoPushToken\[[^\]]+\]$/.test(expoPushToken)) {
       return jsonResponse({ ok: false, error: "Valid Expo push token required" }, 400);
     }
 
-    const user = await fetchFullBdUserById(nativeSession.user_id);
-    if (!nativeSessionMatchesBdUser(nativeSession, user)) {
+    if (!await nativeSessionMatchesCachedBdIdentity(nativeSession)) {
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
     }
 
-    const { error } = await admin
-      .from("app_push_tokens")
-      .upsert({
-        bd_member_id: String(nativeSession.user_id),
-        bd_member_token: String(nativeSession.token || ""),
-        expo_push_token: expoPushToken,
-        platform,
-        enabled: true,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "expo_push_token" });
+    if (action === "register") {
+      // Token/cookie are intentionally stripped from BD v2 reads. Fetch the
+      // member only when enabling notifications, to confirm the account still
+      // exists. Unregister must remain available during a BD outage or after an
+      // account closes; cache auth plus the exact member/token filter below is
+      // sufficient to disable only this session's push row.
+      const user = await fetchFullBdUserById(nativeSession.user_id);
+      if (!user?.user_id || String(user.user_id) !== String(nativeSession.user_id)) {
+        return jsonResponse({ ok: false, error: "Native session expired" }, 401);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const operation = action === "unregister"
+      ? admin
+        .from("app_push_tokens")
+        .update({ enabled: false, bd_member_token: "", updated_at: now })
+        .eq("expo_push_token", expoPushToken)
+        .eq("bd_member_id", String(nativeSession.user_id))
+      : admin
+        .from("app_push_tokens")
+        .upsert({
+          bd_member_id: String(nativeSession.user_id),
+          bd_member_token: String(nativeSession.token || ""),
+          expo_push_token: expoPushToken,
+          platform,
+          enabled: true,
+          updated_at: now,
+        }, { onConflict: "expo_push_token" });
+
+    const { error } = await operation;
 
     if (error) throw error;
 
-    return jsonResponse({ ok: true });
+    return jsonResponse({ ok: true, action });
   } catch (error) {
     return jsonResponse({
       ok: false,

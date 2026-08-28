@@ -9,6 +9,7 @@ import {
   upsertAppleUser,
   verifyAppleIdentityToken,
 } from "../_shared/apple_auth.ts";
+import { allowedFinalRedirect } from "../_shared/oauth_state.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -50,7 +51,7 @@ Deno.serve(async (req: Request) => {
       fullName: fullName || body.full_name || null,
     });
 
-    const redirectTo = String(body.redirect_to || DEFAULT_FINAL);
+    const redirectTo = allowedFinalRedirect(body.redirect_to || DEFAULT_FINAL);
     const bdLogin = await makeBdAppleLoginResult({
       appleSub: user.appleSub,
       email: user.email,

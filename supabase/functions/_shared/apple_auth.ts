@@ -1,6 +1,8 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.58.0";
 import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from "npm:jose@5.9.6";
+import { verifiedAppleEmail } from "./apple_identity.ts";
 import { ensureStableBdIdentity } from "./bd_identity.ts";
+import { allowedFinalRedirect } from "./oauth_state.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,6 +40,7 @@ export type AppleClaims = {
   email_verified?: string | boolean;
   aud: string;
   iss: string;
+  nonce?: string;
 };
 
 type BdEnvelope = {
@@ -107,7 +110,15 @@ export function htmlPage(title: string, body: string): string {
 }
 
 export function errorPage(message: string): Response {
-  const body = `<div style="color:#ff6b6b;font-weight:600;margin-bottom:12px">Sign-in failed</div><div>${message}</div><div style="margin-top:24px"><a href="${DEFAULT_FINAL}" style="color:#d4af37">Go back</a></div>`;
+  const entities: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+  const safeMessage = message.replace(/[&<>"']/g, (character) => entities[character] || character);
+  const body = `<div style="color:#ff6b6b;font-weight:600;margin-bottom:12px">Sign-in failed</div><div>${safeMessage}</div><div style="margin-top:24px"><a href="${DEFAULT_FINAL}" style="color:#d4af37">Go back</a></div>`;
   return new Response(htmlPage("Sign-in failed", body), {
     status: 400,
     headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
@@ -209,7 +220,7 @@ export async function upsertAppleUser(args: {
   fullName?: string | null;
 }): Promise<{ userId: string; email: string; appleSub: string; fullName: string }> {
   const appleSub = args.claims.sub;
-  const providedEmail = args.email || args.claims.email || "";
+  const providedEmail = verifiedAppleEmail(args.claims.email, args.email);
   const fullName = args.fullName || "";
 
   const { data: profileByApple, error: profileErr } = await admin
@@ -280,10 +291,11 @@ export async function upsertAppleUser(args: {
 }
 
 export async function makeMagicRedirect(email: string, finalRedirect: string): Promise<string> {
+  const safeFinalRedirect = allowedFinalRedirect(finalRedirect);
   const { data: linkData, error: linkErr } = await admin.auth.admin.generateLink({
     type: "magiclink",
     email,
-    options: { redirectTo: finalRedirect },
+    options: { redirectTo: safeFinalRedirect },
   });
   if (linkErr || !linkData?.properties?.action_link) {
     throw new Error(`generateLink failed: ${linkErr?.message ?? "no link"}`);
@@ -303,7 +315,7 @@ export async function makeMagicRedirect(email: string, finalRedirect: string): P
     throw new Error(`Supabase verify produced no tokens.`);
   }
 
-  const finalUrl = new URL(finalRedirect);
+  const finalUrl = new URL(safeFinalRedirect);
   finalUrl.searchParams.set("ww_oauth", "apple");
   finalUrl.hash = hash;
   return finalUrl.toString();
@@ -578,6 +590,7 @@ export async function makeBdAppleLoginResult(args: {
   if (!args.email) {
     throw new Error("Apple did not provide an email and this Apple account is not linked yet.");
   }
+  const finalRedirect = allowedFinalRedirect(args.finalRedirect);
 
   if (!BD_APPLE_LOGIN_URL) {
     if (BD_API_KEY && APP_LOGIN_SECRET) {
@@ -590,7 +603,7 @@ export async function makeBdAppleLoginResult(args: {
     }
     if (ALLOW_SUPABASE_APPLE_FALLBACK) {
       return {
-        redirectUrl: await makeMagicRedirect(args.email, args.finalRedirect),
+        redirectUrl: await makeMagicRedirect(args.email, finalRedirect),
         user: { email: args.email },
         nativeSession: { email: args.email },
       };
@@ -616,7 +629,7 @@ export async function makeBdAppleLoginResult(args: {
       apple_sub: args.appleSub,
       email: args.email,
       full_name: args.fullName || "",
-      final_redirect: args.finalRedirect,
+      final_redirect: finalRedirect,
       subscription_id: requestedSubscriptionId(args.subscriptionId),
     }),
   });

@@ -1,5 +1,8 @@
 import bcrypt from "npm:bcryptjs@2.4.3";
-import { ensureStableBdIdentity } from "../_shared/bd_identity.ts";
+import {
+  ensureStableBdIdentity,
+  nativeSessionMatchesCachedBdIdentity,
+} from "../_shared/bd_identity.ts";
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY");
@@ -211,39 +214,14 @@ async function ensureBdSessionCookie(user: BdUser | undefined) {
   return (await ensureStableBdIdentity(user, callBd)) as BdUser | undefined;
 }
 
-function nativeSessionMatchesUser(session: NativeSession, user: BdUser | undefined) {
+async function nativeSessionCanRefreshUser(session: NativeSession, user: BdUser | undefined) {
   if (!user?.user_id || String(user.user_id) !== String(session.user_id || "")) {
     return false;
   }
 
-  const sessionToken = String(session.token || "").trim();
-  const userToken = String(user.token || "").trim();
-  const sessionCookie = String(session.cookie || "").trim();
-  const userCookie = String(user.cookie || "").trim();
-  return (sessionToken && userToken && sessionToken === userToken) ||
-    (sessionCookie && userCookie && sessionCookie === userCookie);
-}
-
-function nativeSessionCanRefreshUser(session: NativeSession, user: BdUser | undefined) {
-  if (nativeSessionMatchesUser(session, user)) return true;
-  if (!user?.user_id || String(user.user_id) !== String(session.user_id || "")) {
-    return false;
-  }
-
-  const sessionEmail = String(session.email || "").trim().toLowerCase();
-  const userEmail = String(user.email || "").trim().toLowerCase();
-  const hadIssuedSecret =
-    String(session.token || "").trim().length >= 16 ||
-    String(session.cookie || "").trim().length >= 16;
-
-  if (!hadIssuedSecret) return false;
-
-  // Older app sessions can survive after BD rotates the member token/cookie.
-  // The app already has the member id plus a previously-issued long secret, but
-  // may not have the email if the session came from the website cookie bridge.
-  if (!sessionEmail) return true;
-
-  return sessionEmail === userEmail;
+  // BD strips token/cookie from v2 reads. Only the canonical identity issued
+  // at login and stored in bd_users_cache can authorize a native refresh.
+  return await nativeSessionMatchesCachedBdIdentity(session);
 }
 
 Deno.serve(async (req) => {
@@ -263,7 +241,7 @@ Deno.serve(async (req) => {
       const session = native_session as NativeSession;
       let user = session.user_id ? await fetchFullUserById(session.user_id) : undefined;
 
-      if (!nativeSessionCanRefreshUser(session, user)) {
+      if (!await nativeSessionCanRefreshUser(session, user)) {
         return jsonResponse({ error: "Stored session expired. Please sign in again." }, 401);
       }
 

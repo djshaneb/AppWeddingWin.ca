@@ -3,18 +3,22 @@
 // per 20s across ALL clients), so this can never trip BD's rate limit.
 
 import {
+  activeChatBlocksForMember,
   admin,
   BdRateLimitError,
+  cachedUsersByIds,
   getSessionUser,
   loadSharedRateLimit,
   messageIsMineInThread,
   mirrorMessagesForThreads,
   mirrorThreadsForUser,
   type NativeSession,
+  otherMemberIdFromBlock,
   participantTokens,
   refreshMirrorIfStale,
   resetRateLimitFlag,
   threadIsClosed,
+  threadHasParticipant,
   wasRateLimited,
 } from "../_shared/bd_chat.ts";
 
@@ -128,6 +132,7 @@ async function sendExpoPushNotifications(bdMemberId: string, unreadCount: number
     body: JSON.stringify(rowsToNotify.map((row) => ({
       to: row.expo_push_token,
       sound: "default",
+      badge: unreadCount,
       title: "New WeddingWin message",
       body: unreadCount === 1
         ? "You have a new message."
@@ -170,6 +175,9 @@ Deno.serve(async (request) => {
       }
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
     }
+    if (String(user.active ?? "").trim() !== "2") {
+      return jsonResponse({ ok: false, error: "Active membership required" }, 403);
+    }
 
     // Keep the mirror fresh so new website messages are noticed even when the
     // chat screen is closed (budgeted + cross-isolate locked).
@@ -179,6 +187,32 @@ Deno.serve(async (request) => {
     const tokens = participantTokens(user, nativeSession);
     const threads = await mirrorThreadsForUser(tokens, userId);
     const appThreads = await listAppThreadsForUser(userId);
+    const blocks = await activeChatBlocksForMember(userId);
+    const blockedOtherIds = new Set(
+      blocks.map((block) => otherMemberIdFromBlock(block, userId)).filter(Boolean),
+    );
+    const blockedUsers = await cachedUsersByIds([...blockedOtherIds]);
+    const bdThreadIsBlocked = (thread: (typeof threads)[number]) => {
+      const knownOtherId = [thread.owner_user_id, thread.responder_user_id]
+        .map((value) => String(value || "").trim())
+        .find((value) => value && value !== userId);
+      if (knownOtherId && blockedOtherIds.has(knownOtherId)) return true;
+      for (const blockedId of blockedOtherIds) {
+        const cached = blockedUsers.get(blockedId);
+        if (!cached) continue;
+        const blockedTokens = [cached.user_id, cached.token, cached.cookie, cached.email]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean);
+        if (threadHasParticipant(thread, blockedTokens)) return true;
+      }
+      return false;
+    };
+    const appThreadIsBlocked = (thread: AppNativeThread) => {
+      const otherId = thread.member_a_bd_user_id === userId
+        ? thread.member_b_bd_user_id
+        : thread.member_a_bd_user_id;
+      return blockedOtherIds.has(otherId);
+    };
 
     const bdThreadTokens = new Set(threads.map((thread) => thread.thread_token));
     const visibleAppThreads = appThreads.filter((thread) => {
@@ -193,12 +227,15 @@ Deno.serve(async (request) => {
 
     const openBdThreads = threads.filter((thread) =>
       !threadIsClosed({ thread_status: thread.thread_status }) &&
+      !bdThreadIsBlocked(thread) &&
       !reportMap.has(thread.thread_token) &&
       thread.thread_token !== activeThreadToken
     );
     const openAppThreads = visibleAppThreads.filter((thread) => {
       const mirroredToken = String(thread.bd_thread_token || "").trim();
-      return !reportMap.has(thread.thread_token) && (!mirroredToken || !reportMap.has(mirroredToken));
+      return !appThreadIsBlocked(thread) &&
+        !reportMap.has(thread.thread_token) &&
+        (!mirroredToken || !reportMap.has(mirroredToken));
     });
 
     const messagesByThread = await mirrorMessagesForThreads(openBdThreads.map((thread) => thread.thread_token));

@@ -7,6 +7,7 @@ import {
   upsertAppleUser,
   verifyAppleIdentityToken,
 } from "../_shared/apple_auth.ts";
+import { allowedFinalRedirect } from "../_shared/oauth_state.ts";
 
 type AppleWebUser = {
   email?: string;
@@ -50,7 +51,9 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const finalRedirect = String(body.final_redirect || body.finalRedirect || DEFAULT_FINAL);
+    const finalRedirect = allowedFinalRedirect(
+      body.final_redirect || body.finalRedirect || DEFAULT_FINAL,
+    );
     const appleUser = parseAppleUser(body.user);
     const cfg = await getAppleConfig(admin);
     const claims = await verifyAppleIdentityToken(idToken, [cfg.serviceId]);

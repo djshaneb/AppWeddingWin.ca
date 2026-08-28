@@ -11,12 +11,30 @@
 //   - bd_edge_cache                       -> cross-isolate state (rate limit, locks)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { nativeSessionMatchesCachedBdIdentity } from "./bd_identity.ts";
+import {
+  containsInlineImagePayload,
+  matchingParticipantIdentity,
+  isChatImageSharingEnabled,
+  parseChatTimestamp,
+  participantValueMatchesIdentities,
+  participantValuesMatch,
+  splitParticipantIdentities,
+  stripInlineImagePayloads,
+} from "./chat_moderation.ts";
 
 export const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const BD_SITE_TIME_ZONE = Deno.env.get("BD_SITE_TIME_ZONE") || "America/Toronto";
+// Keep this unset/off until a real server-side image moderation provider is
+// enforced. The release-safe default rejects image writes and strips reads.
+export const CHAT_IMAGES_ENABLED = isChatImageSharingEnabled(
+  Deno.env.get("CHAT_IMAGES_ENABLED"),
+);
+export const CHAT_IMAGES_DISABLED_NOTICE =
+  "Photo sharing is temporarily unavailable while WeddingWin completes image-safety review. Please send a text message instead.";
 
 export const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -84,6 +102,203 @@ export type CachedUser = {
   avatar_url: string | null;
   filename: string | null;
 };
+
+export const CHAT_MEMBER_BLOCKED_NOTICE =
+  "Member blocked: This conversation is closed and future messages from this member will not appear while WeddingWin reviews your report.";
+
+export type ChatMemberBlock = {
+  id: string;
+  member_a_bd_user_id: string;
+  member_b_bd_user_id: string;
+  blocked_by_bd_user_id: string;
+  blocked_member_bd_user_id: string;
+  source_thread_token: string | null;
+  status: "active" | "revoked";
+  notice: string | null;
+  created_at: string;
+  updated_at: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+};
+
+export class ChatImageSharingDisabledError extends Error {
+  readonly status = 403;
+
+  constructor(message = CHAT_IMAGES_DISABLED_NOTICE) {
+    super(message);
+    this.name = "ChatImageSharingDisabledError";
+  }
+}
+
+export class ChatMemberBlockedError extends Error {
+  readonly status = 423;
+
+  constructor(message = CHAT_MEMBER_BLOCKED_NOTICE) {
+    super(message);
+    this.name = "ChatMemberBlockedError";
+  }
+}
+
+export const CHAT_CONTENT_REJECTED_NOTICE =
+  "Message not sent: WeddingWin does not allow threats, hate speech, sexual exploitation, explicit sexual solicitation, or targeted harassment. Edit the message and try again.";
+
+export class ObjectionableChatContentError extends Error {
+  readonly status = 422;
+
+  constructor(message = CHAT_CONTENT_REJECTED_NOTICE) {
+    super(message);
+    this.name = "ObjectionableChatContentError";
+  }
+}
+
+function normalizedModerationText(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[013457@$!]/g, (character) => ({
+      "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t",
+      "@": "a", "$": "s", "!": "i",
+    })[character] || character)
+    .replace(/[^a-z]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function isObjectionableChatText(value: string) {
+  const text = normalizedModerationText(value);
+  if (!text) return false;
+  return [
+    /\b(?:kill|murder|shoot|stab|rape|hurt)\s+(?:you|u)\b/,
+    /\b(?:send|show|share)\s+(?:me\s+)?(?:a\s+)?(?:nude|nudes|naked|porn|dick\s+pic)\b/,
+    /\b(?:child|minor|underage)\s+(?:porn|sex|sexual|nude|nudes|naked)\b/,
+    /\b(?:blowjob|handjob|cumshot|rape\s+fantasy|dick\s+pic)\b/,
+    /\b(?:nigger|faggot|kike|chink)\b/,
+    /\b(?:worthless|disgusting)\s+(?:bitch|whore|slut)\b/,
+  ].some((pattern) => pattern.test(text));
+}
+
+export function filterChatTextForDisplay(value: string) {
+  const safeValue = CHAT_IMAGES_ENABLED ? value : stripInlineImagePayloads(value);
+  return isObjectionableChatText(safeValue)
+    ? "[Message hidden by WeddingWin's safety filter. You can report and block the sender.]"
+    : safeValue;
+}
+
+export function canonicalChatMemberPair(first: unknown, second: unknown): [string, string] {
+  const left = String(first || "").trim();
+  const right = String(second || "").trim();
+  if (!left || !right || left === right) {
+    throw new Error("Two distinct chat members are required.");
+  }
+  return left < right ? [left, right] : [right, left];
+}
+
+export async function activeChatMemberBlock(
+  first: unknown,
+  second: unknown,
+): Promise<ChatMemberBlock | undefined> {
+  const [memberA, memberB] = canonicalChatMemberPair(first, second);
+  const { data, error } = await admin
+    .from("app_chat_member_blocks")
+    .select("*")
+    .eq("member_a_bd_user_id", memberA)
+    .eq("member_b_bd_user_id", memberB)
+    .eq("status", "active")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data || undefined) as ChatMemberBlock | undefined;
+}
+
+export async function assertChatMemberPairAllowed(first: unknown, second: unknown) {
+  const block = await activeChatMemberBlock(first, second);
+  if (block) throw new ChatMemberBlockedError(block.notice || CHAT_MEMBER_BLOCKED_NOTICE);
+}
+
+export async function activeChatBlocksForMember(memberId: unknown): Promise<ChatMemberBlock[]> {
+  const id = String(memberId || "").trim();
+  if (!id) return [];
+  const { data, error } = await admin
+    .from("app_chat_member_blocks")
+    .select("*")
+    .eq("status", "active")
+    .or(`member_a_bd_user_id.eq.${id},member_b_bd_user_id.eq.${id}`)
+    .limit(200);
+  if (error) throw new Error(error.message);
+  return (data || []) as ChatMemberBlock[];
+}
+
+export function otherMemberIdFromBlock(block: ChatMemberBlock, memberId: unknown) {
+  const id = String(memberId || "").trim();
+  if (block.member_a_bd_user_id === id) return block.member_b_bd_user_id;
+  if (block.member_b_bd_user_id === id) return block.member_a_bd_user_id;
+  return "";
+}
+
+export async function upsertChatMemberBlock(
+  blockedBy: unknown,
+  blockedMember: unknown,
+  sourceThreadToken: unknown,
+) {
+  const reporter = String(blockedBy || "").trim();
+  const other = String(blockedMember || "").trim();
+  const [memberA, memberB] = canonicalChatMemberPair(reporter, other);
+  const now = new Date().toISOString();
+  const { data: existing, error: existingError } = await admin
+    .from("app_chat_member_blocks")
+    .select("*")
+    .eq("member_a_bd_user_id", memberA)
+    .eq("member_b_bd_user_id", memberB)
+    .maybeSingle();
+  if (existingError) throw new Error(existingError.message);
+
+  const values: Record<string, unknown> = {
+      member_a_bd_user_id: memberA,
+      member_b_bd_user_id: memberB,
+      blocked_by_bd_user_id: reporter,
+      blocked_member_bd_user_id: other,
+      source_thread_token: String(sourceThreadToken || "").trim() || null,
+      status: "active",
+      notice: CHAT_MEMBER_BLOCKED_NOTICE,
+      updated_at: now,
+      revoked_at: null,
+      revoked_by: null,
+  };
+
+  if (existing) {
+    // Aliases discovered while the same pair block is active must inherit the
+    // original cutoff. A genuinely revoked-and-reported pair starts a new one.
+    if (String(existing.status) === "revoked") values.created_at = now;
+    const { data, error } = await admin
+      .from("app_chat_member_blocks")
+      .update(values)
+      .eq("id", String(existing.id))
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return data as ChatMemberBlock;
+  }
+
+  const { data, error } = await admin
+    .from("app_chat_member_blocks")
+    .insert({ ...values, created_at: now })
+    .select("*")
+    .single();
+  if (error) {
+    // Concurrent reports for the same pair can race the unique constraint.
+    // Read the winner; the report trigger and subsequent aliases are idempotent.
+    if (String(error.code || "") === "23505") {
+      const { data: raced, error: racedError } = await admin
+        .from("app_chat_member_blocks")
+        .select("*")
+        .eq("member_a_bd_user_id", memberA)
+        .eq("member_b_bd_user_id", memberB)
+        .single();
+      if (!racedError && raced) return raced as ChatMemberBlock;
+    }
+    throw new Error(error.message);
+  }
+  return data as ChatMemberBlock;
+}
 
 export class BdRateLimitError extends Error {
   constructor() {
@@ -245,18 +460,7 @@ export async function callBd(path: string, init: RequestInit = {}) {
 // ---------------------------------------------------------------------------
 
 export function timeValue(value: unknown) {
-  const raw = String(value || "").trim();
-  if (/^\d{14}$/.test(raw)) {
-    return new Date(
-      Number(raw.slice(0, 4)),
-      Number(raw.slice(4, 6)) - 1,
-      Number(raw.slice(6, 8)),
-      Number(raw.slice(8, 10)),
-      Number(raw.slice(10, 12)),
-      Number(raw.slice(12, 14)),
-    ).getTime();
-  }
-  const time = new Date(raw).getTime();
+  const time = parseChatTimestamp(value, BD_SITE_TIME_ZONE);
   return Number.isFinite(time) ? time : 0;
 }
 
@@ -335,14 +539,15 @@ export function displayNameFromParts(company: unknown, firstName: unknown, lastN
 
 export function participantTokens(user: BdRow | CachedUser, session: NativeSession) {
   const record = user as Record<string, unknown>;
-  return [...new Set([record.user_id, session.user_id, record.email, session.email, record.token, session.token, record.cookie, session.cookie]
+  // Email is accepted only from the verified server-side BD record. The email
+  // sent by the client is not an authorization identity.
+  return [...new Set([record.user_id, session.user_id, record.email, record.token, session.token, record.cookie, session.cookie]
     .map((value) => String(value || "").trim())
     .filter(Boolean))];
 }
 
 export function rowHasToken(value: unknown, tokens: string[]) {
-  const raw = String(value || "");
-  return tokens.some((token) => token && raw.includes(token));
+  return participantValueMatchesIdentities(value, tokens);
 }
 
 export function threadHasParticipant(thread: { thread_owner?: unknown; thread_responders?: unknown }, tokens: string[]) {
@@ -350,19 +555,11 @@ export function threadHasParticipant(thread: { thread_owner?: unknown; thread_re
 }
 
 export function splitParticipantValues(value: unknown) {
-  return String(value || "")
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
+  return splitParticipantIdentities(value);
 }
 
 function matchingParticipantValue(value: unknown, tokens: string[]) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const parts = splitParticipantValues(raw);
-  return tokens.find((token) =>
-    !!token && (raw === token || parts.includes(token) || raw.includes(token))
-  ) || "";
+  return matchingParticipantIdentity(value, tokens);
 }
 
 export function ownerIdentityForThread(thread: { thread_owner?: unknown; thread_responders?: unknown }, tokens: string[]) {
@@ -373,11 +570,10 @@ export function ownerIdentityForThread(thread: { thread_owner?: unknown; thread_
 }
 
 export function otherParticipantValue(thread: { thread_owner?: unknown; thread_responders?: unknown }, userTokens: string[]) {
-  const owner = String(thread.thread_owner || "");
-  if (userTokens.some((token) => token && owner.includes(token))) {
+  if (rowHasToken(thread.thread_owner, userTokens)) {
     return splitParticipantValues(thread.thread_responders)[0] || "";
   }
-  return splitParticipantValues(owner)[0] || "";
+  return splitParticipantValues(thread.thread_owner)[0] || "";
 }
 
 // Tokens rotate on every login, so token-string matching alone misses older
@@ -411,12 +607,11 @@ export function messageIsMineInThread(
 ) {
   const owner = String(message.message_owner || "").trim();
   if (!owner) return false;
-  if (tokens.some((token) => token && owner.includes(token))) return true;
+  if (rowHasToken(owner, tokens)) return true;
   if (!thread) return false;
   const side = userSideOfThread(thread, tokens, userId);
   if (!side) return false;
-  const matchesParts = (value: unknown) =>
-    splitParticipantValues(value).some((part) => part && (owner === part || owner.includes(part) || part.includes(owner)));
+  const matchesParts = (value: unknown) => participantValuesMatch(owner, value);
   const matchesOwnerSide = matchesParts(thread.thread_owner);
   const matchesResponderSide = matchesParts(thread.thread_responders);
   if (side === "owner") return matchesOwnerSide && !matchesResponderSide;
@@ -614,33 +809,6 @@ export async function canonicalIdentityForUser(userId: string): Promise<{ token:
   return { token, cookie, calls };
 }
 
-/**
- * Adopts the app session's token/cookie as the canonical identity when the
- * cache has none yet (sessions issued before stable identities existed).
- * Zero BD calls - BD already has these exact values from that login.
- */
-export async function captureSessionIdentity(session: NativeSession) {
-  const uid = String(session.user_id || "").trim();
-  const token = String(session.token || "").trim();
-  const cookie = String(session.cookie || "").trim();
-  if (!uid || (!token && !cookie)) return;
-  try {
-    const { data } = await admin
-      .from("bd_users_cache")
-      .select("token, cookie")
-      .eq("user_id", uid)
-      .maybeSingle();
-    const update: Record<string, string> = { user_id: uid };
-    if (!String(data?.token || "").trim() && token) update.token = token;
-    if (!String(data?.cookie || "").trim() && cookie) update.cookie = cookie;
-    if (Object.keys(update).length > 1) {
-      await admin.from("bd_users_cache").upsert(update);
-    }
-  } catch {
-    // Best effort.
-  }
-}
-
 export function cachedUserTitle(user: CachedUser | undefined) {
   if (!user) return "";
   const name = displayNameFromParts(user.company, user.first_name, user.last_name);
@@ -702,44 +870,22 @@ export async function bdFetchUserByProfilePath(profilePath: string) {
 // Session auth (zero BD calls when cached)
 // ---------------------------------------------------------------------------
 
-function sessionMatchesIdentity(session: NativeSession, record: { user_id?: unknown; token?: unknown; cookie?: unknown }) {
-  if (!record?.user_id || String(record.user_id) !== String(session.user_id || "")) return false;
-  const sessionToken = String(session.token || "").trim();
-  const recordToken = String(record.token || "").trim();
-  const sessionCookie = String(session.cookie || "").trim();
-  const recordCookie = String(record.cookie || "").trim();
-  return (!!sessionToken && !!recordToken && sessionToken === recordToken) ||
-    (!!sessionCookie && !!recordCookie && sessionCookie === recordCookie);
-}
-
-function sessionCanRefreshUser(session: NativeSession, user: BdRow | undefined) {
-  if (sessionMatchesIdentity(session, user || {})) return true;
-  if (!user?.user_id || String(user.user_id) !== String(session.user_id || "")) return false;
-  const sessionEmail = String(session.email || "").trim().toLowerCase();
-  const userEmail = String(user.email || "").trim().toLowerCase();
-  const hadIssuedSecret =
-    String(session.token || "").trim().length >= 16 ||
-    String(session.cookie || "").trim().length >= 16;
-  return hadIssuedSecret && !!sessionEmail && sessionEmail === userEmail;
-}
-
 export async function getSessionUser(session: NativeSession): Promise<BdRow | undefined> {
   const userId = String(session.user_id || "").trim();
   const token = String(session.token || "").trim();
   const cookie = String(session.cookie || "").trim();
+  if (!userId || !await nativeSessionMatchesCachedBdIdentity(session)) return undefined;
+
   const cacheKey = `sess:${userId}:${token}:${cookie}`;
 
   const cached = await sharedCacheGet<BdRow>(cacheKey);
-  if (cached?.user_id) return cached;
+  if (cached?.user_id && String(cached.user_id) === userId) return cached;
 
-  // Adopt this session's identity as canonical if we have none stored yet.
-  await captureSessionIdentity(session);
-
-  // Zero-BD path: the user record saved at login / during sync.
+  // Zero-BD path: the user record saved during a verified login / sync.
   try {
     const { data } = await admin.from("bd_users_cache").select("raw").eq("user_id", userId).maybeSingle();
     const raw = (data?.raw || undefined) as BdRow | undefined;
-    if (raw && sessionMatchesIdentity(session, raw)) {
+    if (raw?.user_id && String(raw.user_id) === userId) {
       await sharedCacheSet(cacheKey, raw, 300_000);
       return raw;
     }
@@ -747,25 +893,9 @@ export async function getSessionUser(session: NativeSession): Promise<BdRow | un
     // Fall through to BD.
   }
 
-  for (const [property, value] of [["token", token], ["cookie", cookie]] as const) {
-    if (!value) continue;
-    const result = await callBd(listPath("user", {
-      limit: 1,
-      property,
-      property_value: value,
-      property_operator: "eq",
-    }));
-    const user = result.response.ok && result.body.status === "success" ? rows(result.body.message)[0] : undefined;
-    if (user?.user_id && String(user.user_id) === userId) {
-      await sharedCacheSet(cacheKey, user, 300_000);
-      await upsertBdUserCache(user);
-      return user;
-    }
-  }
-
   const user = await bdFetchUserById(userId);
-  if (sessionCanRefreshUser(session, user)) {
-    await sharedCacheSet(cacheKey, user!, 300_000);
+  if (user?.user_id && String(user.user_id) === userId) {
+    await sharedCacheSet(cacheKey, user, 300_000);
     return user;
   }
   return undefined;
@@ -780,7 +910,12 @@ export function validateMessage(content: string, imageDataUri = "") {
   const image = imageDataUri.trim();
   if (!clean && !image) throw new Error("Message required");
   if (clean.length > 2000) throw new Error("Message is too long");
+  if (!CHAT_IMAGES_ENABLED && containsInlineImagePayload(clean)) {
+    throw new ChatImageSharingDisabledError();
+  }
+  if (clean && isObjectionableChatText(clean)) throw new ObjectionableChatContentError();
   if (image) {
+    if (!CHAT_IMAGES_ENABLED) throw new ChatImageSharingDisabledError();
     if (!/^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/i.test(image)) throw new Error("Unsupported image format");
     if (image.length > 2_500_000) throw new Error("Image is too large. Please choose a smaller image.");
   }
@@ -1013,8 +1148,8 @@ export async function pendingSendsForThreads(threadTokens: string[], mirrorToken
     .from("bd_chat_outbox")
     .select("*")
     .eq("kind", "send")
+    .is("sent_at", null)
     .in("thread_token", unique)
-    .gte("created_at", new Date(Date.now() - 24 * 3_600_000).toISOString())
     .order("created_at", { ascending: true })
     .limit(200);
   for (const row of (data || []) as OutboxRow[]) {
@@ -1037,17 +1172,144 @@ export async function enqueueOutbox(row: Partial<OutboxRow>) {
   return data as OutboxRow;
 }
 
-async function markOutboxSent(id: string) {
-  await admin.from("bd_chat_outbox").update({ sent_at: new Date().toISOString(), last_error: null }).eq("id", id);
+export async function enqueueCloseOutbox(threadToken: unknown, threadId: unknown = "") {
+  const token = String(threadToken || "").trim();
+  if (!token) throw new Error("Conversation token required");
+  const { data: queued, error: queuedError } = await admin
+    .from("bd_chat_outbox")
+    .select("*")
+    .eq("kind", "close")
+    .eq("thread_token", token)
+    .is("sent_at", null)
+    .limit(1);
+  if (queuedError) throw new Error(queuedError.message);
+  if (queued?.length) return queued[0] as OutboxRow;
+  return await enqueueOutbox({
+    kind: "close",
+    thread_token: token,
+    payload: { thread_id: String(threadId || "").trim() },
+  });
+}
+
+export async function markOutboxSent(id: string) {
+  const { error } = await admin
+    .from("bd_chat_outbox")
+    .update({ sent_at: new Date().toISOString(), last_error: null })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
 async function markOutboxError(row: OutboxRow, error: unknown) {
-  await admin.from("bd_chat_outbox").update({ attempts: (row.attempts || 0) + 1, last_error: shortError(error) }).eq("id", row.id);
+  const attempts = (row.attempts || 0) + 1;
+  const detail = shortError(error);
+  const lastError = attempts >= 10
+    ? `Delivery stopped after ${attempts} attempts: ${detail}`
+    : detail;
+  await admin.from("bd_chat_outbox").update({ attempts, last_error: lastError }).eq("id", row.id);
+
+  if (row.kind === "mirror_app_thread") {
+    const appThreadToken = String(row.app_thread_token || row.thread_token || "").trim();
+    if (appThreadToken) {
+      await admin.from("app_native_chat_messages")
+        .update({ bd_sync_error: lastError })
+        .eq("thread_token", appThreadToken)
+        .is("bd_synced_at", null);
+    }
+  }
+
+  if (attempts >= 10) {
+    console.error("BD chat outbox delivery stopped", {
+      outbox_id: row.id,
+      kind: row.kind,
+      thread_token: row.thread_token,
+      attempts,
+      error: detail,
+    });
+  }
+}
+
+async function markOutboxBlocked(
+  row: OutboxRow,
+  error: ChatMemberBlockedError | ChatImageSharingDisabledError,
+) {
+  const detail = shortError(error);
+  const lastError = `Delivery blocked: ${detail}`;
+  await admin.from("bd_chat_outbox").update({ attempts: 10, last_error: lastError }).eq("id", row.id);
+
+  const appThreadToken = String(row.app_thread_token || row.thread_token || "").trim();
+  if (appThreadToken.startsWith("app:")) {
+    await admin.from("app_native_chat_messages")
+      .update({ bd_sync_error: lastError })
+      .eq("thread_token", appThreadToken)
+      .is("bd_synced_at", null);
+  }
+}
+
+async function activeThreadTokenReport(threadToken: string) {
+  if (!threadToken) return false;
+  const { data, error } = await admin
+    .from("app_chat_thread_reports")
+    .select("id")
+    .eq("thread_token", threadToken)
+    .neq("status", "resolved")
+    .limit(1);
+  if (error) throw new Error(error.message);
+  return !!data?.length;
+}
+
+async function appThreadForDeliveryToken(threadToken: string) {
+  const { data: byAppToken, error: appError } = await admin
+    .from("app_native_chat_threads")
+    .select("member_a_bd_user_id, member_b_bd_user_id")
+    .eq("thread_token", threadToken)
+    .maybeSingle();
+  if (appError) throw new Error(appError.message);
+  if (byAppToken) return byAppToken as { member_a_bd_user_id: string; member_b_bd_user_id: string };
+
+  const { data: byBdToken, error: bdError } = await admin
+    .from("app_native_chat_threads")
+    .select("member_a_bd_user_id, member_b_bd_user_id")
+    .eq("bd_thread_token", threadToken)
+    .maybeSingle();
+  if (bdError) throw new Error(bdError.message);
+  return (byBdToken || undefined) as
+    | { member_a_bd_user_id: string; member_b_bd_user_id: string }
+    | undefined;
+}
+
+async function assertThreadDeliveryAllowed(threadToken: string, senderId: string) {
+  if (await activeThreadTokenReport(threadToken)) {
+    throw new ChatMemberBlockedError();
+  }
+
+  const appThread = await appThreadForDeliveryToken(threadToken);
+  if (appThread) {
+    await assertChatMemberPairAllowed(
+      appThread.member_a_bd_user_id,
+      appThread.member_b_bd_user_id,
+    );
+    return;
+  }
+
+  const mirror = await mirrorThreadByToken(threadToken);
+  if (!mirror) return;
+  const ownerId = String(mirror.owner_user_id || "").trim();
+  const responderId = String(mirror.responder_user_id || "").trim();
+  if (ownerId && responderId) {
+    await assertChatMemberPairAllowed(ownerId, responderId);
+    return;
+  }
+
+  const otherId = [ownerId, responderId].find((id) => id && id !== senderId) || "";
+  if (senderId && otherId) await assertChatMemberPairAllowed(senderId, otherId);
 }
 
 async function resolveBdThreadTokenForOutbox(row: OutboxRow): Promise<{ token: string; calls: number }> {
   const raw = String(row.thread_token || "").trim();
-  if (raw && !raw.startsWith("app:")) return { token: raw, calls: 0 };
+  if (raw && !raw.startsWith("app:")) {
+    await assertThreadDeliveryAllowed(raw, String(row.sender_bd_user_id || ""));
+    return { token: raw, calls: 0 };
+  }
 
   const appToken = raw || String(row.app_thread_token || "").trim();
   if (!appToken) throw new Error("Outbox row has no thread token");
@@ -1057,8 +1319,12 @@ async function resolveBdThreadTokenForOutbox(row: OutboxRow): Promise<{ token: s
     .eq("thread_token", appToken)
     .maybeSingle();
   if (!data) throw new Error("App thread not found for outbox row");
+  await assertChatMemberPairAllowed(data.member_a_bd_user_id, data.member_b_bd_user_id);
   const saved = String(data.bd_thread_token || "").trim();
-  if (saved) return { token: saved, calls: 0 };
+  if (saved) {
+    await assertThreadDeliveryAllowed(saved, String(row.sender_bd_user_id || ""));
+    return { token: saved, calls: 0 };
+  }
 
   // Create the BD thread now (budgeted).
   let calls = 0;
@@ -1099,6 +1365,7 @@ async function resolveBdThreadTokenForOutbox(row: OutboxRow): Promise<{ token: s
 
 async function flushSendRow(row: OutboxRow): Promise<number> {
   const resolved = await resolveBdThreadTokenForOutbox(row);
+  await assertThreadDeliveryAllowed(resolved.token, String(row.sender_bd_user_id || ""));
   let calls = resolved.calls;
   // message_owner must be a token the website recognizes; a bare user id
   // breaks ownership alignment in the website thread view.
@@ -1108,11 +1375,16 @@ async function flushSendRow(row: OutboxRow): Promise<number> {
     calls += identity.calls;
     owner = identity.token || owner || String(row.sender_bd_user_id || "");
   }
+  const content = String(row.content || "");
+  const storedImage = String(row.image_data_uri || "");
+  if (!CHAT_IMAGES_ENABLED && storedImage && !content.trim()) {
+    throw new ChatImageSharingDisabledError();
+  }
   const sent = await bdSendMessage(
     resolved.token,
-    String(row.content || ""),
+    content,
     owner,
-    String(row.image_data_uri || ""),
+    CHAT_IMAGES_ENABLED ? storedImage : "",
     String(row.message_token || ""),
   );
   calls += 1;
@@ -1138,6 +1410,8 @@ async function flushReadRow(row: OutboxRow, room: number): Promise<number> {
   }
   let calls = 0;
   const remaining: string[] = [];
+  let deliveryFailed = false;
+  let deliveryError = "";
   for (const id of ids) {
     if (calls >= room) {
       remaining.push(id);
@@ -1152,13 +1426,34 @@ async function flushReadRow(row: OutboxRow, room: number): Promise<number> {
       return undefined;
     });
     calls += 1;
-    if (!result || !result.response.ok) remaining.push(id);
+    if (!result || !result.response.ok || result.body.status !== "success") {
+      remaining.push(id);
+      deliveryFailed = true;
+      deliveryError = typeof result?.body.message === "string"
+        ? result.body.message
+        : `Read receipt ${id} was rejected by BD.`;
+    }
   }
   if (remaining.length) {
-    await admin.from("bd_chat_outbox").update({
+    const update: Record<string, unknown> = {
       payload: { ...(row.payload || {}), message_ids: remaining },
-      attempts: (row.attempts || 0) + 1,
-    }).eq("id", row.id);
+    };
+    if (deliveryFailed) {
+      const attempts = (row.attempts || 0) + 1;
+      update.attempts = attempts;
+      update.last_error = attempts >= 10
+        ? `Delivery stopped after ${attempts} attempts: ${deliveryError}`
+        : deliveryError;
+      if (attempts >= 10) {
+        console.error("BD chat read-receipt delivery stopped", {
+          outbox_id: row.id,
+          thread_token: row.thread_token,
+          attempts,
+          error: deliveryError,
+        });
+      }
+    }
+    await admin.from("bd_chat_outbox").update(update).eq("id", row.id);
   } else {
     await markOutboxSent(row.id);
   }
@@ -1168,6 +1463,12 @@ async function flushReadRow(row: OutboxRow, room: number): Promise<number> {
 async function flushCloseRow(row: OutboxRow): Promise<number> {
   const token = String(row.thread_token || "").trim();
   if (!token) {
+    await markOutboxSent(row.id);
+    return 0;
+  }
+  // Moderation can revoke a block before this queued operation runs. Never
+  // close a thread unless its report is still active at delivery time.
+  if (!await activeThreadTokenReport(token)) {
     await markOutboxSent(row.id);
     return 0;
   }
@@ -1194,8 +1495,21 @@ async function flushMirrorAppThreadRow(row: OutboxRow): Promise<number> {
     const identity = await canonicalIdentityForUser(senderId);
     calls += identity.calls;
     const owner = identity.token || senderId;
+    const content = String(message.message_content || "");
     const imageUrls = Array.isArray(message.image_urls) ? message.image_urls.map((url) => String(url || "")) : [];
-    const sent = await bdSendMessage(resolved.token, String(message.message_content || ""), owner, imageUrls[0] || "");
+    if (!CHAT_IMAGES_ENABLED && imageUrls.length && !content.trim()) {
+      const lastError = `Delivery stopped: ${CHAT_IMAGES_DISABLED_NOTICE}`;
+      if (String(message.bd_sync_error || "") !== lastError) {
+        await admin.from("app_native_chat_messages").update({ bd_sync_error: lastError }).eq("id", String(message.id));
+      }
+      continue;
+    }
+    const sent = await bdSendMessage(
+      resolved.token,
+      content,
+      owner,
+      CHAT_IMAGES_ENABLED ? imageUrls[0] || "" : "",
+    );
     calls += 1;
     await admin.from("app_native_chat_messages").update({
       bd_message_id: String(sent?.message_id || sent?.message_token || "").trim() || null,
@@ -1215,7 +1529,11 @@ export async function flushOutbox(budget: number): Promise<number> {
     .lt("attempts", 10)
     .order("created_at", { ascending: true })
     .limit(25);
-  const pending = (data || []) as OutboxRow[];
+  const pending = ((data || []) as OutboxRow[]).sort((left, right) => {
+    const leftPriority = left.kind === "read" ? 0 : 1;
+    const rightPriority = right.kind === "read" ? 0 : 1;
+    return leftPriority - rightPriority || timeValue(left.created_at) - timeValue(right.created_at);
+  });
   let calls = 0;
   for (const row of pending) {
     if (calls >= budget || rateLimitedNow()) break;
@@ -1229,6 +1547,14 @@ export async function flushOutbox(budget: number): Promise<number> {
       if (error instanceof BdRateLimitError) {
         await markOutboxError(row, error);
         break;
+      }
+      if (error instanceof ChatMemberBlockedError) {
+        await markOutboxBlocked(row, error);
+        continue;
+      }
+      if (error instanceof ChatImageSharingDisabledError) {
+        await markOutboxBlocked(row, error);
+        continue;
       }
       await markOutboxError(row, error);
     }
@@ -1546,25 +1872,38 @@ export async function markMirrorThreadRead(threadToken: string, userTokens: stri
       String(message.message_status || "0") === "0"
     )
     .map((message) => message.message_id);
-  if (!unreadIds.length) return;
-  await admin.from("bd_chat_messages").update({ message_status: "1" }).in("message_id", unreadIds);
+  if (!unreadIds.length) return false;
 
-  // Merge into an existing pending read receipt for this thread if there is one.
-  const { data } = await admin
+  // Persist/merge the durable website receipt before changing the local mirror.
+  // Otherwise an outbox failure leaves the mirror marked read and future calls
+  // can no longer discover the receipt that still needs to be sent.
+  const { data, error: lookupError } = await admin
     .from("bd_chat_outbox")
     .select("*")
     .eq("kind", "read")
     .eq("thread_token", threadToken)
     .is("sent_at", null)
     .limit(1);
+  if (lookupError) throw new Error(lookupError.message);
   const existing = (data || [])[0] as OutboxRow | undefined;
   if (existing) {
     const merged = [...new Set([
       ...(Array.isArray(existing.payload?.message_ids) ? (existing.payload!.message_ids as unknown[]).map(String) : []),
       ...unreadIds,
     ])];
-    await admin.from("bd_chat_outbox").update({ payload: { message_ids: merged } }).eq("id", existing.id);
+    const { error } = await admin
+      .from("bd_chat_outbox")
+      .update({ payload: { message_ids: merged } })
+      .eq("id", existing.id);
+    if (error) throw new Error(error.message);
   } else {
     await enqueueOutbox({ kind: "read", thread_token: threadToken, payload: { message_ids: unreadIds } });
   }
+
+  const { error: mirrorError } = await admin
+    .from("bd_chat_messages")
+    .update({ message_status: "1" })
+    .in("message_id", unreadIds);
+  if (mirrorError) throw new Error(mirrorError.message);
+  return true;
 }

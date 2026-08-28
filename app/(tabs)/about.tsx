@@ -1,13 +1,20 @@
+import { useCallback, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Linking,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as SecureStore from 'expo-secure-store';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   ChevronRight,
@@ -23,6 +30,29 @@ const LOGO_IMAGE = {
   uri: `${SITE_URL}/images/CoralLogoTransB.png`,
 } as const;
 const DELETE_ACCOUNT_URL = `${SITE_URL}/account/deleteaccount`;
+const APP_BACKEND_URL = 'https://pszcjoyabwvzsxxjtkhs.supabase.co';
+const APP_BACKEND_PUBLISHABLE_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzemNqb3lhYnd2enN4eGp0a2hzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2OTMxMTYsImV4cCI6MjA5NDI2OTExNn0.QLCEmNcn1WAks0IHkCLmI3iY5K4GnRxZ9Sfy89GYrLo';
+const NATIVE_MEMBER_SESSION_KEY = 'weddingwin.nativeMember.v1';
+const NATIVE_BRIDGE_SESSION_KEY = 'weddingwin.nativeBridgeSession.v1';
+const CHAT_UNREAD_SESSION_KEY = 'weddingwin.chatUnread.v1';
+const PUSH_TOKEN_SESSION_KEY = 'weddingwin.expoPushToken.v1';
+const ACCOUNT_DELETED_EVENT_KEY = 'weddingwin.accountDeleted.v1';
+
+type NativeBridgeSession = {
+  email?: string;
+  user_id?: string | number;
+  token?: string;
+  cookie?: string;
+};
+
+type DeleteAccountResponse = {
+  ok?: boolean;
+  deleted?: boolean;
+  error?: string;
+  diagnostic_id?: string;
+  requires_apple_reauthentication?: boolean;
+};
 
 async function openExternal(url: string) {
   try {
@@ -32,22 +62,54 @@ async function openExternal(url: string) {
   }
 }
 
-function confirmDeleteAccount() {
-  Alert.alert(
-    'Delete account?',
-    'WeddingWin will open the secure account deletion page. You can review the details before confirming deletion.',
-    [
-      {
-        text: 'Cancel',
-        style: 'cancel',
-      },
-      {
-        text: 'Open Delete Account',
-        style: 'destructive',
-        onPress: () => openExternal(DELETE_ACCOUNT_URL),
-      },
-    ]
-  );
+function validNativeSession(value: unknown): value is NativeBridgeSession {
+  if (!value || typeof value !== 'object') return false;
+  const session = value as NativeBridgeSession;
+  return !!session.user_id && !!session.token;
+}
+
+async function loadNativeSession() {
+  const raw = await SecureStore.getItemAsync(NATIVE_BRIDGE_SESSION_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return validNativeSession(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function requestAccountDeletion(
+  nativeSession: NativeBridgeSession,
+  appleAuthorizationCode = ''
+) {
+  const response = await fetch(`${APP_BACKEND_URL}/functions/v1/bd-delete-account`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+      apikey: APP_BACKEND_PUBLISHABLE_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      confirmation: 'DELETE',
+      native_session: nativeSession,
+      apple_authorization_code: appleAuthorizationCode,
+    }),
+  });
+  const result = (await response.json().catch(() => ({}))) as DeleteAccountResponse;
+  return { response, result };
+}
+
+async function clearDeletedAccountSession() {
+  // Home is already mounted behind this tab. Leave a one-shot event so it can
+  // clear in-memory account/chat/WebView state when it regains focus.
+  await SecureStore.setItemAsync(ACCOUNT_DELETED_EVENT_KEY, new Date().toISOString());
+  await Promise.allSettled([
+    SecureStore.deleteItemAsync(NATIVE_MEMBER_SESSION_KEY),
+    SecureStore.deleteItemAsync(NATIVE_BRIDGE_SESSION_KEY),
+    SecureStore.deleteItemAsync(CHAT_UNREAD_SESSION_KEY),
+    SecureStore.deleteItemAsync(PUSH_TOKEN_SESSION_KEY),
+  ]);
 }
 
 function LinkRow({
@@ -65,7 +127,9 @@ function LinkRow({
     <TouchableOpacity
       style={styles.row}
       activeOpacity={0.82}
-      onPress={() => openExternal(url)}>
+      onPress={() => openExternal(url)}
+      accessibilityRole="link"
+      accessibilityLabel={`${title}. ${subtitle}`}>
       <View style={styles.iconWrap}>{icon}</View>
       <View style={styles.rowText}>
         <Text style={styles.rowTitle}>{title}</Text>
@@ -77,6 +141,103 @@ function LinkRow({
 }
 
 export default function AboutScreen() {
+  const router = useRouter();
+  const [hasNativeSession, setHasNativeSession] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      loadNativeSession()
+        .then((session) => {
+          if (active) setHasNativeSession(!!session);
+        })
+        .catch(() => {
+          if (active) setHasNativeSession(false);
+        });
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
+  const deleteNativeAccount = useCallback(async () => {
+    setDeleting(true);
+    try {
+      const session = await loadNativeSession();
+      if (!session) {
+        setHasNativeSession(false);
+        await openExternal(DELETE_ACCOUNT_URL);
+        return;
+      }
+
+      let deletion = await requestAccountDeletion(session);
+      if (deletion.result.requires_apple_reauthentication) {
+        if (Platform.OS !== 'ios' || !(await AppleAuthentication.isAvailableAsync())) {
+          throw new Error('Sign in with Apple confirmation is unavailable on this device.');
+        }
+        const credential = await AppleAuthentication.signInAsync({ requestedScopes: [] });
+        if (!credential.authorizationCode) {
+          throw new Error('Apple did not return the confirmation needed to revoke access.');
+        }
+        deletion = await requestAccountDeletion(session, credential.authorizationCode);
+      }
+
+      if (!deletion.response.ok || !deletion.result.ok || !deletion.result.deleted) {
+        const diagnostic = deletion.result.diagnostic_id
+          ? `\n\nDiagnostic: ${deletion.result.diagnostic_id}`
+          : '';
+        throw new Error(`${deletion.result.error || 'Account deletion failed.'}${diagnostic}`);
+      }
+
+      await clearDeletedAccountSession();
+      setHasNativeSession(false);
+      Alert.alert(
+        'Account deleted',
+        'Your WeddingWin account and associated app data were permanently deleted.',
+        [{ text: 'OK', onPress: () => router.replace('/') }]
+      );
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+      if (code === 'ERR_REQUEST_CANCELED') return;
+      const message = error instanceof Error ? error.message : 'Account deletion failed.';
+      Alert.alert('Could not delete account', message);
+    } finally {
+      setDeleting(false);
+    }
+  }, [router]);
+
+  const confirmDeleteAccount = useCallback(() => {
+    if (!hasNativeSession) {
+      Alert.alert(
+        'Delete account?',
+        'WeddingWin will open the secure account deletion page. You can review the details before confirming deletion.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Open Delete Account',
+            style: 'destructive',
+            onPress: () => openExternal(DELETE_ACCOUNT_URL),
+          },
+        ]
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Permanently delete account?',
+      'This deletes your WeddingWin login, profile or vendor listing, push token, raffle data, and entire conversations you participated in—including the other participant’s messages and images. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete Account',
+          style: 'destructive',
+          onPress: deleteNativeAccount,
+        },
+      ]
+    );
+  }, [deleteNativeAccount, hasNativeSession]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -124,16 +285,26 @@ export default function AboutScreen() {
             style={styles.row}
             activeOpacity={0.82}
             onPress={confirmDeleteAccount}
+            disabled={deleting}
             accessibilityRole="button"
-            accessibilityLabel="Delete account">
+            accessibilityLabel="Delete account"
+            accessibilityState={{ disabled: deleting }}>
             <View style={[styles.iconWrap, styles.deleteIconWrap]}>
               <Trash2 size={20} color="#9B3E36" strokeWidth={2} />
             </View>
             <View style={styles.rowText}>
               <Text style={[styles.rowTitle, styles.deleteTitle]}>Delete Account</Text>
-              <Text style={styles.rowSub}>Open the secure account deletion page</Text>
+              <Text style={styles.rowSub}>
+                {hasNativeSession
+                  ? 'Permanently delete your account and associated app data'
+                  : 'Open the secure account deletion page'}
+              </Text>
             </View>
-            <ChevronRight size={20} color="#D1AAA5" strokeWidth={2} />
+            {deleting ? (
+              <ActivityIndicator color="#9B3E36" />
+            ) : (
+              <ChevronRight size={20} color="#D1AAA5" strokeWidth={2} />
+            )}
           </TouchableOpacity>
         </View>
 

@@ -37,6 +37,9 @@ weddingwin-expo-*.svg
 .env*.local
 .env
 
+# App Review test credentials are local-only and must not be committed
+docs/app-store/private-reviewer-credentials.md
+
 # typescript
 *.tsbuildinfo
 

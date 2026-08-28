@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
+import { createRemoteJWKSet, jwtVerify } from "npm:jose@5.9.6";
 import { ensureStableBdIdentity } from "../_shared/bd_identity.ts";
 
 const corsHeaders = {
@@ -18,6 +19,7 @@ const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
 const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
 const BD_DEFAULT_SUBSCRIPTION_ID = Deno.env.get("BD_DEFAULT_SUBSCRIPTION_ID") || "18";
 const BD_VENDOR_SUBSCRIPTION_ID = "17";
+const GOOGLE_JWKS = createRemoteJWKSet(new URL("https://www.googleapis.com/oauth2/v3/certs"));
 
 type BdEnvelope = {
   status?: string;
@@ -79,7 +81,8 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 
 function b64urlDecode(s: string): string {
   const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-  return atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
+  const binary = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
+  return new TextDecoder().decode(Uint8Array.from(binary, (value) => value.charCodeAt(0)));
 }
 
 function b64urlEncode(s: string): string {
@@ -97,6 +100,81 @@ function base64UrlFromBytes(bytes: Uint8Array): string {
 
 function base64UrlFromString(value: string): string {
   return base64UrlFromBytes(new TextEncoder().encode(value));
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const pad = value.length % 4 === 0 ? "" : "=".repeat(4 - (value.length % 4));
+  const binary = atob(value.replace(/-/g, "+").replace(/_/g, "/") + pad);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function allowedFinalRedirect(value: unknown): string | null {
+  try {
+    const url = new URL(String(value || ""));
+    const host = url.hostname.replace(/^www\./i, "").toLowerCase();
+    if (url.protocol === "https:" && host === "weddingwin.ca") return url.toString();
+    if (
+      url.protocol === "weddingwin:" &&
+      (url.hostname.toLowerCase() === "bd-login" || url.pathname.replace(/\/+$/, "").endsWith("/bd-login"))
+    ) {
+      return url.toString();
+    }
+  } catch {
+    // Invalid or untrusted redirect.
+  }
+  return null;
+}
+
+type VerifiedGoogleState = {
+  r: string;
+  n: string;
+  s: string;
+  c: SignupConsent;
+  exp: number;
+};
+
+async function verifyGoogleState(encoded: string): Promise<VerifiedGoogleState> {
+  if (!APP_LOGIN_SECRET) throw new Error("APP_LOGIN_SECRET is not configured");
+  const parsed = JSON.parse(b64urlDecode(encoded)) as Record<string, unknown>;
+  const redirect = allowedFinalRedirect(parsed.r);
+  const nonce = String(parsed.n || "").trim();
+  const expires = Number(parsed.exp || 0);
+  const signature = String(parsed.h || "").trim();
+  if (!redirect || !nonce || !signature || !Number.isFinite(expires)) {
+    throw new Error("Invalid Google sign-in state.");
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (expires < now || expires > now + 600) throw new Error("Google sign-in state expired.");
+
+  const consent = parsed.c && typeof parsed.c === "object" && (parsed.c as Record<string, unknown>).acceptedAt
+    ? {
+        acceptedAt: String((parsed.c as Record<string, unknown>).acceptedAt),
+        termsVersion: String((parsed.c as Record<string, unknown>).termsVersion || ""),
+        privacyVersion: String((parsed.c as Record<string, unknown>).privacyVersion || ""),
+      }
+    : null;
+  const signedPayload = {
+    r: redirect,
+    n: nonce,
+    s: requestedSubscriptionId(parsed.s),
+    c: consent,
+    exp: expires,
+  };
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(APP_LOGIN_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  const valid = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    base64UrlToBytes(signature) as BufferSource,
+    new TextEncoder().encode(JSON.stringify(signedPayload)) as BufferSource,
+  );
+  if (!valid) throw new Error("Invalid Google sign-in state signature.");
+  return signedPayload;
 }
 
 function splitName(fullName?: string | null): { firstName: string; lastName: string } {
@@ -326,12 +404,6 @@ async function makeDirectBdGoogleLoginResult(args: {
   };
 }
 
-function decodeJwtPayload(jwt: string): Record<string, unknown> {
-  const part = jwt.split(".")[1];
-  if (!part) throw new Error("invalid id_token");
-  return JSON.parse(b64urlDecode(part));
-}
-
 function isNativeAppRedirect(url: URL): boolean {
   const path = url.pathname.replace(/\/+$/, "");
   return (
@@ -360,8 +432,17 @@ function htmlPage(title: string, body: string): string {
 </head><body><div class="card">${body}</div></body></html>`;
 }
 
+function escapeHtml(value: unknown) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function errorPage(message: string): Response {
-  const body = `<div style="color:#ff6b6b;font-weight:600;margin-bottom:12px">Sign-in failed</div><div>${message}</div><div style="margin-top:24px"><a href="${DEFAULT_FINAL}" style="color:#d4af37">Go back</a></div>`;
+  const body = `<div style="color:#ff6b6b;font-weight:600;margin-bottom:12px">Sign-in failed</div><div>${escapeHtml(message)}</div><div style="margin-top:24px"><a href="${DEFAULT_FINAL}" style="color:#d4af37">Go back</a></div>`;
   return new Response(htmlPage("Sign-in failed", body), {
     status: 400,
     headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
@@ -394,26 +475,17 @@ Deno.serve(async (req: Request) => {
 
     if (oauthError) return errorPage(`Google returned: ${oauthError}`);
     if (!code) return errorPage("Missing authorization code.");
+    if (!stateRaw) return errorPage("Missing Google sign-in state.");
 
-    let finalRedirect = DEFAULT_FINAL;
-    let subscriptionId = BD_DEFAULT_SUBSCRIPTION_ID;
-    let consent: SignupConsent = null;
-    if (stateRaw) {
-      try {
-        const parsed = JSON.parse(b64urlDecode(stateRaw));
-        if (parsed && typeof parsed.r === "string") finalRedirect = parsed.r;
-        subscriptionId = requestedSubscriptionId(parsed?.s);
-        if (parsed?.c?.acceptedAt) {
-          consent = {
-            acceptedAt: String(parsed.c.acceptedAt),
-            termsVersion: String(parsed.c.termsVersion || ""),
-            privacyVersion: String(parsed.c.privacyVersion || ""),
-          };
-        }
-      } catch {
-        // ignore malformed state, fall back to default
-      }
+    let state: VerifiedGoogleState;
+    try {
+      state = await verifyGoogleState(stateRaw);
+    } catch (error) {
+      return errorPage(error instanceof Error ? error.message : "Invalid Google sign-in state.");
     }
+    const finalRedirect = state.r;
+    const subscriptionId = state.s;
+    const consent = state.c;
 
     const { id: clientId, secret: clientSecret } = await getConfig();
 
@@ -437,7 +509,7 @@ Deno.serve(async (req: Request) => {
     const tokenJson = (await tokenRes.json()) as { id_token?: string };
     if (!tokenJson.id_token) return errorPage("Google did not return an ID token.");
 
-    const claims = decodeJwtPayload(tokenJson.id_token) as {
+    let claims: {
       email?: string;
       email_verified?: boolean;
       name?: string;
@@ -445,16 +517,21 @@ Deno.serve(async (req: Request) => {
       sub?: string;
       aud?: string;
       iss?: string;
+      nonce?: string;
     };
-
-    if (claims.iss !== "https://accounts.google.com" && claims.iss !== "accounts.google.com") {
-      return errorPage("Invalid token issuer.");
+    try {
+      const verified = await jwtVerify(tokenJson.id_token, GOOGLE_JWKS, {
+        audience: clientId,
+        issuer: ["https://accounts.google.com", "accounts.google.com"],
+        algorithms: ["RS256"],
+      });
+      claims = verified.payload as typeof claims;
+    } catch {
+      return errorPage("Google ID token signature verification failed.");
     }
-    if (claims.aud !== clientId) {
-      return errorPage("Token audience mismatch.");
-    }
+    if (claims.nonce !== state.n) return errorPage("Google sign-in nonce mismatch.");
     if (!claims.email) return errorPage("Google account has no email.");
-    if (claims.email_verified === false) return errorPage("Google email is not verified.");
+    if (claims.email_verified !== true) return errorPage("Google email is not verified.");
 
     const email = claims.email;
 

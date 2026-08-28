@@ -1,7 +1,6 @@
 import {
   admin,
   corsHeaders,
-  DEFAULT_FINAL,
   errorPage,
   getAppleConfig,
   makeBdAppleLoginRedirect,
@@ -9,14 +8,14 @@ import {
   upsertAppleUser,
   verifyAppleIdentityToken,
 } from "../_shared/apple_auth.ts";
+import {
+  assertAppleOAuthNonce,
+  verifySignedAppleOAuthState,
+} from "../_shared/oauth_state.ts";
 
 const APPLE_RETURN_URL =
   Deno.env.get("APPLE_RETURN_URL") || "https://www.weddingwin.ca/auth/apple-callback";
-
-function b64urlDecode(s: string): string {
-  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-  return atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
-}
+const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -30,18 +29,12 @@ Deno.serve(async (req: Request) => {
     const stateRaw = String(form.get("state") || "");
     const appleError = String(form.get("error") || "");
 
+    if (!stateRaw) return errorPage("Missing Apple sign-in state.");
+
+    const state = await verifySignedAppleOAuthState(stateRaw, APP_LOGIN_SECRET);
+    const finalRedirect = state.r;
     if (appleError) return errorPage(`Apple returned: ${appleError}`);
     if (!code && !idTokenFromForm) return errorPage("Missing Apple authorization response.");
-
-    let finalRedirect = DEFAULT_FINAL;
-    if (stateRaw) {
-      try {
-        const parsed = JSON.parse(b64urlDecode(stateRaw));
-        if (parsed && typeof parsed.r === "string") finalRedirect = parsed.r;
-      } catch {
-        // ignore malformed state
-      }
-    }
 
     const cfg = await getAppleConfig(admin);
     const clientSecret = await makeAppleClientSecret(cfg, cfg.serviceId);
@@ -68,6 +61,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const claims = await verifyAppleIdentityToken(idToken, [cfg.serviceId]);
+    assertAppleOAuthNonce(state.n, claims.nonce);
     const userJson = String(form.get("user") || "");
     let providedName = "";
     let providedEmail = claims.email || "";

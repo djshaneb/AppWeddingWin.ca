@@ -1,11 +1,23 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  bdFindUserByParticipant,
+  CHAT_MEMBER_BLOCKED_NOTICE,
+  enqueueCloseOutbox,
+  markOutboxSent,
+  mirrorThreadByToken,
+  otherParticipantValue,
+  participantTokens,
+  threadHasParticipant,
+  upsertChatMemberBlock,
+} from "../_shared/bd_chat.ts";
+import { runDurableClose } from "../_shared/chat_moderation.ts";
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const BD_SITE_TIME_ZONE = Deno.env.get("BD_SITE_TIME_ZONE") || "America/Toronto";
-const CHAT_REPORTED_NOTICE = "Chat Reported: This conversation will remain closed while it's being reviewed.";
+const CHAT_REPORTED_NOTICE = CHAT_MEMBER_BLOCKED_NOTICE;
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -103,6 +115,7 @@ function sessionMatchesUser(session: NativeSession, user: BdRow | undefined) {
 
 async function fetchUserBySession(session: NativeSession) {
   const userId = String(session.user_id || "").trim();
+  if (!userId) return undefined;
   const sessionLookups = [
     ["token", String(session.token || "").trim()],
     ["cookie", String(session.cookie || "").trim()],
@@ -120,23 +133,8 @@ async function fetchUserBySession(session: NativeSession) {
     if (user?.user_id && String(user.user_id) === userId) return user;
   }
 
-  const user = await fetchUserById(session.user_id);
+  const user = await fetchUserById(userId);
   return sessionMatchesUser(session, user) ? user : undefined;
-}
-
-function participantTokens(user: BdRow, session: NativeSession) {
-  return [...new Set([user.token, session.token, user.cookie, session.cookie, user.user_id, session.user_id, user.email, session.email]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean))];
-}
-
-function rowHasToken(value: unknown, tokens: string[]) {
-  const raw = String(value || "");
-  return tokens.some((token) => token && raw.includes(token));
-}
-
-function threadHasParticipant(thread: BdRow, tokens: string[]) {
-  return rowHasToken(thread.thread_owner, tokens) || rowHasToken(thread.thread_responders, tokens);
 }
 
 function threadToken(thread: BdRow | undefined) {
@@ -158,6 +156,17 @@ async function getAppThread(token: string, userId: unknown) {
   const thread = (Array.isArray(data) ? data[0] : undefined) as AppNativeThread | undefined;
   if (!thread || !appThreadIncludesUser(thread, userId)) throw new Error("Conversation was not found for this account.");
   return thread;
+}
+
+async function getAppThreadByBdToken(token: string, userId: unknown) {
+  const { data, error } = await admin
+    .from("app_native_chat_threads")
+    .select("*")
+    .eq("bd_thread_token", token)
+    .limit(1);
+  if (error) throw new Error(error.message);
+  const thread = (Array.isArray(data) ? data[0] : undefined) as AppNativeThread | undefined;
+  return thread && appThreadIncludesUser(thread, userId) ? thread : undefined;
 }
 
 function formatNow() {
@@ -205,12 +214,19 @@ function reportAliases(token: string, appThread?: AppNativeThread, bdThread?: Bd
   ].map((value) => String(value || "").trim()).filter(Boolean))];
 }
 
-async function recordReport(token: string, reporterId: unknown, appThread?: AppNativeThread, bdThread?: BdRow) {
+async function recordReport(
+  token: string,
+  reporterId: unknown,
+  memberA: string,
+  memberB: string,
+  appThread?: AppNativeThread,
+  bdThread?: BdRow,
+  reportedAt = new Date().toISOString(),
+) {
   const aliases = reportAliases(token, appThread, bdThread);
   if (!aliases.length) throw new Error("Conversation token required");
   const appThreadToken = String(appThread?.thread_token || "").trim() || null;
   const bdThreadToken = String(appThread?.bd_thread_token || threadToken(bdThread) || "").trim() || null;
-  const reportedAt = new Date().toISOString();
   const { error } = await admin
     .from("app_chat_thread_reports")
     .upsert(aliases.map((alias) => ({
@@ -218,13 +234,43 @@ async function recordReport(token: string, reporterId: unknown, appThread?: AppN
       app_thread_token: appThreadToken,
       bd_thread_token: bdThreadToken,
       reporter_bd_user_id: String(reporterId || ""),
-      member_a_bd_user_id: appThread?.member_a_bd_user_id || null,
-      member_b_bd_user_id: appThread?.member_b_bd_user_id || null,
+      member_a_bd_user_id: memberA,
+      member_b_bd_user_id: memberB,
       status: "reported",
       notice: CHAT_REPORTED_NOTICE,
       reported_at: reportedAt,
     })), { onConflict: "thread_token" });
   if (error) throw new Error(error.message);
+}
+
+async function resolveBlockedMemberId(
+  reporterId: unknown,
+  userTokens: string[],
+  token: string,
+  appThread?: AppNativeThread,
+  bdThread?: BdRow,
+) {
+  const reporter = String(reporterId || "").trim();
+  if (appThread) {
+    return appThread.member_a_bd_user_id === reporter
+      ? appThread.member_b_bd_user_id
+      : appThread.member_a_bd_user_id;
+  }
+
+  const mirror = await mirrorThreadByToken(token);
+  const knownIds = [mirror?.owner_user_id, mirror?.responder_user_id]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const knownOther = knownIds.find((value) => value !== reporter);
+  if (knownOther) return knownOther;
+
+  const participant = otherParticipantValue(mirror || bdThread || {}, userTokens);
+  const otherUser = participant ? await bdFindUserByParticipant(participant) : undefined;
+  const otherId = String(otherUser?.user_id || "").trim();
+  if (!otherId || otherId === reporter) {
+    throw new Error("The other member could not be identified, so a durable member block was not created.");
+  }
+  return otherId;
 }
 
 Deno.serve(async (request) => {
@@ -257,19 +303,68 @@ Deno.serve(async (request) => {
       if (!bdThread || !threadHasParticipant(bdThread, userTokens)) {
         return jsonResponse({ ok: false, error: "Conversation was not found for this account." }, 404);
       }
+      appThread = await getAppThreadByBdToken(token, user!.user_id);
     }
 
-    await recordReport(token, user!.user_id, appThread, bdThread);
-    if (bdThread) {
-      await closeBdThread(bdThread);
-      selectedThreadToken = threadToken(bdThread) || token;
+    const reporterId = String(user!.user_id);
+    const blockedMemberId = await resolveBlockedMemberId(
+      reporterId,
+      userTokens,
+      token,
+      appThread,
+      bdThread,
+    );
+    const memberIds = [reporterId, blockedMemberId].sort((left, right) => left < right ? -1 : 1);
+    const block = await upsertChatMemberBlock(reporterId, blockedMemberId, token);
+    await recordReport(
+      token,
+      reporterId,
+      memberIds[0],
+      memberIds[1],
+      appThread,
+      bdThread,
+      block.created_at,
+    );
+    let websiteCloseQueued = false;
+    let websiteCloseDelivered = false;
+    const knownBdThreadToken = String(
+      threadToken(bdThread || {}) || appThread?.bd_thread_token || "",
+    ).trim();
+    if (bdThread && knownBdThreadToken) {
+      const closeResult = await runDurableClose(
+        () => enqueueCloseOutbox(knownBdThreadToken, String(bdThread?.thread_id || "")),
+        () => closeBdThread(bdThread!),
+        (row) => markOutboxSent(row.id),
+      );
+      websiteCloseQueued = true;
+      websiteCloseDelivered = closeResult.delivered;
+      if (!closeResult.delivered) {
+        console.error("BD chat close queued for retry", {
+          thread_token: knownBdThreadToken,
+          error: closeResult.error instanceof Error
+            ? closeResult.error.message
+            : String(closeResult.error),
+        });
+      }
+      selectedThreadToken = knownBdThreadToken;
+    } else if (knownBdThreadToken) {
+      // The mirrored BD lookup can fail transiently. The token saved on the
+      // app-native thread is still authoritative enough to durably queue the
+      // close; the sync retry path will look the thread up again later.
+      await enqueueCloseOutbox(knownBdThreadToken, "");
+      websiteCloseQueued = true;
+      selectedThreadToken = knownBdThreadToken;
     }
 
     return jsonResponse({
       ok: true,
       selected_thread_token: selectedThreadToken,
       selected_thread_reported: true,
+      member_blocked: true,
+      blocked_member_bd_user_id: blockedMemberId,
       report_notice: CHAT_REPORTED_NOTICE,
+      website_close_queued: websiteCloseQueued,
+      website_close_delivered: websiteCloseDelivered,
     });
   } catch (error) {
     return jsonResponse({

@@ -3,17 +3,28 @@
 // the app responds instantly and never fails on BD's API rate limit.
 
 import {
+  activeChatBlocksForMember,
   admin,
+  assertChatMemberPairAllowed,
   avatarUrlFromBdUser,
   BD_API_BASE_URL,
   BdRateLimitError,
   type BdRow,
+  bdFetchUserById,
   bdFetchUserByProfilePath,
+  bdFindUserByParticipant,
   cachedUsersByIds,
   cachedUserTitle,
+  callBd,
+  CHAT_IMAGES_DISABLED_NOTICE,
+  CHAT_IMAGES_ENABLED,
+  ChatImageSharingDisabledError,
   displayNameFromParts,
   ensureThreadBackfilled,
+  enqueueCloseOutbox,
   enqueueOutbox,
+  filterChatTextForDisplay,
+  firstRow,
   flushOutbox,
   getSessionUser,
   imageUrlsFromHtml,
@@ -26,7 +37,13 @@ import {
   mirrorThreadByToken,
   mirrorThreadsForUser,
   type NativeSession,
+  ChatMemberBlockedError,
+  ObjectionableChatContentError,
+  CHAT_MEMBER_BLOCKED_NOTICE,
+  type ChatMemberBlock,
   type OutboxRow,
+  otherParticipantValue,
+  otherMemberIdFromBlock,
   participantTokens,
   pendingSendsForThreads,
   persistThreadIdentitiesFromSession,
@@ -35,17 +52,25 @@ import {
   refreshMirrorIfStale,
   resetRateLimitFlag,
   shortError,
+  sharedCacheGet,
+  sharedCacheSet,
   stripHtml,
   threadHasParticipant,
   threadIsClosed,
   threadMatchesUser,
   timeValue,
   userSideOfThread,
+  upsertChatMemberBlock,
   validateMessage,
   wasRateLimited,
 } from "../_shared/bd_chat.ts";
+import {
+  containsInlineImagePayload,
+  filterMessagesAtOrBeforeReport,
+  matchingParticipantIdentity,
+} from "../_shared/chat_moderation.ts";
 
-const CHAT_REPORTED_NOTICE = "Chat Reported: This conversation will remain closed while it's being reviewed.";
+const CHAT_REPORTED_NOTICE = CHAT_MEMBER_BLOCKED_NOTICE;
 const CHAT_PERMISSION_ENDPOINTS = [
   "/api/v2/chat_message_threads/get",
   "/api/v2/chat_message_threads/create",
@@ -53,7 +78,10 @@ const CHAT_PERMISSION_ENDPOINTS = [
   "/api/v2/chat_message_items/get",
   "/api/v2/chat_message_items/create",
   "/api/v2/chat_message_items/update",
+  "/api/v2/subscription_types/get",
 ];
+
+const CHAT_PLAN_CACHE_TTL_MS = 5 * 60_000;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -81,6 +109,7 @@ type AppNativeMessage = {
   image_urls?: unknown;
   read_at?: string | null;
   bd_synced_at?: string | null;
+  bd_sync_error?: string | null;
   created_at: string;
 };
 type AppChatThreadReport = {
@@ -126,6 +155,91 @@ function normalizeProfilePath(value: unknown) {
   } catch {
     return "";
   }
+}
+
+class ChatPolicyError extends Error {
+  constructor(message: string, readonly status = 403) {
+    super(message);
+    this.name = "ChatPolicyError";
+  }
+}
+
+function enabledPlanFlag(value: unknown) {
+  return String(value ?? "").trim() === "1";
+}
+
+async function chatPlanForUser(user: BdRow) {
+  const planId = String(user.subscription_id || "").trim();
+  if (!planId) throw new ChatPolicyError("This membership does not have private messaging access.");
+
+  const cacheKey = `bd:chat-plan:${planId}`;
+  const cached = await sharedCacheGet<BdRow>(cacheKey);
+  if (cached && String(cached.subscription_id || "").trim() === planId) return cached;
+
+  const path = `/api/v2/subscription_types/get/${encodeURIComponent(planId)}`;
+  const result = await callBd(path);
+  const plan = result.response.ok && result.body.status === "success"
+    ? firstRow(result.body.message)
+    : undefined;
+  if (!plan || String(plan.subscription_id || "").trim() !== planId) {
+    throw new ChatPolicyError("This membership's private messaging permissions could not be verified.");
+  }
+  await sharedCacheSet(cacheKey, plan, CHAT_PLAN_CACHE_TTL_MS);
+  return plan;
+}
+
+function assertActiveChatMember(user: BdRow | undefined, label: "account" | "recipient") {
+  if (!user?.user_id || String(user.active ?? "").trim() !== "2") {
+    throw new ChatPolicyError(
+      label === "account"
+        ? "This account is not active, so private messages are unavailable."
+        : "This member is not currently available for private messages.",
+    );
+  }
+}
+
+async function assertCurrentUserCanSend(user: BdRow) {
+  assertActiveChatMember(user, "account");
+  const plan = await chatPlanForUser(user);
+  if (!enabledPlanFlag(plan.enable_direct_messages)) {
+    throw new ChatPolicyError("Your membership plan does not allow private messages.");
+  }
+}
+
+async function assertTargetCanReceive(user: BdRow | undefined) {
+  assertActiveChatMember(user, "recipient");
+  const plan = await chatPlanForUser(user!);
+  if (!enabledPlanFlag(plan.receive_messages)) {
+    throw new ChatPolicyError("This member is not accepting private messages.");
+  }
+}
+
+async function verifiedChatTargetById(userId: unknown) {
+  const id = String(userId || "").trim();
+  if (!id) throw new ChatPolicyError("The message recipient could not be verified.");
+  const target = await bdFetchUserById(id);
+  if (!target?.user_id || String(target.user_id) !== id) {
+    throw new ChatPolicyError("The message recipient could not be verified.");
+  }
+  await assertTargetCanReceive(target);
+  return target;
+}
+
+async function verifiedChatTargetForThread(
+  thread: MirrorThread,
+  userTokens: string[],
+  userId: string,
+) {
+  const knownId = otherUserIdForThread(thread, userTokens, userId);
+  if (knownId) return await verifiedChatTargetById(knownId);
+
+  const participant = otherParticipantValue(thread, userTokens);
+  const target = participant ? await bdFindUserByParticipant(participant) : undefined;
+  if (!target?.user_id || String(target.user_id) === userId) {
+    throw new ChatPolicyError("The message recipient could not be verified.");
+  }
+  await assertTargetCanReceive(target);
+  return target;
 }
 
 function appImageUrls(value: unknown) {
@@ -186,6 +300,7 @@ async function findAppThread(memberA: string, memberB: string) {
 
 async function ensureAppThread(currentUser: BdRow, vendor: { user_id: unknown }, profilePath: string) {
   const [memberA, memberB] = sortedMemberIds(currentUser.user_id, vendor.user_id);
+  await assertChatMemberPairAllowed(memberA, memberB);
   const existing = await findAppThread(memberA, memberB);
   if (existing) return existing;
   const requestUri = `${BD_API_BASE_URL.replace(/\/+$/, "")}/${profilePath}`;
@@ -238,12 +353,19 @@ async function countUnreadAppMessages(threads: AppNativeThread[], userId: unknow
   if (!tokens.length) return 0;
   const { data, error } = await admin
     .from("app_native_chat_messages")
-    .select("id")
+    .select("id,message_content,image_urls")
     .in("thread_token", tokens)
     .neq("sender_bd_user_id", String(userId || ""))
     .is("read_at", null)
     .is("bd_synced_at", null);
-  return error || !Array.isArray(data) ? 0 : data.length;
+  if (error || !Array.isArray(data)) return 0;
+  return CHAT_IMAGES_ENABLED
+    ? data.length
+    : data.filter((message) => {
+      const rawText = String(message.message_content || "").trim();
+      const hasImage = appImageUrls(message.image_urls).length > 0 || containsInlineImagePayload(rawText);
+      return !!filterChatTextForDisplay(rawText) || !hasImage;
+    }).length;
 }
 
 async function sendAppMessage(token: string, userId: unknown, content: string, imageDataUri = "") {
@@ -260,15 +382,16 @@ async function sendAppMessage(token: string, userId: unknown, content: string, i
 }
 
 async function enqueueAppThreadMirror(appThread: AppNativeThread, senderId: unknown) {
-  const { data } = await admin
+  const { data, error } = await admin
     .from("bd_chat_outbox")
-    .select("id")
+    .select("*")
     .eq("kind", "mirror_app_thread")
     .eq("app_thread_token", appThread.thread_token)
     .is("sent_at", null)
     .limit(1);
-  if (Array.isArray(data) && data.length) return;
-  await enqueueOutbox({
+  if (error) throw new Error(error.message);
+  if (Array.isArray(data) && data.length) return data[0] as OutboxRow;
+  return await enqueueOutbox({
     kind: "mirror_app_thread",
     thread_token: appThread.thread_token,
     app_thread_token: appThread.thread_token,
@@ -305,9 +428,12 @@ async function listThreadReportsByTokens(tokens: string[]) {
 async function recordThreadReport(
   token: string,
   reporterId: unknown,
+  memberA: string,
+  memberB: string,
   appThread?: AppNativeThread,
   bdThreadToken = "",
   bdThreadId = "",
+  reportCutoff: unknown = new Date().toISOString(),
 ) {
   const aliases = [...new Set([
     token,
@@ -316,24 +442,27 @@ async function recordThreadReport(
     bdThreadToken,
   ].filter(Boolean))];
   if (!aliases.length) throw new Error("Conversation token required");
-  const now = new Date().toISOString();
+  const cutoffValue = String(reportCutoff || "").trim();
+  const cutoffTime = Date.parse(cutoffValue);
+  if (!Number.isFinite(cutoffTime)) throw new Error("A valid report cutoff is required");
+  const reportedAt = new Date(cutoffTime).toISOString();
   const rows = aliases.map((alias) => ({
     thread_token: alias,
     app_thread_token: String(appThread?.thread_token || "").trim() || null,
     bd_thread_token: String(appThread?.bd_thread_token || bdThreadToken || "").trim() || null,
     reporter_bd_user_id: String(reporterId || ""),
-    member_a_bd_user_id: appThread?.member_a_bd_user_id || null,
-    member_b_bd_user_id: appThread?.member_b_bd_user_id || null,
+    member_a_bd_user_id: memberA,
+    member_b_bd_user_id: memberB,
     status: "reported",
     notice: CHAT_REPORTED_NOTICE,
-    reported_at: now,
+    reported_at: reportedAt,
   }));
   const { error } = await admin
     .from("app_chat_thread_reports")
     .upsert(rows, { onConflict: "thread_token" });
   if (error) throw new Error(error.message);
   if (bdThreadToken) {
-    await enqueueOutbox({ kind: "close", thread_token: bdThreadToken, payload: { thread_id: bdThreadId } });
+    await enqueueCloseOutbox(bdThreadToken, bdThreadId);
   }
 }
 
@@ -366,40 +495,92 @@ function mirrorMessageDto(
     owner,
     is_mine: mine,
     status: Number(message.message_status || 0),
-    content: stripHtml(message.message_content),
-    image_urls: imageUrlsFromHtml(message.message_content),
+    content: filterChatTextForDisplay(stripHtml(message.message_content)),
+    image_urls: CHAT_IMAGES_ENABLED ? imageUrlsFromHtml(message.message_content) : [],
     avatar_url: mine ? ownAvatar : otherAvatar,
     created_at: String(message.bd_created_at || ""),
+    delivery_state: "delivered",
+    delivery_error: "",
   };
 }
 
 function pendingMessageDto(row: OutboxRow, userId: unknown, ownAvatar = "") {
+  const failed = Number(row.attempts || 0) >= 10;
   return {
     id: `pending:${row.id}`,
     thread_token: String(row.thread_token || ""),
     owner: String(row.owner_identity || row.sender_bd_user_id || ""),
     is_mine: String(row.sender_bd_user_id || "") === String(userId || ""),
     status: 0,
-    content: String(row.content || ""),
-    image_urls: row.image_data_uri ? [String(row.image_data_uri)] : [],
+    content: filterChatTextForDisplay(String(row.content || "")),
+    image_urls: CHAT_IMAGES_ENABLED && row.image_data_uri ? [String(row.image_data_uri)] : [],
     avatar_url: ownAvatar,
     created_at: String(row.created_at || ""),
+    delivery_state: failed ? "failed" : "queued",
+    delivery_error: String(row.last_error || ""),
   };
 }
 
 function appMessageDto(message: AppNativeMessage, userId: unknown, ownAvatar = "", otherAvatar = "") {
   const mine = String(message.sender_bd_user_id || "") === String(userId || "");
+  const deliveryError = String(message.bd_sync_error || "");
+  const failed = /^Delivery stopped after \d+ attempts:/i.test(deliveryError);
   return {
     id: String(message.id || ""),
     thread_token: String(message.thread_token || ""),
     owner: String(message.sender_bd_user_id || ""),
     is_mine: mine,
     status: message.read_at ? 1 : 0,
-    content: String(message.message_content || ""),
-    image_urls: appImageUrls(message.image_urls),
+    content: filterChatTextForDisplay(String(message.message_content || "")),
+    image_urls: CHAT_IMAGES_ENABLED ? appImageUrls(message.image_urls) : [],
     avatar_url: mine ? ownAvatar : otherAvatar,
     created_at: String(message.created_at || ""),
+    delivery_state: message.bd_synced_at ? "delivered" : failed ? "failed" : "stored",
+    delivery_error: deliveryError,
   };
+}
+
+function visibleMirrorMessages(messages: MirrorMessage[], report?: AppChatThreadReport) {
+  const beforeCutoff = filterMessagesAtOrBeforeReport(
+    messages,
+    (message) => message.bd_created_at,
+    report?.reported_at,
+  );
+  if (CHAT_IMAGES_ENABLED) return beforeCutoff;
+  return beforeCutoff.filter((message) => {
+    const rawContent = String(message.message_content || "");
+    const rawText = stripHtml(message.message_content);
+    const hasImage = /<img\b/i.test(rawContent) || containsInlineImagePayload(rawContent);
+    return !!filterChatTextForDisplay(rawText) || !hasImage;
+  });
+}
+
+function visiblePendingMessages(messages: OutboxRow[], report?: AppChatThreadReport) {
+  const beforeCutoff = filterMessagesAtOrBeforeReport(
+    messages,
+    (message) => message.created_at,
+    report?.reported_at,
+  );
+  if (CHAT_IMAGES_ENABLED) return beforeCutoff;
+  return beforeCutoff.filter((message) => {
+    const rawText = String(message.content || "").trim();
+    const hasImage = !!String(message.image_data_uri || "").trim() || containsInlineImagePayload(rawText);
+    return !!filterChatTextForDisplay(rawText) || !hasImage;
+  });
+}
+
+function visibleAppMessages(messages: AppNativeMessage[], report?: AppChatThreadReport) {
+  const beforeCutoff = filterMessagesAtOrBeforeReport(
+    messages,
+    (message) => message.created_at,
+    report?.reported_at,
+  );
+  if (CHAT_IMAGES_ENABLED) return beforeCutoff;
+  return beforeCutoff.filter((message) => {
+    const rawText = String(message.message_content || "").trim();
+    const hasImage = appImageUrls(message.image_urls).length > 0 || containsInlineImagePayload(rawText);
+    return !!filterChatTextForDisplay(rawText) || !hasImage;
+  });
 }
 
 function mirrorThreadTitleFallback(thread: MirrorThread) {
@@ -420,6 +601,19 @@ function otherUserIdForThread(thread: MirrorThread, userTokens: string[], userId
   return "";
 }
 
+async function resolveOtherUserIdForThread(
+  thread: MirrorThread,
+  userTokens: string[],
+  userId: string,
+) {
+  const known = otherUserIdForThread(thread, userTokens, userId);
+  if (known) return known;
+  const participant = otherParticipantValue(thread, userTokens);
+  const other = participant ? await bdFindUserByParticipant(participant) : undefined;
+  const otherId = String(other?.user_id || "").trim();
+  return otherId && otherId !== userId ? otherId : "";
+}
+
 // ---------------------------------------------------------------------------
 // Payload assembly (Supabase only; zero BD calls except optional backfill)
 // ---------------------------------------------------------------------------
@@ -437,10 +631,40 @@ async function buildChatPayload(
   await persistThreadIdentitiesFromSession(bdThreads, userTokens, userId);
   const appThreads = await listAppThreads(userId);
   const bdTokenSet = new Set(bdThreads.map((thread) => thread.thread_token));
+  const appLinkedBdTokenSet = new Set(
+    appThreads
+      .map((thread) => String(thread.bd_thread_token || "").trim())
+      .filter(Boolean),
+  );
   const visibleAppThreads = appThreads.filter((thread) => {
     const mirrored = String(thread.bd_thread_token || "").trim();
     return !mirrored || !bdTokenSet.has(mirrored);
   });
+
+  const activeBlocks = await activeChatBlocksForMember(userId);
+  const blockByOtherMemberId = new Map<string, ChatMemberBlock>();
+  for (const block of activeBlocks) {
+    const otherId = otherMemberIdFromBlock(block, userId);
+    if (otherId) blockByOtherMemberId.set(otherId, block);
+  }
+  const blockedUsersById = await cachedUsersByIds([...blockByOtherMemberId.keys()]);
+  const blockForBdThread = (thread: MirrorThread) => {
+    const knownOtherId = otherUserIdForThread(thread, userTokens, userId);
+    const knownBlock = blockByOtherMemberId.get(knownOtherId);
+    if (knownBlock) return knownBlock;
+
+    for (const [blockedId, block] of blockByOtherMemberId) {
+      const cached = blockedUsersById.get(blockedId);
+      if (!cached) continue;
+      const blockedTokens = [cached.user_id, cached.token, cached.cookie, cached.email]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+      if (threadHasParticipant(thread, blockedTokens)) return block;
+    }
+    return undefined;
+  };
+  const blockForAppThread = (thread: AppNativeThread) =>
+    blockByOtherMemberId.get(otherAppMemberId(thread, userId));
 
   // If the app asked for an app:* thread that has since been mirrored to a BD
   // thread we know about, follow it.
@@ -469,6 +693,73 @@ async function buildChatPayload(
     ...visibleAppThreads.flatMap((thread) => [thread.thread_token, String(thread.bd_thread_token || "").trim()]),
   ]);
 
+  // Repair the rare partial-write case where the report committed but the
+  // close-row insert failed. A later read recreates the durable close intent;
+  // enqueueCloseOutbox deduplicates any row that is already pending.
+  for (const thread of visibleBdThreads) {
+    if (reportMap.has(thread.thread_token) && !threadIsClosed(thread)) {
+      await enqueueCloseOutbox(thread.thread_token, String(thread.thread_id || ""));
+    }
+  }
+
+  // A website user can create a fresh BD token after an older token was
+  // reported. Convert every newly observed token for an active blocked pair
+  // into a closed report alias and queue a website close exactly once.
+  for (const thread of visibleBdThreads) {
+    const block = blockForBdThread(thread);
+    if (!block || reportMap.has(thread.thread_token)) continue;
+    const linkedApp = appThreads.find((row) => String(row.bd_thread_token || "").trim() === thread.thread_token);
+    await recordThreadReport(
+      thread.thread_token,
+      block.blocked_by_bd_user_id,
+      block.member_a_bd_user_id,
+      block.member_b_bd_user_id,
+      linkedApp,
+      thread.thread_token,
+      String(thread.thread_id || ""),
+      block.created_at,
+    );
+    const blockedReport: AppChatThreadReport = {
+      thread_token: thread.thread_token,
+      app_thread_token: linkedApp?.thread_token || null,
+      bd_thread_token: thread.thread_token,
+      status: "reported",
+      notice: block.notice || CHAT_REPORTED_NOTICE,
+      reported_at: block.created_at,
+    };
+    reportMap.set(thread.thread_token, blockedReport);
+    if (linkedApp?.thread_token) reportMap.set(linkedApp.thread_token, blockedReport);
+  }
+
+  for (const thread of visibleAppThreads) {
+    const block = blockForAppThread(thread);
+    if (!block || reportMap.has(thread.thread_token)) continue;
+    const bdToken = String(thread.bd_thread_token || "").trim();
+    const bdThread = bdToken
+      ? visibleBdThreads.find((row) => row.thread_token === bdToken)
+      : undefined;
+    await recordThreadReport(
+      thread.thread_token,
+      block.blocked_by_bd_user_id,
+      block.member_a_bd_user_id,
+      block.member_b_bd_user_id,
+      thread,
+      bdToken,
+      String(bdThread?.thread_id || thread.bd_thread_id || ""),
+      block.created_at,
+    );
+    const blockedReport: AppChatThreadReport = {
+      thread_token: thread.thread_token,
+      app_thread_token: thread.thread_token,
+      bd_thread_token: thread.bd_thread_token || null,
+      status: "reported",
+      notice: block.notice || CHAT_REPORTED_NOTICE,
+      reported_at: block.created_at,
+    };
+    reportMap.set(thread.thread_token, blockedReport);
+    if (bdToken) reportMap.set(bdToken, blockedReport);
+  }
+
   // Resolve display identities from the users cache (no BD calls).
   const idsToResolve = [
     ...visibleBdThreads.map((thread) => otherUserIdForThread(thread, userTokens, userId)),
@@ -479,18 +770,27 @@ async function buildChatPayload(
   const bdSummaries = visibleBdThreads
     .map((thread) => {
       const token = thread.thread_token;
-      const mirrorMessages = messagesByThread.get(token) || [];
-      const pending = pendingByThread.get(token) || [];
-      if (!mirrorMessages.length && !pending.length && token !== selectedToken) return undefined;
       const report = reportMap.get(token);
+      const mirrorMessages = visibleMirrorMessages(messagesByThread.get(token) || [], report);
+      const pending = visiblePendingMessages(pendingByThread.get(token) || [], report);
+      // App-created conversations are durable as soon as their BD link is
+      // persisted. Keep those linked threads visible before the first message;
+      // unrelated historical empty BD rows remain suppressed.
+      if (
+        !mirrorMessages.length &&
+        !pending.length &&
+        token !== selectedToken &&
+        !appLinkedBdTokenSet.has(token) &&
+        !report
+      ) return undefined;
       const closed = !!report || threadIsClosed({ thread_status: thread.thread_status });
       const otherId = otherUserIdForThread(thread, userTokens, userId);
       const otherUser = otherId ? usersById.get(otherId) : undefined;
       const last = mirrorMessages[mirrorMessages.length - 1];
       const lastPending = pending[pending.length - 1];
       const lastContent = lastPending
-        ? String(lastPending.content || "") || "[Image]"
-        : stripHtml(last?.message_content) || (imageUrlsFromHtml(last?.message_content).length ? "[Image]" : "Tap to start the conversation");
+        ? filterChatTextForDisplay(String(lastPending.content || "")) || (CHAT_IMAGES_ENABLED ? "[Image]" : "Tap to start the conversation")
+        : filterChatTextForDisplay(stripHtml(last?.message_content)) || (CHAT_IMAGES_ENABLED && imageUrlsFromHtml(last?.message_content).length ? "[Image]" : "Tap to start the conversation");
       const unread = closed ? 0 : mirrorMessages.filter((message) =>
         !messageIsMineInThread(message, thread, userTokens, userId) &&
         String(message.message_status || "0") === "0"
@@ -503,7 +803,7 @@ async function buildChatPayload(
         title: cachedUserTitle(otherUser) || mirrorThreadTitleFallback(thread),
         avatar_url: otherUser?.avatar_url || "",
         subtitle: closed ? (report?.notice || CHAT_REPORTED_NOTICE) : lastContent,
-        updated_at: String(lastPending?.created_at || last?.bd_created_at || thread.bd_updated_at || thread.bd_created_at || ""),
+        updated_at: String(lastPending?.created_at || last?.bd_created_at || report?.reported_at || thread.bd_updated_at || thread.bd_created_at || ""),
         unread_count: unread,
         reported: closed,
         closed,
@@ -516,9 +816,9 @@ async function buildChatPayload(
     const report = reportMap.get(thread.thread_token) || reportMap.get(String(thread.bd_thread_token || "").trim());
     const closed = !!report;
     const otherUser = usersById.get(otherAppMemberId(thread, userId));
-    const messages = await listAppMessages(thread.thread_token);
+    const messages = visibleAppMessages(await listAppMessages(thread.thread_token), report);
     const last = messages[messages.length - 1];
-    const images = appImageUrls(last?.image_urls);
+    const images = CHAT_IMAGES_ENABLED ? appImageUrls(last?.image_urls) : [];
     const unread = closed ? 0 : messages.filter((message) =>
       String(message.sender_bd_user_id) !== userId && !message.read_at
     ).length;
@@ -531,8 +831,8 @@ async function buildChatPayload(
       avatar_url: otherUser?.avatar_url || "",
       subtitle: closed
         ? report?.notice || CHAT_REPORTED_NOTICE
-        : String(last?.message_content || "").trim() || (images.length ? "[Image]" : "Tap to start the conversation"),
-      updated_at: String(last?.created_at || thread.updated_at || thread.created_at || ""),
+        : filterChatTextForDisplay(String(last?.message_content || "").trim()) || (images.length ? "[Image]" : "Tap to start the conversation"),
+      updated_at: String(last?.created_at || report?.reported_at || thread.updated_at || thread.created_at || ""),
       unread_count: unread,
       reported: closed,
       closed,
@@ -559,7 +859,10 @@ async function buildChatPayload(
       userId,
     ));
     const otherAvatar = otherUser?.avatar_url || "";
-    const messages = appSummary?._messages || await listAppMessages(selectedToken).catch(() => []);
+    const messages = appSummary?._messages || visibleAppMessages(
+      await listAppMessages(selectedToken).catch(() => []),
+      selectedReport,
+    );
     messageDtos = messages.map((message) => appMessageDto(message, userId, ownAvatar, otherAvatar));
   } else if (selectedToken) {
     const thread = bdThreads.find((row) => row.thread_token === selectedToken) || await mirrorThreadByToken(selectedToken);
@@ -567,14 +870,16 @@ async function buildChatPayload(
       // One-time history pull when a thread is opened the first time.
       await ensureThreadBackfilled(thread);
       const refreshed = thread.backfilled_at ? messagesByThread.get(selectedToken) : undefined;
-      const mirrorMessages = refreshed && refreshed.length
+      const allMirrorMessages = refreshed && refreshed.length
         ? refreshed
         : (await mirrorMessagesForThreads([selectedToken])).get(selectedToken) || [];
+      const mirrorMessages = visibleMirrorMessages(allMirrorMessages, selectedReport);
       const otherId = otherUserIdForThread(thread, userTokens, userId);
       const otherUser = otherId ? (usersById.get(otherId) || (await cachedUsersByIds([otherId])).get(otherId)) : undefined;
       const otherAvatar = otherUser?.avatar_url || "";
-      const pending = pendingByThread.get(selectedToken) ||
+      const allPending = pendingByThread.get(selectedToken) ||
         (await pendingSendsForThreads([selectedToken], mirrorMessageTokens)).get(selectedToken) || [];
+      const pending = visiblePendingMessages(allPending, selectedReport);
       messageDtos = [
         ...mirrorMessages.map((message) => mirrorMessageDto(message, thread, userTokens, userId, ownAvatar, otherAvatar)),
         ...pending.map((row) => pendingMessageDto(row, userId, ownAvatar)),
@@ -585,7 +890,10 @@ async function buildChatPayload(
       const linkedApp = appThreads.find((row) => String(row.bd_thread_token || "").trim() === selectedToken);
       if (linkedApp) {
         const appMessages = await listAppMessages(linkedApp.thread_token).catch(() => [] as AppNativeMessage[]);
-        const unsynced = appMessages.filter((message) => !message.bd_synced_at);
+        const unsynced = visibleAppMessages(
+          appMessages.filter((message) => !message.bd_synced_at),
+          selectedReport,
+        );
         messageDtos = [
           ...messageDtos,
           ...unsynced.map((message) => appMessageDto(message, userId, ownAvatar, otherAvatar)),
@@ -611,6 +919,8 @@ async function buildChatPayload(
     report_notice: selectedClosed ? selectedReport?.notice || CHAT_REPORTED_NOTICE : "",
     messages: messageDtos,
     unread_count: unreadTotal,
+    chat_images_enabled: CHAT_IMAGES_ENABLED,
+    chat_images_notice: CHAT_IMAGES_ENABLED ? "" : CHAT_IMAGES_DISABLED_NOTICE,
     sync_debug: {
       member_id: userId,
       bd_threads: bdThreads.length,
@@ -640,14 +950,25 @@ Deno.serve(async (request) => {
 
     await loadSharedRateLimit();
 
-    const user = await getSessionUser(session);
-    if (!user?.user_id) {
+    const authenticatedUser = await getSessionUser(session);
+    if (!authenticatedUser?.user_id) {
       if (wasRateLimited()) return busyResponse();
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
+    }
+    const authenticatedUserId = String(authenticatedUser.user_id || "").trim();
+    const user = await bdFetchUserById(authenticatedUserId);
+    if (!user?.user_id || String(user.user_id) !== String(authenticatedUser.user_id)) {
+      return jsonResponse({ ok: false, error: "Native session expired" }, 401);
+    }
+    assertActiveChatMember(user, "account");
+    if (action === "send" || action === "open_vendor_profile") {
+      await assertCurrentUserCanSend(user);
     }
     const userId = String(user.user_id || "");
     const userTokens = participantTokens(user, session);
     let selectedThread = String(body?.thread_token || "");
+    let sendDeliveryState: "stored" | "delivered" | "queued" | "failed" | undefined;
+    let sendDeliveryError = "";
 
     // Keep the mirror fresh (budgeted; max ~2-4 BD calls, shared across all
     // clients via a cross-isolate lock).
@@ -657,37 +978,25 @@ Deno.serve(async (request) => {
       const profilePath = normalizeProfilePath(body?.connect_url || body?.profile_url);
       if (!profilePath) return jsonResponse({ ok: false, error: "Vendor profile URL required" }, 400);
 
-      // Vendor from cache first, BD as fallback.
-      let vendorId = "";
-      let vendorTokens: string[] = [];
-      const { data: cachedVendor } = await admin
-        .from("bd_users_cache")
-        .select("*")
-        .or(`filename.eq.${profilePath},filename.eq./${profilePath}`)
-        .limit(1);
-      if (Array.isArray(cachedVendor) && cachedVendor[0]?.user_id) {
-        const vendor = cachedVendor[0];
-        vendorId = String(vendor.user_id);
-        vendorTokens = [vendor.user_id, vendor.token, vendor.cookie, vendor.email]
-          .map((value: unknown) => String(value || "").trim()).filter(Boolean);
-      } else {
-        const vendor = await bdFetchUserByProfilePath(profilePath).catch((error) => {
-          if (error instanceof BdRateLimitError) throw error;
-          return undefined;
-        });
-        if (!vendor?.user_id) return jsonResponse({ ok: false, error: "Vendor profile was not found" }, 404);
-        vendorId = String(vendor.user_id);
-        vendorTokens = participantTokens(vendor, {
-          user_id: vendor.user_id as string | number,
-          token: String(vendor.token || ""),
-          cookie: String(vendor.cookie || ""),
-          email: String(vendor.email || ""),
-        });
-      }
+      // Never authorize a cached profile snapshot: resolve the current BD
+      // member and current plan policy before opening a conversation.
+      const vendor = await bdFetchUserByProfilePath(profilePath).catch((error) => {
+        if (error instanceof BdRateLimitError) throw error;
+        return undefined;
+      });
+      if (!vendor?.user_id) return jsonResponse({ ok: false, error: "Vendor profile was not found" }, 404);
+      const vendorId = String(vendor.user_id);
       if (vendorId === userId) {
         return jsonResponse({ ok: false, error: "You cannot message your own listing from the app." }, 400);
       }
-
+      await assertTargetCanReceive(vendor);
+      await assertChatMemberPairAllowed(userId, vendorId);
+      const vendorTokens = participantTokens(vendor, {
+        user_id: vendor.user_id as string | number,
+        token: String(vendor.token || ""),
+        cookie: String(vendor.cookie || ""),
+        email: String(vendor.email || ""),
+      });
       const existingThreads = await mirrorThreadsForUser(userTokens, userId);
       const existing = existingThreads.find((thread) =>
         String(thread.owner_user_id || "") === vendorId ||
@@ -712,16 +1021,42 @@ Deno.serve(async (request) => {
 
       if (isAppThread(token)) {
         const appThread = await getAppThread(token, userId);
+        const blockedMemberId = otherAppMemberId(appThread, userId);
+        const block = await upsertChatMemberBlock(userId, blockedMemberId, token);
         const bdToken = String(appThread.bd_thread_token || "").trim();
         const bdThread = bdToken ? await mirrorThreadByToken(bdToken) : undefined;
-        await recordThreadReport(token, userId, appThread, bdToken, String(bdThread?.thread_id || ""));
+        await recordThreadReport(
+          token,
+          userId,
+          appThread.member_a_bd_user_id,
+          appThread.member_b_bd_user_id,
+          appThread,
+          bdToken,
+          String(bdThread?.thread_id || ""),
+          block.created_at,
+        );
         if (bdToken) selectedThread = bdToken;
       } else {
         const thread = await mirrorThreadByToken(token);
         if (!thread || !threadMatchesUser(thread, userTokens, userId)) {
           return jsonResponse({ ok: false, error: "Conversation was not found for this account." }, 404);
         }
-        await recordThreadReport(token, userId, undefined, thread.thread_token, String(thread.thread_id || ""));
+        const blockedMemberId = await resolveOtherUserIdForThread(thread, userTokens, userId);
+        if (!blockedMemberId) {
+          return jsonResponse({ ok: false, error: "The other member could not be identified for blocking." }, 409);
+        }
+        const [memberA, memberB] = sortedMemberIds(userId, blockedMemberId);
+        const block = await upsertChatMemberBlock(userId, blockedMemberId, token);
+        await recordThreadReport(
+          token,
+          userId,
+          memberA,
+          memberB,
+          undefined,
+          thread.thread_token,
+          String(thread.thread_id || ""),
+          block.created_at,
+        );
       }
       if (!rateLimitedNow()) await flushOutbox(4).catch(() => 0);
     }
@@ -735,12 +1070,23 @@ Deno.serve(async (request) => {
 
       if (isAppThread(token)) {
         const appThread = await getAppThread(token, userId);
+        const targetId = otherAppMemberId(appThread, userId);
+        await assertChatMemberPairAllowed(userId, targetId);
+        await verifiedChatTargetById(targetId);
         const reportMap = await listThreadReportsByTokens([token, String(appThread.bd_thread_token || "").trim()]);
         const report = reportMap.get(token) || reportMap.get(String(appThread.bd_thread_token || "").trim());
         if (report) return jsonResponse(chatReportedPayload(report), 423);
-        await sendAppMessage(token, userId, content, imageDataUri);
+        // Queue the website mirror before committing the app-native message.
+        // If queue persistence fails the request fails with the draft intact;
+        // it can never report a failure after already storing a duplicateable
+        // message. The mirror worker sends all unsynced app messages in order.
         await enqueueAppThreadMirror(appThread, userId);
+        await sendAppMessage(token, userId, content, imageDataUri);
         selectedThread = token;
+        // App-native messages are durable and visible to the recipient as soon
+        // as this insert commits, even if the website mirror is still queued.
+        sendDeliveryState = "stored";
+        if (!rateLimitedNow()) await flushOutbox(8).catch(() => 0);
       } else {
         const thread = await mirrorThreadByToken(token);
         const reportMap = await listThreadReportsByTokens([token]);
@@ -748,24 +1094,22 @@ Deno.serve(async (request) => {
         if (report || (thread && threadIsClosed({ thread_status: thread.thread_status }))) {
           return jsonResponse(chatReportedPayload(report), 423);
         }
-        if (thread && !threadMatchesUser(thread, userTokens, userId)) {
+        if (!thread || !threadMatchesUser(thread, userTokens, userId)) {
           return jsonResponse({ ok: false, error: "Conversation was not found for this account." }, 404);
         }
+        const target = await verifiedChatTargetForThread(thread, userTokens, userId);
+        await assertChatMemberPairAllowed(userId, target.user_id);
         // Send as the identity BD already has for the user's side of this
         // thread, so the website renders the message on the correct side even
         // after the user's login token has rotated.
-        const ownerIdentity = thread
-          ? (() => {
-            const side = userSideOfThread(thread, userTokens, userId);
-            const sideSource = side === "responder" ? thread.thread_responders : thread.thread_owner;
-            const parts = String(sideSource || "").split(",").map((part) => part.trim()).filter(Boolean);
-            const tokenMatch = parts.find((part) =>
-              userTokens.some((value) => value && (part === value || part.includes(value) || value.includes(part)))
-            );
-            return tokenMatch || parts[0] || String(session.token || session.cookie || userId);
-          })()
-          : String(user.token || session.token || user.cookie || session.cookie || userId || "");
-        await enqueueOutbox({
+        const ownerIdentity = (() => {
+          const side = userSideOfThread(thread, userTokens, userId);
+          const sideSource = side === "responder" ? thread.thread_responders : thread.thread_owner;
+          const tokenMatch = matchingParticipantIdentity(sideSource, userTokens);
+          const firstIdentity = String(sideSource || "").split(",").map((part) => part.trim()).find(Boolean);
+          return tokenMatch || firstIdentity || String(session.token || session.cookie || userId);
+        })();
+        const queuedSend = await enqueueOutbox({
           kind: "send",
           thread_token: token,
           sender_bd_user_id: userId,
@@ -775,28 +1119,51 @@ Deno.serve(async (request) => {
           image_data_uri: imageDataUri || null,
         });
         selectedThread = token;
-      }
 
-      // Try to push to BD right away; if BD is busy the message stays queued
-      // and the background refresh delivers it.
-      if (!rateLimitedNow()) await flushOutbox(8).catch(() => 0);
+        // Try to push to BD right away; if BD is busy the message stays queued
+        // and the background refresh delivers it.
+        if (!rateLimitedNow()) await flushOutbox(8).catch(() => 0);
+        const { data: deliveryRow } = await admin
+          .from("bd_chat_outbox")
+          .select("sent_at,attempts,last_error")
+          .eq("id", queuedSend.id)
+          .maybeSingle();
+        sendDeliveryState = deliveryRow?.sent_at
+          ? "delivered"
+          : Number(deliveryRow?.attempts || 0) >= 10
+            ? "failed"
+            : "queued";
+        sendDeliveryError = String(deliveryRow?.last_error || "");
+      }
     }
 
-    if (action === "read" || action === "send") {
-      const token = String(body?.thread_token || "").trim();
+    if (action === "read" || action === "send" || action === "open_vendor_profile") {
+      const token = action === "open_vendor_profile"
+        ? selectedThread.trim()
+        : String(body?.thread_token || "").trim();
+      let readReceiptQueued = false;
       if (token) {
         try {
           if (isAppThread(token)) {
             const appThread = await getAppThread(token, userId);
             const mirrored = String(appThread.bd_thread_token || "").trim();
-            if (mirrored) await markMirrorThreadRead(mirrored, userTokens, userId);
+            if (mirrored) readReceiptQueued = await markMirrorThreadRead(mirrored, userTokens, userId);
             await markAppRead(token, userId);
           } else {
-            await markMirrorThreadRead(token, userTokens, userId);
+            const thread = await mirrorThreadByToken(token);
+            if (!thread || !threadMatchesUser(thread, userTokens, userId)) {
+              return jsonResponse({ ok: false, error: "Conversation was not found for this account." }, 404);
+            }
+            readReceiptQueued = await markMirrorThreadRead(token, userTokens, userId);
           }
         } catch (error) {
           console.error("Chat mark-read failed", shortError(error));
         }
+      }
+      if (readReceiptQueued && !rateLimitedNow()) {
+        await flushOutbox(4).catch((error) =>
+          console.error("Chat read-receipt flush failed", shortError(error))
+        );
       }
     }
 
@@ -808,10 +1175,38 @@ Deno.serve(async (request) => {
       app_threads: payload.sync_debug.app_threads,
       selected_thread: payload.selected_thread_token ? "yes" : "no",
     });
-    return jsonResponse(payload);
+    return jsonResponse(sendDeliveryState
+      ? {
+          ...payload,
+          send_delivery_state: sendDeliveryState,
+          send_delivery_error: sendDeliveryError,
+        }
+      : payload);
   } catch (error) {
     if (error instanceof BdRateLimitError) {
       return busyResponse();
+    }
+    if (error instanceof ChatPolicyError) {
+      return jsonResponse({ ok: false, error: error.message }, error.status);
+    }
+    if (error instanceof ChatMemberBlockedError) {
+      return jsonResponse({
+        ok: false,
+        error: error.message,
+        report_notice: error.message,
+        selected_thread_reported: true,
+      }, error.status);
+    }
+    if (error instanceof ObjectionableChatContentError) {
+      return jsonResponse({ ok: false, error: error.message, content_filtered: true }, error.status);
+    }
+    if (error instanceof ChatImageSharingDisabledError) {
+      return jsonResponse({
+        ok: false,
+        error: error.message,
+        chat_images_enabled: false,
+        chat_images_notice: CHAT_IMAGES_DISABLED_NOTICE,
+      }, error.status);
     }
     return jsonResponse({
       ok: false,

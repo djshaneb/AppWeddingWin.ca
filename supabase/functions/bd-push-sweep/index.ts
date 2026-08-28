@@ -1,4 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  activeChatBlocksForMember,
+  cachedUsersByIds,
+  otherMemberIdFromBlock,
+  rowHasToken,
+  threadHasParticipant,
+} from "../_shared/bd_chat.ts";
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
@@ -12,7 +19,7 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey, X-WeddingWin-Cron-Secret",
 };
 
 type BdEnvelope = {
@@ -100,16 +107,8 @@ function participantTokens(user: BdRow, bdMemberId: string, bdMemberToken: strin
     .filter(Boolean))];
 }
 
-function rowIncludesToken(rowValue: unknown, tokens: string[]) {
-  const value = String(rowValue || "");
-  return tokens.some((token) => token && value.includes(token));
-}
-
 function threadBelongsToUser(thread: BdRow, tokens: string[]) {
-  return (
-    rowIncludesToken(thread.thread_owner, tokens) ||
-    rowIncludesToken(thread.thread_responders, tokens)
-  );
+  return threadHasParticipant(thread, tokens);
 }
 
 function threadToken(thread: BdRow) {
@@ -201,7 +200,7 @@ async function countUnreadMessages(threads: BdRow[], tokens: string[]) {
   return rowsFromMessage(result.body.message).filter((message) => {
     const threadToken = String(message.thread_token || "").trim();
     const owner = String(message.message_owner || "");
-    const mine = tokens.some((token) => token && owner.includes(token));
+    const mine = rowHasToken(owner, tokens);
     return threadTokens.has(threadToken) && !mine;
   }).length;
 }
@@ -218,6 +217,7 @@ async function sendExpoPushNotifications(rows: PushTokenRow[], unreadCount: numb
     body: JSON.stringify(rows.map((row) => ({
       to: row.expo_push_token,
       sound: "default",
+      badge: unreadCount,
       title: "New WeddingWin message",
       body: unreadCount === 1
         ? "You have a new message."
@@ -231,6 +231,25 @@ Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") {
     return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
+  }
+  const suppliedCronSecret = request.headers.get("X-WeddingWin-Cron-Secret") || "";
+  if (suppliedCronSecret.length < 32) {
+    return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+  }
+
+  // The random secret remains in Supabase Vault. This service-role-only RPC
+  // lets the function validate the cron header without duplicating the secret
+  // in Edge configuration or exposing a verification function to clients.
+  const { data: cronSecretIsValid, error: cronSecretError } = await admin.rpc(
+    "verify_weddingwin_push_sweep_secret",
+    { p_secret: suppliedCronSecret },
+  );
+  if (cronSecretError) {
+    console.error("Push sweep secret verification failed", cronSecretError.message);
+    return jsonResponse({ ok: false, error: "Push sweep authorization unavailable" }, 503);
+  }
+  if (cronSecretIsValid !== true) {
+    return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
   }
 
   try {
@@ -260,9 +279,31 @@ Deno.serve(async (request) => {
 
       const tokens = participantTokens(user, bdMemberId, rows[0]?.bd_member_token || "");
       const threads = await listChatThreads(tokens);
+      const blocks = await activeChatBlocksForMember(bdMemberId);
+      const blockedOtherIds = new Set(
+        blocks.map((block) => otherMemberIdFromBlock(block, bdMemberId)).filter(Boolean),
+      );
+      const blockedUsers = await cachedUsersByIds([...blockedOtherIds]);
+      const blockedThreads = new Set(
+        threads.filter((thread) => {
+          for (const blockedId of blockedOtherIds) {
+            const cached = blockedUsers.get(blockedId);
+            if (!cached) continue;
+            const blockedTokens = [cached.user_id, cached.token, cached.cookie, cached.email]
+              .map((value) => String(value || "").trim())
+              .filter(Boolean);
+            if (threadHasParticipant(thread, blockedTokens)) return true;
+          }
+          return false;
+        }).map((thread) => threadToken(thread)),
+      );
       const reportedThreads = await listThreadReportsByTokens(threads.map((thread) => threadToken(thread)));
       const unreadCount = await countUnreadMessages(
-        threads.filter((thread) => !threadIsClosed(thread) && !reportedThreads.has(threadToken(thread))),
+        threads.filter((thread) =>
+          !threadIsClosed(thread) &&
+          !blockedThreads.has(threadToken(thread)) &&
+          !reportedThreads.has(threadToken(thread))
+        ),
         tokens,
       );
       const rowsToNotify = rows.filter((row) => unreadCount > Number(row.last_unread_count || 0));

@@ -3,15 +3,19 @@
     "name": "WeddingWin",
     "slug": "weddingwin-app",
     "version": "1.0.0",
+    "icon": "./assets/images/app-icon.png",
     "orientation": "portrait",
     "scheme": "weddingwin",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
+      "icon": "./assets/images/app-icon.png",
+      "buildNumber": "1",
       "supportsTablet": true,
       "usesAppleSignIn": true,
       "bundleIdentifier": "ca.weddingwin.app",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "WeddingWin uses the camera to scan QR bingo codes at wedding shows.",
         "NSPhotoLibraryUsageDescription": "WeddingWin uses your photo library only when you choose an image to send in a private chat message.",
         "NSAppTransportSecurity": {
@@ -43,7 +47,8 @@
       "expo-notifications",
       "expo-camera",
       "@react-native-community/datetimepicker",
-      "expo-audio"
+      "expo-audio",
+      "expo-asset"
     ],
     "extra": {
       "googleOAuth": {

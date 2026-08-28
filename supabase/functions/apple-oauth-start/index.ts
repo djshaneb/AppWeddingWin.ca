@@ -1,13 +1,16 @@
 import {
   admin,
-  b64url,
   corsHeaders,
-  DEFAULT_FINAL,
   getAppleConfig,
 } from "../_shared/apple_auth.ts";
+import {
+  createSignedAppleOAuthState,
+  DEFAULT_OAUTH_FINAL,
+} from "../_shared/oauth_state.ts";
 
 const APPLE_RETURN_URL =
   Deno.env.get("APPLE_RETURN_URL") || "https://www.weddingwin.ca/auth/apple-callback";
+const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -16,9 +19,11 @@ Deno.serve(async (req: Request) => {
 
   try {
     const url = new URL(req.url);
-    const finalRedirect = url.searchParams.get("redirect_to") || DEFAULT_FINAL;
+    const { state, nonce } = await createSignedAppleOAuthState({
+      redirectTo: url.searchParams.get("redirect_to") || DEFAULT_OAUTH_FINAL,
+      secret: APP_LOGIN_SECRET,
+    });
     const cfg = await getAppleConfig(admin);
-    const state = b64url(JSON.stringify({ r: finalRedirect, n: crypto.randomUUID() }));
 
     const params = new URLSearchParams({
       client_id: cfg.serviceId,
@@ -27,6 +32,7 @@ Deno.serve(async (req: Request) => {
       response_mode: "form_post",
       scope: "name email",
       state,
+      nonce,
     });
 
     return new Response(null, {

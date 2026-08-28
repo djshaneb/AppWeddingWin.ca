@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
 
 type Status = 'working' | 'no-params' | 'redirecting' | 'error';
 
@@ -74,7 +75,11 @@ export default function AuthCallback() {
   }, []);
 
   const goHome = () => {
-    if (Platform.OS === 'web') window.location.replace('https://www.weddingwin.ca/');
+    if (Platform.OS === 'web') {
+      window.location.replace('https://www.weddingwin.ca/');
+      return;
+    }
+    router.replace('/(tabs)');
   };
 
   return (
@@ -88,7 +93,11 @@ export default function AuthCallback() {
         <Text style={styles.message}>{message}</Text>
 
         {status === 'no-params' || status === 'error' ? (
-          <Pressable style={styles.button} onPress={goHome}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Go to homepage"
+            style={styles.button}
+            onPress={goHome}>
             <Text style={styles.buttonText}>Go to homepage</Text>
           </Pressable>
         ) : null}

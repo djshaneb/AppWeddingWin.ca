@@ -1,0 +1,8 @@
+WeddingWin isolated App Review QR payload
+
+https://www.weddingwin.ca/qr?vendor_id=38970
+
+This QR is visible to the exact review couple account 38971 only after the
+service-role-only app-review fixture migration is deployed and unexpired. It
+does not activate or publish vendor 38970, never accesses production raffle
+entries, and never sends outbound email.
