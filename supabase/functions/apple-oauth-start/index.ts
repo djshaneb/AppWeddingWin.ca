@@ -7,6 +7,10 @@ import {
   createSignedAppleOAuthState,
   DEFAULT_OAUTH_FINAL,
 } from "../_shared/oauth_state.ts";
+import {
+  createOAuthLoginAttempt,
+  prepareOAuthBinding,
+} from "../_shared/oauth_attempt.ts";
 
 const APPLE_RETURN_URL =
   Deno.env.get("APPLE_RETURN_URL") || "https://www.weddingwin.ca/auth/apple-callback";
@@ -19,9 +23,17 @@ Deno.serve(async (req: Request) => {
 
   try {
     const url = new URL(req.url);
-    const { state, nonce } = await createSignedAppleOAuthState({
+    const { state, nonce, expiresAt } = await createSignedAppleOAuthState({
       redirectTo: url.searchParams.get("redirect_to") || DEFAULT_OAUTH_FINAL,
       secret: APP_LOGIN_SECRET,
+    });
+    const binding = prepareOAuthBinding(req, "apple");
+    await createOAuthLoginAttempt({
+      admin,
+      provider: "apple",
+      state,
+      bindingSecret: binding.bindingSecret,
+      expiresAtSeconds: expiresAt,
     });
     const cfg = await getAppleConfig(admin);
 
@@ -41,6 +53,7 @@ Deno.serve(async (req: Request) => {
         ...corsHeaders,
         Location: `https://appleid.apple.com/auth/authorize?${params.toString()}`,
         "Cache-Control": "no-store",
+        "Set-Cookie": binding.setCookie,
       },
     });
   } catch (e) {

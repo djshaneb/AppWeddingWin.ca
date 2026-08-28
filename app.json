@@ -17,7 +17,6 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "WeddingWin uses the camera to scan QR bingo codes at wedding shows.",
-        "NSPhotoLibraryUsageDescription": "WeddingWin uses your photo library only when you choose an image to send in a private chat message.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSExceptionDomains": {
@@ -43,16 +42,32 @@
       "expo-font",
       "expo-web-browser",
       "expo-apple-authentication",
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
       "expo-notifications",
-      "expo-camera",
+      [
+        "expo-camera",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
       "@react-native-community/datetimepicker",
-      "expo-audio",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
       "expo-asset"
     ],
     "extra": {
       "googleOAuth": {
-        "iosClientId": "",
         "webClientId": "655876057326-n28uvus7f20sm5isqc2m9v3jf1o8u196.apps.googleusercontent.com"
       }
     },

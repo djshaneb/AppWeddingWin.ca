@@ -13,7 +13,7 @@ export default function RootLayout() {
         <Stack.Screen name="email-confirmed" />
         <Stack.Screen name="+not-found" />
       </Stack>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
     </>
   );
 }

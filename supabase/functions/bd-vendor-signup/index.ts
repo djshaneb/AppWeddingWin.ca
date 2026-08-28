@@ -8,7 +8,6 @@ const corsHeaders = {
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
-const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
 const BD_VENDOR_SUBSCRIPTION_ID = Deno.env.get("BD_VENDOR_SUBSCRIPTION_ID") || "17";
 
 type BdEnvelope = {
@@ -35,20 +34,6 @@ const SAFE_BD_USER_FIELDS = [
   "country_code",
   "country_ln",
   "zip_code",
-] as const;
-
-const APP_LOGIN_TICKET_FIELDS = [
-  "user_id",
-  "first_name",
-  "last_name",
-  "email",
-  "company",
-  "active",
-  "subscription_id",
-  "profession_id",
-  "filename",
-  "token",
-  "cookie",
 ] as const;
 
 function jsonResponse(body: unknown, status = 200) {
@@ -97,10 +82,6 @@ function base64UrlFromBytes(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-function base64UrlFromString(value: string): string {
-  return base64UrlFromBytes(new TextEncoder().encode(value));
 }
 
 function unwrapBdUser(message: unknown): BdUser | undefined {
@@ -194,44 +175,6 @@ async function ensureBdSessionCookie(user: BdUser | undefined): Promise<BdUser |
   return (await ensureStableBdIdentity(user, callBd)) as BdUser | undefined;
 }
 
-async function createAppLoginUrl(user: BdUser | undefined, email: string): Promise<string> {
-  if (!APP_LOGIN_SECRET) {
-    throw new Error("APP_LOGIN_SECRET is not configured");
-  }
-
-  if (!user?.user_id || typeof user?.token !== "string" || !user.token.trim()) {
-    throw new Error("BD member is missing a login token.");
-  }
-
-  const payload: Record<string, unknown> = {
-    email,
-    exp: Math.floor(Date.now() / 1000) + 120,
-  };
-
-  for (const field of APP_LOGIN_TICKET_FIELDS) {
-    if (user[field] !== undefined && user[field] !== null) {
-      payload[field] = user[field];
-    }
-  }
-
-  const encodedPayload = base64UrlFromString(JSON.stringify(payload));
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(APP_LOGIN_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(encodedPayload),
-  );
-  const ticket = `${encodedPayload}.${base64UrlFromBytes(new Uint8Array(signature))}`;
-
-  return `${BD_API_BASE_URL}/app-login?t=${encodeURIComponent(ticket)}`;
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -302,13 +245,16 @@ Deno.serve(async (req) => {
     }
 
     user = await ensureBdSessionCookie(user);
-    const appLoginUrl = await createAppLoginUrl(user, email);
-
+    const nativeSession = buildBdNativeSession(user, email);
+    if (!nativeSession.user_id || typeof nativeSession.token !== "string" || !nativeSession.token.trim()) {
+      return jsonResponse({
+        error: "Account was created, but the app session is not ready yet. Please log in to continue.",
+      }, 503);
+    }
     return jsonResponse({
       ok: true,
       user: sanitizeBdUser(user, email),
-      native_session: buildBdNativeSession(user, email),
-      app_login_url: appLoginUrl,
+      native_session: nativeSession,
       dashboard_url: `${BD_API_BASE_URL}/account/home`,
     });
   } catch (error) {

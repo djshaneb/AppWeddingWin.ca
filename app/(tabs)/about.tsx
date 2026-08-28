@@ -194,7 +194,7 @@ export default function AboutScreen() {
       setHasNativeSession(false);
       Alert.alert(
         'Account deleted',
-        'Your WeddingWin account and associated app data were permanently deleted.',
+        'Your WeddingWin account and account-only app data were permanently deleted. Shared message history may remain visible to the other participant under WeddingWin’s retention policy.',
         [{ text: 'OK', onPress: () => router.replace('/') }]
       );
     } catch (error) {
@@ -226,7 +226,7 @@ export default function AboutScreen() {
 
     Alert.alert(
       'Permanently delete account?',
-      'This deletes your WeddingWin login, profile or vendor listing, push token, raffle data, and entire conversations you participated in—including the other participant’s messages and images. This cannot be undone.',
+      'This deletes your WeddingWin login, profile or vendor listing, push token, raffle data, and account-only app data. Shared message history may remain visible to the other participant under WeddingWin’s retention policy, but the conversation will be closed and no new messages can be sent. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {

@@ -1,3 +1,4 @@
+-- Filename version reconciled with the linked Supabase migration history.
 CREATE TABLE IF NOT EXISTS public.app_push_tokens (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   bd_member_id text NOT NULL,

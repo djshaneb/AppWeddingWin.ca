@@ -58,3 +58,32 @@ Deno.test("legacy app reports still durably enqueue a known BD alias", async () 
     "known BD aliases must be queued even without a fetched BD row",
   );
 });
+
+Deno.test("chat sync flushes a newly queued replacement-thread close before responding", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../bd-chat-sync/index.ts", import.meta.url),
+  );
+  const buildIndex = source.indexOf(
+    "const [payload, reportCloseQueued] = await buildChatPayload(user, session, selectedThread);",
+  );
+  const guardedFlushIndex = source.indexOf(
+    "if (reportCloseQueued && !rateLimitedNow())",
+    buildIndex,
+  );
+  const flushIndex = source.indexOf("await flushOutbox(4)", guardedFlushIndex);
+  const responseIndex = source.indexOf("return jsonResponse(sendDeliveryState", flushIndex);
+
+  assert(buildIndex >= 0, "chat payload assembly must expose whether a report close was queued");
+  assert(
+    guardedFlushIndex > buildIndex,
+    "replacement-thread close delivery must be guarded by the payload's queued-close signal",
+  );
+  assert(
+    flushIndex > guardedFlushIndex && responseIndex > flushIndex,
+    "the newly queued report close must flush after payload assembly and before the response",
+  );
+  assert(
+    /reportCloseQueued = \(await recordThreadReport\([\s\S]*?\)\) \|\| reportCloseQueued;/.test(source),
+    "fresh blocked website thread aliases must raise the queued-close signal",
+  );
+});

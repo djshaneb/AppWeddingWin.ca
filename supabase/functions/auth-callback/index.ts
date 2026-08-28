@@ -16,20 +16,16 @@ const html = `<!DOCTYPE html>
   .card { text-align:center; padding:32px; max-width:480px; }
   .spinner { width:32px; height:32px; border:3px solid #2a2a2e; border-top-color:#d4af37; border-radius:50%; margin:0 auto 16px; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
-  .err { color:#ff6b6b; font-family:monospace; font-size:12px; word-break:break-all; margin-top:16px; text-align:left; }
 </style>
 </head>
 <body>
 <div class="card">
   <div class="spinner"></div>
   <div id="msg">Signing you in...</div>
-  <div class="err" id="err"></div>
 </div>
 <script>
 (function () {
   var msg = document.getElementById('msg');
-  var errEl = document.getElementById('err');
-  function showErr(e) { try { errEl.textContent = 'debug: ' + (e && e.message ? e.message : e); } catch (x) {} }
 
   setTimeout(function () { window.location.replace('https://www.weddingwin.ca/'); }, 5000);
 
@@ -40,7 +36,6 @@ const html = `<!DOCTYPE html>
     if (search) combined = combined ? combined + '&' + search : search;
 
     var inApp = /WeddingWinApp/.test(navigator.userAgent || '');
-    showErr('inApp=' + inApp + ' hashLen=' + hash.length + ' searchLen=' + search.length);
 
     if (inApp) {
       var deepLink = 'weddingwin://auth-callback#' + combined;
@@ -50,7 +45,7 @@ const html = `<!DOCTYPE html>
           window.WeddingWinApp.completeAuth(deepLink);
           return;
         }
-      } catch (e) { showErr(e); }
+      } catch (e) {}
       window.location.href = deepLink;
       return;
     }
@@ -61,7 +56,6 @@ const html = `<!DOCTYPE html>
       window.location.replace(dest);
     }, 300);
   } catch (e) {
-    showErr(e);
     setTimeout(function () { window.location.replace('https://www.weddingwin.ca/'); }, 1500);
   }
 })();

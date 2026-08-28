@@ -3,6 +3,7 @@ import {
   corsHeaders,
   DEFAULT_FINAL,
   getAppleConfig,
+  linkProfileToBdMember,
   makeBdAppleLoginResult,
   upsertAppleUser,
   verifyAppleIdentityToken,
@@ -73,6 +74,9 @@ Deno.serve(async (req: Request) => {
       fullName: user.fullName,
       finalRedirect,
     });
+    if (login.nativeSession.user_id) {
+      await linkProfileToBdMember(user.userId, login.nativeSession);
+    }
 
     return new Response(JSON.stringify(login), {
       status: 200,

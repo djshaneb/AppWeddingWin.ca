@@ -1,15 +1,18 @@
 import {
-  admin,
   callBd,
   corsHeaders,
   createAppLoginUrl,
   ensureBdSessionCookie,
   fetchBdUserByEmail,
   fetchFullBdUserById,
-  nativeSessionMatchesBdUser,
-  type BdNativeSession,
 } from "../_shared/apple_auth.ts";
-
+import {
+  applyLinkedAuthEmail,
+  AuthEmailConflictError,
+  AuthEmailSyncError,
+  preflightLinkedAuthEmail,
+  type AppliedAuthEmailChange,
+} from "../_shared/auth_email_sync.ts";
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
 
@@ -111,6 +114,21 @@ function cleanText(value: unknown, maxLength: number) {
   return String(value || "").trim().replace(/\s+/g, " ").slice(0, maxLength);
 }
 
+async function rollbackAppliedEmailChange(
+  applied: AppliedAuthEmailChange,
+  userId: unknown,
+) {
+  try {
+    await applied.rollback();
+  } catch (error) {
+    console.error("bd-confirm-profile-email:rollback-failed", {
+      user_id: userId,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -127,21 +145,26 @@ Deno.serve(async (req) => {
     const nextEmail = cleanText(ticket.next_email, 254).toLowerCase();
 
     const user = await fetchFullBdUserById(ticket.user_id);
-    const session: BdNativeSession = {
-      user_id: ticket.user_id,
-      email: ticket.existing_email || "",
-      token: typeof user?.token === "string" ? user.token : "",
-      cookie: typeof user?.cookie === "string" ? user.cookie : "",
-    };
-
-    if (!nativeSessionMatchesBdUser(session, user)) {
-      throw new Error("This confirmation link no longer matches your WeddingWin session.");
+    const currentEmail = String(user?.email || "").trim().toLowerCase();
+    const ticketEmail = String(ticket.existing_email || "").trim().toLowerCase();
+    if (
+      !user?.user_id ||
+      String(user.user_id) !== String(ticket.user_id) ||
+      !ticketEmail ||
+      currentEmail !== ticketEmail
+    ) {
+      throw new Error("This confirmation link no longer matches your WeddingWin account.");
     }
 
     const existingNextUser = await fetchBdUserByEmail(nextEmail);
     if (existingNextUser?.user_id && String(existingNextUser.user_id) !== String(ticket.user_id)) {
       throw new Error("That email is already connected to another WeddingWin account.");
     }
+
+    // Prove that the target is free in GoTrue before changing any identity
+    // store. BD remains on the ticket email until both Supabase writes succeed.
+    const linkedEmailPlan = await preflightLinkedAuthEmail(ticket.user_id, nextEmail);
+    const appliedEmailChange = await applyLinkedAuthEmail(linkedEmailPlan);
 
     const updateBody = new URLSearchParams({
       user_id: String(ticket.user_id),
@@ -155,42 +178,80 @@ Deno.serve(async (req) => {
       if (key !== "user_id" && !value) updateBody.delete(key);
     }
 
-    const update = await callBd("/api/v2/user/update", {
-      method: "PUT",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: updateBody.toString(),
-    });
+    let update;
+    try {
+      update = await callBd("/api/v2/user/update", {
+        method: "PUT",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: updateBody.toString(),
+      });
+    } catch (error) {
+      // A transport failure can be ambiguous. Re-read the authoritative BD
+      // record before deciding whether the Supabase change must be reversed.
+      let afterFailureUser;
+      try {
+        afterFailureUser = await fetchFullBdUserById(ticket.user_id);
+        if (
+          String(afterFailureUser?.user_id || "") === String(ticket.user_id) &&
+          String(afterFailureUser?.email || "").trim().toLowerCase() === nextEmail
+        ) {
+          update = {
+            response: new Response(null, { status: 200 }),
+            body: { status: "success", message: afterFailureUser },
+          };
+        }
+      } catch {
+        // The original error remains the useful failure context below.
+      }
+      if (!update) {
+        const afterFailureEmail = String(afterFailureUser?.email || "").trim()
+          .toLowerCase();
+        if (
+          String(afterFailureUser?.user_id || "") === String(ticket.user_id) &&
+          afterFailureEmail === ticketEmail
+        ) {
+          await rollbackAppliedEmailChange(appliedEmailChange, ticket.user_id);
+          throw error;
+        }
+        // Do not overwrite either system when the transport result cannot be
+        // resolved. The function returns non-success and a fresh confirmation
+        // or refresh can safely reconcile the server-authoritative BD email.
+        throw new AuthEmailSyncError(
+          "Account email update could not be verified. Please request a new confirmation email.",
+        );
+      }
+    }
     if (!update.response.ok || update.body.status !== "success") {
       const detail =
         typeof update.body.message === "string"
           ? update.body.message
           : JSON.stringify(update.body.message).slice(0, 180);
+      await rollbackAppliedEmailChange(appliedEmailChange, ticket.user_id);
       throw new Error(`Profile could not be saved: ${detail}`);
     }
 
-    try {
-      const existingEmail = String(ticket.existing_email || "").trim().toLowerCase();
-      await admin.from("profiles").update({ email: nextEmail, updated_at: new Date().toISOString() }).eq("email", existingEmail);
-      const { data: list } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 });
-      const authUser = list?.users.find((candidate) => {
-        return String(candidate.email || "").trim().toLowerCase() === existingEmail;
-      });
-      if (authUser?.id) {
-        await admin.auth.admin.updateUserById(authUser.id, {
-          email: nextEmail,
-          email_confirm: true,
-        });
+    const refreshedBdUser = await fetchFullBdUserById(ticket.user_id);
+    const refreshedEmail = String(refreshedBdUser?.email || "").trim().toLowerCase();
+    if (
+      !refreshedBdUser?.user_id ||
+      String(refreshedBdUser.user_id) !== String(ticket.user_id) ||
+      refreshedEmail !== nextEmail
+    ) {
+      if (
+        String(refreshedBdUser?.user_id || "") === String(ticket.user_id) &&
+        refreshedEmail === ticketEmail
+      ) {
+        await rollbackAppliedEmailChange(appliedEmailChange, ticket.user_id);
       }
-    } catch (syncError) {
-      console.error("bd-confirm-profile-email:supabase-email-sync-failed", {
-        user_id: ticket.user_id,
-        detail: syncError instanceof Error ? syncError.message : String(syncError),
-      });
+      throw new AuthEmailSyncError(
+        "Account email update could not be verified. Please request a new confirmation email.",
+      );
     }
-
-    const refreshed = await ensureBdSessionCookie(await fetchFullBdUserById(ticket.user_id));
+    const refreshed = await ensureBdSessionCookie(refreshedBdUser);
     const appLoginUrl = await createAppLoginUrl(refreshed, nextEmail);
-    const deepLink = `weddingwin://email-confirmed?app_login_url=${encodeURIComponent(appLoginUrl)}&email=${encodeURIComponent(nextEmail)}`;
+    // Keep website credentials out of the custom-scheme URL. The app already
+    // has the authenticated native session needed to refresh this profile.
+    const deepLink = "weddingwin://email-confirmed";
     const fallback = appLoginUrl;
 
     return htmlResponse(htmlPage(
@@ -200,9 +261,14 @@ Deno.serve(async (req) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Email confirmation failed.";
     console.error("bd-confirm-profile-email:error", message);
+    const status = error instanceof AuthEmailConflictError
+      ? 409
+      : error instanceof AuthEmailSyncError
+      ? 503
+      : 400;
     return htmlResponse(htmlPage(
       "Email confirmation failed",
       `<h1>Email confirmation failed</h1><p class="msg">${escapeHtml(message)}</p><p class="sub">Open the app and save your profile again to request a fresh confirmation email.</p>`
-    ), 400);
+    ), status);
   }
 });

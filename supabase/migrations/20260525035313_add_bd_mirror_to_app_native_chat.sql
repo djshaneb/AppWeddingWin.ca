@@ -1,3 +1,4 @@
+-- Filename version reconciled with the linked Supabase migration history.
 alter table public.app_native_chat_threads
   add column if not exists bd_thread_token text,
   add column if not exists bd_thread_id text,

@@ -1,3 +1,4 @@
+-- Filename version reconciled with the linked Supabase migration history.
 create table if not exists public.app_native_chat_threads (
   id uuid primary key default gen_random_uuid(),
   thread_token text not null unique,

@@ -3,6 +3,8 @@ import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from "npm:jose@5.
 import { verifiedAppleEmail } from "./apple_identity.ts";
 import { ensureStableBdIdentity } from "./bd_identity.ts";
 import { allowedFinalRedirect } from "./oauth_state.ts";
+import { createOneTimeAppLoginUrl } from "./auth_exchange.ts";
+import { findAuthUserByEmail } from "./auth_users.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -15,7 +17,6 @@ export const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 export const DEFAULT_FINAL = "https://www.weddingwin.ca/";
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
-const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
 const BD_DEFAULT_SUBSCRIPTION_ID = Deno.env.get("BD_DEFAULT_SUBSCRIPTION_ID") || "18";
 const BD_VENDOR_SUBSCRIPTION_ID = "17";
 const BD_APPLE_LOGIN_URL = Deno.env.get("BD_APPLE_LOGIN_URL") || "";
@@ -81,20 +82,6 @@ const SAFE_BD_USER_FIELDS = [
   "country_ln",
   "zip_code",
   "wedding_date",
-] as const;
-
-const APP_LOGIN_TICKET_FIELDS = [
-  "user_id",
-  "first_name",
-  "last_name",
-  "email",
-  "company",
-  "active",
-  "subscription_id",
-  "profession_id",
-  "filename",
-  "token",
-  "cookie",
 ] as const;
 
 const appleJwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
@@ -205,9 +192,9 @@ export function getNativeAppleAudiences(cfg: AppleConfig): string[] {
     .map((aud) => aud.trim())
     .filter(Boolean);
 
-  // Expo Go signs native Apple credentials for Expo's container app. The
-  // standalone WeddingWin build will use cfg.iosBundleId instead.
-  if (Deno.env.get("ALLOW_EXPO_GO_APPLE_AUD") !== "0") {
+  // The production endpoint must never accept Expo Go's shared container
+  // audience unless a developer explicitly opts in for a temporary test.
+  if (Deno.env.get("ALLOW_EXPO_GO_APPLE_AUD") === "1") {
     extraAudiences.push("host.exp.Exponent");
   }
 
@@ -238,14 +225,7 @@ export async function upsertAppleUser(args: {
       throw new Error("Apple did not provide an email and this Apple account is not linked yet.");
     }
 
-    const { data: list, error: listErr } = await admin.auth.admin.listUsers({
-      page: 1,
-      perPage: 200,
-    });
-    if (listErr) throw new Error(`listUsers failed: ${listErr.message}`);
-    const existing = list.users.find(
-      (u) => (u.email || "").toLowerCase() === email.toLowerCase(),
-    );
+    const existing = await findAuthUserByEmail(email);
 
     if (existing) {
       userId = existing.id;
@@ -325,10 +305,6 @@ function base64UrlFromBytes(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-function base64UrlFromString(value: string): string {
-  return base64UrlFromBytes(new TextEncoder().encode(value));
 }
 
 function splitName(fullName?: string | null): { firstName: string; lastName: string } {
@@ -515,41 +491,22 @@ export async function ensureBdSessionCookie(user: BdUser | undefined): Promise<B
 }
 
 export async function createAppLoginUrl(user: BdUser | undefined, email: string): Promise<string> {
-  if (!APP_LOGIN_SECRET) {
-    throw new Error("APP_LOGIN_SECRET is not configured");
+  return await createOneTimeAppLoginUrl(user, email);
+}
+
+export async function linkProfileToBdMember(
+  profileId: string,
+  nativeSession: BdNativeSession,
+): Promise<void> {
+  const bdMemberId = String(nativeSession.user_id || "").trim();
+  if (!profileId || !bdMemberId) {
+    throw new Error("Apple profile could not be linked to the WeddingWin member.");
   }
-
-  if (!user?.user_id || typeof user?.token !== "string" || !user.token.trim()) {
-    throw new Error("BD member is missing a login token.");
-  }
-
-  const payload: Record<string, unknown> = {
-    email,
-    exp: Math.floor(Date.now() / 1000) + 120,
-  };
-
-  for (const field of APP_LOGIN_TICKET_FIELDS) {
-    if (user[field] !== undefined && user[field] !== null) {
-      payload[field] = user[field];
-    }
-  }
-
-  const encodedPayload = base64UrlFromString(JSON.stringify(payload));
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(APP_LOGIN_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(encodedPayload),
-  );
-  const ticket = `${encodedPayload}.${base64UrlFromBytes(new Uint8Array(signature))}`;
-
-  return `${BD_API_BASE_URL}/app-login?t=${encodeURIComponent(ticket)}`;
+  const { error } = await admin
+    .from("profiles")
+    .update({ bd_member_id: bdMemberId, updated_at: new Date().toISOString() })
+    .eq("id", profileId);
+  if (error) throw new Error(`Apple profile link failed: ${error.message}`);
 }
 
 async function makeDirectBdAppleLoginResult(args: {
@@ -557,6 +514,7 @@ async function makeDirectBdAppleLoginResult(args: {
   fullName?: string | null;
   subscriptionId?: string;
   consent?: SignupConsent;
+  includeWebsiteRedirect?: boolean;
 }): Promise<{ redirectUrl: string; user: Record<string, unknown>; nativeSession: BdNativeSession }> {
   const email = args.email.trim().toLowerCase();
   let user = await fetchBdUserByEmail(email);
@@ -570,12 +528,18 @@ async function makeDirectBdAppleLoginResult(args: {
   }
 
   user = await ensureBdSessionCookie(user);
-  const redirectUrl = await createAppLoginUrl(user, email);
+  const nativeSession = buildBdNativeSession(user, email);
+  if (!nativeSession.user_id || !nativeSession.token) {
+    throw new Error("WeddingWin could not create a secure app session. Please try again.");
+  }
+  const redirectUrl = args.includeWebsiteRedirect === false
+    ? ""
+    : await createAppLoginUrl(user, email);
 
   return {
     redirectUrl,
     user: sanitizeBdUser(user, email),
-    nativeSession: buildBdNativeSession(user, email),
+    nativeSession,
   };
 }
 
@@ -586,6 +550,7 @@ export async function makeBdAppleLoginResult(args: {
   finalRedirect: string;
   subscriptionId?: string;
   consent?: SignupConsent;
+  includeWebsiteRedirect?: boolean;
 }): Promise<{ redirectUrl: string; user: Record<string, unknown>; nativeSession: BdNativeSession }> {
   if (!args.email) {
     throw new Error("Apple did not provide an email and this Apple account is not linked yet.");
@@ -593,12 +558,13 @@ export async function makeBdAppleLoginResult(args: {
   const finalRedirect = allowedFinalRedirect(args.finalRedirect);
 
   if (!BD_APPLE_LOGIN_URL) {
-    if (BD_API_KEY && APP_LOGIN_SECRET) {
+    if (BD_API_KEY) {
       return await makeDirectBdAppleLoginResult({
         email: args.email,
         fullName: args.fullName,
         subscriptionId: args.subscriptionId,
         consent: args.consent || null,
+        includeWebsiteRedirect: args.includeWebsiteRedirect,
       });
     }
     if (ALLOW_SUPABASE_APPLE_FALLBACK) {

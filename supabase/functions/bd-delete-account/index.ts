@@ -167,14 +167,22 @@ async function deleteBdUserMeta(rows: BdUserMeta[]) {
   }
 }
 
-async function findProfile(userId: string) {
-  const byMember = await admin
-    .from("profiles")
-    .select("id, email, apple_sub")
-    .eq("bd_member_id", userId)
-    .maybeSingle();
-  if (byMember.error) throw new Error(`Profile lookup failed: ${byMember.error.message}`);
-  return byMember.data;
+type DeletionProfile = {
+  id: string;
+  email: string | null;
+  apple_sub: string | null;
+  bd_member_id: string | null;
+};
+
+async function findAndLinkProfile(userId: string, trustedEmail: string) {
+  const resolved = await admin.rpc("link_weddingwin_profile_for_deletion", {
+    p_bd_user_id: userId,
+    p_trusted_email: trustedEmail,
+  });
+  if (resolved.error) throw new Error(`Profile lookup failed: ${resolved.error.message}`);
+  const rows = Array.isArray(resolved.data) ? resolved.data as DeletionProfile[] : [];
+  if (rows.length > 1) throw new Error("Profile lookup returned more than one identity.");
+  return rows[0];
 }
 
 async function revokeAppleAuthorization(authorizationCode: string, expectedAppleSub: string) {
@@ -262,7 +270,7 @@ Deno.serve(async (req) => {
     diagnosticStage = "load_cached_identity";
     const cached = await admin
       .from("bd_users_cache")
-      .select("token, cookie")
+      .select("token, cookie, email")
       .eq("user_id", userId)
       .maybeSingle();
     if (cached.error) throw new Error(`Identity lookup failed: ${cached.error.message}`);
@@ -270,11 +278,14 @@ Deno.serve(async (req) => {
     diagnosticStage = "lookup_bd_member";
     await fetchBdUser(userId);
     diagnosticStage = "lookup_profile";
-    const profile = await findProfile(userId);
+    const profile = await findAndLinkProfile(
+      userId,
+      String(cached.data?.email || "").trim().toLowerCase(),
+    );
     const appleSub = String(profile?.apple_sub || "").trim();
     const authUserPresent = profile?.id ? await supabaseAuthUserExists(profile.id) : false;
 
-    if (appleSub && authUserPresent) {
+    if (appleSub) {
       const authorizationCode = String(body?.apple_authorization_code || "").trim();
       if (!authorizationCode) {
         return jsonResponse({
@@ -292,6 +303,23 @@ Deno.serve(async (req) => {
     // rows when a user is deleted.
     diagnosticStage = "list_bd_metadata";
     const bdUserMeta = await listBdUserMeta(userId);
+
+    // Stage only one-way hashes while the provider profile still exists. The
+    // rows remain inactive until the final transactional purge, so an earlier
+    // BD failure cannot redact a member whose deletion did not complete.
+    diagnosticStage = "stage_chat_identity_redaction";
+    const redactionStage = await admin.rpc("stage_weddingwin_member_chat_redaction", {
+      p_bd_user_id: userId,
+      p_bd_token: String(cached.data?.token || ""),
+      p_bd_cookie: String(cached.data?.cookie || ""),
+      p_profile_email: String(profile?.email || ""),
+      p_apple_sub: appleSub,
+      p_profile_id: String(profile?.id || ""),
+    });
+    if (redactionStage.error) {
+      throw new Error(`Chat identity staging failed: ${redactionStage.error.message}`);
+    }
+
     // Remove child metadata while its parent still exists. BD may cascade these
     // rows as part of member deletion on some installations; deleting the
     // parent first can therefore turn an otherwise-successful cleanup into a
@@ -307,8 +335,16 @@ Deno.serve(async (req) => {
     diagnosticStage = "delete_supabase_auth";
     if (profile?.id && authUserPresent) await deleteSupabaseAuthUser(profile.id);
 
+    diagnosticStage = "purge_auth_exchanges";
+    const exchangePurge = await admin.rpc("purge_member_app_auth_exchanges", {
+      p_bd_member_id: userId,
+    });
+    if (exchangePurge.error) {
+      throw new Error(`Authentication exchange purge failed: ${exchangePurge.error.message}`);
+    }
+
     diagnosticStage = "purge_app_data";
-    const purge = await admin.rpc("purge_weddingwin_member_data", {
+    const purge = await admin.rpc("purge_weddingwin_member_data_with_chat_redaction", {
       p_bd_user_id: userId,
       p_bd_token: String(cached.data?.token || ""),
       p_bd_cookie: String(cached.data?.cookie || ""),
@@ -318,7 +354,10 @@ Deno.serve(async (req) => {
     return jsonResponse({
       ok: true,
       deleted: true,
-      purged: purge.data,
+      purged: {
+        ...(purge.data && typeof purge.data === "object" ? purge.data : {}),
+        auth_exchanges: exchangePurge.data,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -84,7 +84,7 @@ Do not use WeddingWin messages for emergencies or send highly sensitive informat
 
 ### 4. Push notifications
 
-The source is designed so that, after notification permission, WeddingWin stores an Expo push token linked to the WeddingWin member ID/device platform and sends a generic new-message payload through Expo and Apple Push Notification service. **[RELEASE BLOCKER: no production physical-device delivery pass is recorded. Verify the final payload templates, token lifecycle, providers, and foreground/background/terminated delivery before converting this to present-tense production language.]**
+The deployed backend stores an Expo push token linked to the WeddingWin member ID/device platform and uses a centralized worker to send a generic new-message payload through Expo and Apple Push Notification service. Durable bounded retry, `Retry-After`, ticket/receipt reconciliation, finite missing-receipt expiry, and invalid-token disablement are deployed. **[RELEASE BLOCKER: no production physical-device delivery pass is recorded. Verify the final payload templates, token lifecycle, providers, ambiguous-network behavior, and foreground/background/terminated delivery before publishing this as complete end-to-end production behavior.]**
 
 You can change notification permission in iOS Settings. Signing out attempts to unregister the current token; account deletion must remove or disable all server-side tokens associated with the account.
 
@@ -108,7 +108,7 @@ The final official rules and entry screen must govern eligibility, deadlines, pr
 
 ### 7. Cookies, embedded website pages, analytics, and advertising
 
-The app source displays some WeddingWin.ca pages in an embedded browser. Those pages may use session cookies and local/DOM storage for login, security, and feature operation. The release source restricts in-app hosts/navigation, routes external HTTPS out of the WebView, checks bridge/OAuth origins, blocks the Meta Pixel, and disables third-party cookies. **[RELEASE BLOCKER: inspect and test the exact tagged TestFlight build. Confirm allowed hosts, redirects, pop-ups, custom schemes, bridge behavior, cookie behavior, login/logout, and actual network recipients before describing the final configuration.]** Server-side requests and records still require disclosure even if the final WebView is incognito and third-party cookies are disabled.
+The app source displays some WeddingWin.ca pages in an embedded browser. Those pages may use session cookies and local/DOM storage for login, security, and feature operation. The release source restricts top-frame hosts/navigation, routes unrelated top-frame HTTPS out of the WebView, permits HTTPS and `about:blank` embedded subframes needed by page content, blocks insecure/active-content subframes, checks bridge/OAuth origins, blocks the Meta Pixel, and disables third-party cookies. **[RELEASE BLOCKER: inspect and test the exact tagged TestFlight build. Confirm allowed top-frame hosts, embedded third-party content/recipients, redirects, pop-ups, custom schemes, bridge behavior, cookie behavior, login/logout, and actual network recipients before describing the final configuration.]** Server-side requests and records still require disclosure even if the final WebView is incognito and third-party cookies are disabled.
 
 **Choose exactly one version after a production network/cookie audit; delete the other before publication:**
 
@@ -143,7 +143,7 @@ The final policy must state, and production operations must enforce, a validated
 | --- | --- |
 | Account/profile/listing and authentication mapping | [OWNER/LEGAL: while the account is active, then delete within X days of a verified request, except specified records retained for Y] |
 | Session tokens/cookies | [OWNER/SECURITY: until expiry, logout/revocation, or X days, whichever occurs first] |
-| Private message text/retained media and delivery records | [OWNER/LEGAL: active-account/thread period plus X; state that the current purge removes the complete shared conversation, including the counterpart's copy, or change the implementation] |
+| Private message text/retained media and delivery records | [OWNER/LEGAL: while both accounts/threads are active plus X; after one account is deleted, retain the surviving participant's read-only shared history for Y or until an objective criterion, then delete/de-identify unless a disclosed legal/safety hold applies] |
 | Reports, blocks, and safety/security records | [OWNER/LEGAL: X years or defined case-closure criterion; explain any longer safety/fraud hold] |
 | Push tokens and notification metadata | [OWNER: until logout, token invalidation, account deletion, or X days without activity; notification logs X days] |
 | QR Bingo scan/progress | [OWNER: event end plus X days/months] |
@@ -159,11 +159,11 @@ Legal holds, fraud/security investigations, accounting/tax duties, contest integ
 
 The current iOS source and deployed backend expose **About → Delete Account**, a permanent-deletion warning, and native confirmation. The backend verifies Apple token signature, audience, and subject, and may request Sign in with Apple confirmation/revocation for an Apple-linked account. A person who cannot sign in must be able to request deletion or exercise another privacy right at **[OWNER: public privacy-request URL and privacy email]**. The public route supplements the in-app deletion flow; it does not replace it. **[RELEASE BLOCKER: no physical-device destructive cross-system/Apple-revocation pass is recorded. Do not change these observations into a completed-deletion claim until DEV-10 evidence exists.]**
 
-The deployed deletion workflow is intended to permanently delete the WeddingWin login/profile or vendor listing and associated app data, including messages/retained media, push tokens, and raffle data, subject only to specifically disclosed legal/safety retention. It currently purges the entire shared conversation record, including the other participant's copy. Deactivation alone does not satisfy this commitment. **[RELEASE BLOCKER: owner/legal/product must approve or change the shared-conversation behavior; then test disposable accounts against every WeddingWin.ca and Supabase store, object storage, email system, provider mapping, cache, and backup and replace “intended to” with the exact tested result and evidence-backed retention exceptions.]**
+The deployed deletion design permanently removes the WeddingWin login/profile or vendor listing and account-owned app data, including the deleting member's pending chat work/cache data, push tokens, and QR/draw data where permitted. It closes and blocks related app/website conversations while preserving shared messages and moderation evidence as read-only history for the surviving participant. Deactivation alone does not satisfy this commitment. A fresh two-participant email-account test passed the active database/site behavior. **[RELEASE BLOCKER: owner/legal must approve a finite retention duration or objective criterion, any legal/safety exceptions, and eventual deletion/de-identification; then repeat against the exact TestFlight build and verify every WeddingWin.ca/Supabase store, object storage, email system, provider mapping, cache, physical Apple-linked account, and backup before publishing present-tense claims.]**
 
 The final policy must state:
 
-- that the current implementation removes the other participant's shared conversation copy, if that behavior is approved; otherwise describe the corrected behavior;
+- that deletion closes/blocks the conversation but preserves the surviving participant's read-only shared history, including the exact duration/criterion and eventual deletion/de-identification;
 - how display names or required transaction/draw records are anonymized;
 - how Sign in with Apple authorization/token revocation is handled and how Google is disconnected;
 - which records remain under a legal hold and for how long;

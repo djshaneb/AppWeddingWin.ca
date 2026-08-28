@@ -1,6 +1,6 @@
 # WeddingWin App / QR Bingo Handoff Context
 
-Last updated: 2026-05-24
+Last updated: 2026-08-28
 
 ## Project
 
@@ -10,9 +10,8 @@ Last updated: 2026-05-24
   - `supabase/functions/bd-qr-bingo-sync/index.ts`
   - `supabase/functions/bd-qr-bingo-vendor-sync/`
 - Recent migrations:
-  - `supabase/migrations/20260522000100_limit_qr_bingo_raffle_draws.sql`
-  - `supabase/migrations/20260523000100_remove_qr_bingo_claim_instructions.sql`
-  - `supabase/migrations/20260523000200_allow_test_vendor_100_qr_bingo_draws.sql`
+  - `supabase/migrations/20260522185256_limit_qr_bingo_raffle_draws.sql`
+  - `supabase/migrations/20260523141609_allow_test_vendor_100_qr_bingo_draws.sql`
 - Current Expo tunnel from prior work:
   - Port: `8081`
   - Tunnel URL seen earlier: `exp://spx3siw-anonymous-8081.exp.direct`
@@ -235,16 +234,7 @@ Known issue previously asked:
 
 ## Current Git / Working Tree Notes
 
-At last check there were uncommitted changes including:
-- `app/(tabs)/index.tsx`
-- `supabase/functions/bd-qr-bingo-sync/index.ts`
-- New/untracked:
-  - `assets/images/qr-bingo/`
-  - `expo-current-qr-matrix.json`
-  - `supabase/functions/bd-qr-bingo-vendor-sync/`
-  - migrations listed above
-
-Do not reset or discard changes unless explicitly requested.
+The App Store hardening and verified Simulator/backend source is captured in the local `v1.0.0-rc.2` tag. That tag has not been pushed, signed, uploaded, or represented in TestFlight. Preserve any later working-tree changes and do not reset or discard them unless explicitly requested.
 
 ## Browser / Chrome Notes
 

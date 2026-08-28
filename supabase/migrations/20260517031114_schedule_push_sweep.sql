@@ -1,3 +1,4 @@
+-- Filename version reconciled with the linked Supabase migration history.
 CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pg_net WITH SCHEMA extensions;
 

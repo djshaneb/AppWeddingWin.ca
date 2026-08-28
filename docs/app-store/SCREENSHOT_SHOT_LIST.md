@@ -18,6 +18,8 @@ These files document the current working-tree Simulator run:
 - Primary 6.9-inch iPhone 17 Pro Max marketing shots, `1320×2868`, RGB PNG without alpha: `pro-max-01-couple-menu.png` and `pro-max-02-about.png`. Both were visually checked and contain no credential or permission-prompt content.
 - 6.3-inch iPhone QA set, `1206×2622`: `iphone-01-couple-menu.png`, `iphone-02-qr-bingo.png`, `iphone-03-chat-blocked-list.png`, `iphone-04-chat-blocked-thread.png`, `iphone-05-qr-url-emulation.png`, `iphone-06-vendor-menu.png`, `iphone-07-vendor-draw.png`, `iphone-08-account-deletion-confirm.png`, and `iphone-09-account-deleted.png`.
 - Clean 13-inch iPad Pro (M5) candidate, `2064×2752`, RGB PNG without alpha: `ipad-01-couple-menu.png`.
+- Additional `qa-website-chat-*.png` captures document the controlled app↔website chat round trip. They are internal QA evidence and may contain controlled test conversation/browser context; do not treat them as App Store marketing assets or publish them without a separate privacy/redaction review.
+- Three additional `qa-final-release-vendor-dashboard-*.jpg` captures at `368×800` document the top-frame/subframe regression and the visibly embedded Vimeo player. They are internal QA evidence only, are not an accepted App Store screenshot size, and may include test/dashboard or browser context; do not use them as marketing assets.
 
 All are under `assets/app-store/screenshots/`. The two Pro Max images are the only shots currently designated as clean, primary 6.9-inch marketing assets. The nine-file 6.3-inch set uses an accepted pixel size but remains QA evidence rather than an approved marketing set. The iPad image is clean and dimensionally eligible, but only one iPad scene exists; final set selection, exact-release consistency review, and App Store Connect upload/preview remain required.
 
@@ -34,7 +36,7 @@ All are under `assets/app-store/screenshots/`. The two Pro Max images are the on
 
 Optional seventh image:
 
-- About / Privacy / Delete Account, captioned `Privacy and account controls are easy to find`. Working-tree confirmation/success evidence exists in `iphone-08-account-deletion-confirm.png` and `iphone-09-account-deleted.png` after the fresh disposable email-account pass. Final use remains Pending `DEV-10`, the shared-conversation product/legal decision, and capture at an accepted size from the final release source. The public request page is supplemental for users who cannot sign in; do not depict it as the app's only deletion method.
+- About / Privacy / Delete Account, captioned `Privacy and account controls are easy to find`. Confirmation/cancel screenshots exist from the final Release Simulator and the deployed two-account deletion behavior passed live. Final marketing use remains Pending `DEV-10`, physical Apple/provider/backup and exact TestFlight testing, owner/legal approval of the finite retention duration/criterion, and capture at an accepted App Store size. The public request page is supplemental for users who cannot sign in; do not depict it as the app's only deletion method.
 
 ## iPhone capture checklist
 

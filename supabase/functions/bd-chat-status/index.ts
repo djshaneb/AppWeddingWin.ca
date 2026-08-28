@@ -8,6 +8,7 @@ import {
   BdRateLimitError,
   cachedUsersByIds,
   getSessionUser,
+  hasPrivateAppReviewerAccess,
   loadSharedRateLimit,
   messageIsMineInThread,
   mirrorMessagesForThreads,
@@ -102,55 +103,6 @@ async function countUnreadAppMessages(
   return Array.isArray(data) ? data.length : 0;
 }
 
-async function sendExpoPushNotifications(bdMemberId: string, unreadCount: number) {
-  const { data: rows, error } = await admin
-    .from("app_push_tokens")
-    .select("id, expo_push_token, last_unread_count")
-    .eq("bd_member_id", bdMemberId)
-    .eq("enabled", true);
-
-  if (error || !rows?.length) return;
-
-  const rowsToNotify = rows.filter((row) => unreadCount > Number(row.last_unread_count || 0));
-  const allIds = rows.map((row) => row.id).filter(Boolean);
-
-  if (unreadCount <= 0) {
-    if (allIds.length) {
-      await admin
-        .from("app_push_tokens")
-        .update({ last_unread_count: 0, updated_at: new Date().toISOString() })
-        .in("id", allIds);
-    }
-    return;
-  }
-
-  if (!rowsToNotify.length) return;
-
-  await fetch("https://exp.host/--/api/v2/push/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Accept": "application/json" },
-    body: JSON.stringify(rowsToNotify.map((row) => ({
-      to: row.expo_push_token,
-      sound: "default",
-      badge: unreadCount,
-      title: "New WeddingWin message",
-      body: unreadCount === 1
-        ? "You have a new message."
-        : `You have ${unreadCount} new messages.`,
-      data: { screen: "chat" },
-    }))),
-  }).catch(() => undefined);
-
-  await admin
-    .from("app_push_tokens")
-    .update({
-      last_unread_count: unreadCount,
-      last_notified_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .in("id", rowsToNotify.map((row) => row.id).filter(Boolean));
-}
-
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
@@ -175,7 +127,10 @@ Deno.serve(async (request) => {
       }
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
     }
-    if (String(user.active ?? "").trim() !== "2") {
+    if (
+      String(user.active ?? "").trim() !== "2" &&
+      !(await hasPrivateAppReviewerAccess(user.user_id))
+    ) {
       return jsonResponse({ ok: false, error: "Active membership required" }, 403);
     }
 
@@ -249,10 +204,6 @@ Deno.serve(async (request) => {
     }
     const appUnreadCount = await countUnreadAppMessages(openAppThreads, userId, activeThreadToken);
     const unreadCount = bdUnreadCount + appUnreadCount;
-
-    if (!activeThreadToken) {
-      await sendExpoPushNotifications(userId, unreadCount);
-    }
 
     return jsonResponse({
       ok: true,

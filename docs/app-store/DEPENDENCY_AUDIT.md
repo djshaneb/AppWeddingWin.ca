@@ -2,7 +2,7 @@
 
 Status: **WORKING-TREE REMEDIATION RECORDED — repeat on the immutable release tag**
 
-Audited: 2026-08-28 against the then-current working-tree npm production dependency tree (`npm audit --omit=dev`). The package/lockfile changes were not yet a tagged release when this record was prepared.
+Audited: 2026-08-28 against the npm production dependency tree (`npm audit --omit=dev`) recorded by local release-candidate tag `v1.0.0-rc.2`. No source has been pushed or used for a signed/TestFlight build.
 
 ## Changes applied
 
@@ -14,9 +14,10 @@ Audited: 2026-08-28 against the then-current working-tree npm production depende
 - Added the missing direct Expo asset peer/plugin, `expo-asset` `~12.0.13`, after `expo-doctor` identified it.
 - Applied lockfile-only safe audit remediation.
 - Pinned patched transitive versions for `brace-expansion` (`5.0.9`) and `postcss` (`8.5.26`) through npm `overrides`.
+- Pinned vulnerable transitive `uuid` releases below `11.1.1` to `11.1.1`, removing the remaining moderate build-tool advisory family.
 - Regenerated `package-lock.json` without changing package managers. This repository remains npm-based.
 
-The current working-tree checks report dependencies up to date and `expo-doctor` passes 18/18 checks. These are not final release-tag evidence; repeat them from a clean checkout.
+The local checks report dependencies up to date, `expo-doctor` passes 18/18 checks, typecheck and lint pass, and the complete shared Deno regression suite passes **60/60**. The tested source is recorded by local tag `v1.0.0-rc.2`; repeat the checks from a clean tag checkout before any push or TestFlight claim.
 
 ## Before and after
 
@@ -24,17 +25,15 @@ The current working-tree checks report dependencies up to date and `expo-doctor`
 | --- | ---: | ---: |
 | Critical | 2 | 0 |
 | High | not release-recorded separately | 8 |
-| Moderate | not release-recorded separately | 13 |
-| Total | 33 | 21 |
+| Moderate | not release-recorded separately | 0 |
+| Total | 33 | 8 |
 
 ## Remaining findings
 
-The remaining audit entries roll up through Expo/Metro's local build toolchain. The two underlying unresolved packages are:
+The remaining audit entries roll up through Expo/Metro's local build toolchain. The only underlying unresolved package is:
 
 - `image-size@1.2.1` through Metro: denial-of-service advisories in optional image parsers. Metro processes developer-supplied project assets while building; this package is not bundled as executable application code on the user's iPhone.
-- `uuid@7.0.3` through Expo's `xcode`/code-signing helper dependencies: a bounds-check advisory for APIs that accept a caller-supplied output buffer. This is also build tooling, not application runtime code.
-
-npm expands those build-tool families into 8 high and 13 moderate package-level findings across Expo, Metro, configuration, assets, and routing packages. npm's advertised automatic fix is an invalid downgrade/major migration (for example, proposing Expo 46 or SDK 57-family packages for an SDK 54 application), so `npm audit fix --force` was deliberately not used.
+npm expands that build-tool family into 8 high package-level findings across Expo and Metro packages. The current audit advertises a forced Expo 57 migration as the automatic fix, which is a breaking SDK change rather than a safe patch for this release candidate, so `npm audit fix --force` was deliberately not used.
 
 ## Release decision
 

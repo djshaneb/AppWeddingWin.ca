@@ -238,8 +238,10 @@ async function saveAppReviewFixtureScan(fixture: AppReviewRaffleFixture) {
       fixture_id: fixture.id,
       couple_bd_user_id: fixture.couple_bd_user_id,
       vendor_bingo_id: fixture.vendor_bingo_id,
-      scanned_at: new Date().toISOString(),
-    }, { onConflict: "fixture_id,couple_bd_user_id,vendor_bingo_id" });
+    }, {
+      onConflict: "fixture_id,couple_bd_user_id,vendor_bingo_id",
+      ignoreDuplicates: true,
+    });
   if (error) throw error;
 }
 

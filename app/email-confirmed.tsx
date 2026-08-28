@@ -1,8 +1,7 @@
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
-import * as WebBrowser from 'expo-web-browser';
 
 const BRAND_COLOR = '#C66A6A';
 const APP_BACKEND_URL = 'https://pszcjoyabwvzsxxjtkhs.supabase.co';
@@ -11,7 +10,7 @@ const APP_BACKEND_PUBLISHABLE_KEY =
 const NATIVE_MEMBER_SESSION_KEY = 'weddingwin.nativeMember.v1';
 const NATIVE_BRIDGE_SESSION_KEY = 'weddingwin.nativeBridgeSession.v1';
 
-async function refreshConfirmedEmail(email: string) {
+async function refreshConfirmedEmail() {
   const storedSession = await SecureStore.getItemAsync(NATIVE_BRIDGE_SESSION_KEY);
   if (!storedSession) return;
 
@@ -27,7 +26,7 @@ async function refreshConfirmedEmail(email: string) {
     },
     body: JSON.stringify({
       native_session: nativeSession,
-      profile: { email },
+      action: 'refresh',
     }),
   });
   const data = await response.json();
@@ -43,31 +42,10 @@ async function refreshConfirmedEmail(email: string) {
 }
 
 export default function EmailConfirmedScreen() {
-  const params = useLocalSearchParams<{
-    app_login_url?: string;
-    email?: string;
-  }>();
-
   useEffect(() => {
-    const appLoginUrl = Array.isArray(params.app_login_url)
-      ? params.app_login_url[0]
-      : params.app_login_url;
-    const email = Array.isArray(params.email) ? params.email[0] : params.email;
-
-    if (appLoginUrl) {
-      WebBrowser.openAuthSessionAsync(appLoginUrl, 'https://www.weddingwin.ca/auth-callback')
-        .catch(() => {})
-        .finally(() => {
-          router.replace('/(tabs)');
-        });
-      return;
-    }
-
     let cancelled = false;
     const finish = async () => {
-      if (email) {
-        await refreshConfirmedEmail(email).catch(() => {});
-      }
+      await refreshConfirmedEmail().catch(() => {});
       if (!cancelled) router.replace('/(tabs)');
     };
 
@@ -76,7 +54,7 @@ export default function EmailConfirmedScreen() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [params.app_login_url, params.email]);
+  }, []);
 
   return (
     <View style={styles.container}>

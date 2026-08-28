@@ -1,4 +1,8 @@
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
+import {
+  createOAuthLoginAttempt,
+  prepareOAuthBinding,
+} from "../_shared/oauth_attempt.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -97,6 +101,15 @@ Deno.serve(async (req: Request) => {
     const finalRedirect = allowedFinalRedirect(
       url.searchParams.get("redirect_to") || "https://www.weddingwin.ca/",
     );
+    const requestedCodeChallenge = String(url.searchParams.get("code_challenge") || "").trim();
+    const nativeRedirect = finalRedirect.startsWith("weddingwin:");
+    if (nativeRedirect && !/^[A-Za-z0-9_-]{43,128}$/.test(requestedCodeChallenge)) {
+      return new Response(JSON.stringify({ error: "A valid native PKCE code challenge is required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+    const stateCodeChallenge = requestedCodeChallenge || b64urlBytes(crypto.getRandomValues(new Uint8Array(32)));
     const subscriptionId = requestedSubscriptionId(url.searchParams.get("subscription_id"));
     const consent = consentFromUrl(url);
 
@@ -115,14 +128,24 @@ Deno.serve(async (req: Request) => {
 
     const clientId = data.value;
     const nonce = crypto.randomUUID();
+    const expiresAt = Math.floor(Date.now() / 1000) + 600;
     const statePayload = {
       r: finalRedirect,
       n: nonce,
       s: subscriptionId,
       c: consent,
-      exp: Math.floor(Date.now() / 1000) + 600,
+      p: stateCodeChallenge,
+      exp: expiresAt,
     };
     const state = await signState(statePayload);
+    const binding = prepareOAuthBinding(req, "google");
+    await createOAuthLoginAttempt({
+      admin,
+      provider: "google",
+      state,
+      bindingSecret: binding.bindingSecret,
+      expiresAtSeconds: expiresAt,
+    });
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -144,6 +167,7 @@ Deno.serve(async (req: Request) => {
         ...corsHeaders,
         Location: googleUrl,
         "Cache-Control": "no-store",
+        "Set-Cookie": binding.setCookie,
       },
     });
   } catch (e) {

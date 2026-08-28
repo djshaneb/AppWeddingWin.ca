@@ -2,18 +2,19 @@
 
 Status: **DRAFT RUNBOOK — no App Store distribution archive has been created or uploaded.**
 
-The repository is an Expo managed app with no committed `ios/` directory. `eas.json` now exists, but the release configuration is not linked to an Expo project and the submit profile is not linked to an App Store Connect app. Current working-tree Release builds passed a fresh email-account deletion run on an iPhone 17 Pro Simulator and reviewer-couple login/menu smoke on a 13-inch iPad Pro (M5) Simulator. Simulator signing is not App Store distribution signing, and the final source must be rebuilt after all release changes.
+The repository is an Expo managed app with no committed `ios/` directory. `eas.json` now exists, but the release configuration is not linked to an Expo project and the submit profile is not linked to an App Store Connect app. The fresh current-source local Release build completed in **38.2 seconds** and launched on an iPhone 17 Pro Max Simulator, iOS 26.5; its generated Info.plist was inspected and contains only the native QR-camera usage description, with no photo-library, microphone, or background-mode declaration. Reviewer login/bridge/dashboard, visibly embedded Vimeo playback without a Safari escape, the controlled private reviewer-pair text round trip, QR/deletion-confirmation, and icon checks passed in the recorded local flow. A fresh two-account deletion-preservation test passed against the live backend, and reviewer login/menu passed on a 13-inch iPad Pro (M5) Simulator. Simulator signing is not App Store distribution signing, so the processed TestFlight build still requires a complete physical pass.
 
 ## Current blocked state (2026-08-28)
 
 The current working-tree configuration has:
 
 - app version `1.0.0`, iOS build number `1`, and bundle ID `ca.weddingwin.app`;
-- `ITSAppUsesNonExemptEncryption: false`, iPad support, Sign in with Apple, camera/photo purpose strings, and the production icon in `app.json`;
+- `ITSAppUsesNonExemptEncryption: false`, iPad support, Sign in with Apple, the QR-camera purpose string, no native photo-library purpose string, and the production icon in `app.json`;
+- no `UIBackgroundModes: remote-notification` declaration; the generated local Release Info.plist was verified to contain no background mode, photo-library purpose string, or microphone purpose string, and the final signed archive must preserve that posture;
 - local app-version sourcing and production `autoIncrement: true` in `eas.json`;
-- no `extra.eas.projectId` and no `submit.production.ios.ascAppId`. The empty `extra.googleOAuth.iosClientId` field is not consumed by the shipped custom Google flow; Google login uses the system browser and server-backed start/callback functions. Remove the dead field or document why it remains, and verify the server credentials/redirects rather than adding a client ID that the app does not read.
+- no `extra.eas.projectId` and no `submit.production.ios.ascAppId`. The former blank `extra.googleOAuth.iosClientId` field has been removed. Google login uses the system browser and server-backed start/callback functions, so verify those production credentials and redirects rather than adding a client ID that the app does not read.
 
-This preparation environment has no authenticated Expo owner/project session or Apple Developer/App Store Connect session, and no available Apple Distribution certificate, App Store provisioning profile, APNs credential, App Store Connect API key, archive, IPA, or TestFlight build. Production signing, upload, real Sign in with Apple, and push testing are therefore **blocked on owner-controlled credentials and account configuration**. Real Google login is also pending on the final TestFlight build and deployed server OAuth configuration, but it does not depend on the unused blank `iosClientId` field. Store credentials in Apple/Expo/EAS/server secure systems or the team password manager; never add them to the repository.
+This preparation environment has no authenticated Expo owner/project session or Apple Developer/App Store Connect session, and no available Apple Distribution certificate, App Store provisioning profile, APNs credential, App Store Connect API key, archive, IPA, or TestFlight build. Production signing, upload, real Sign in with Apple, and push testing are therefore **blocked on owner-controlled credentials and account configuration**. Browser-bound OAuth/PKCE/replay controls are deployed and backend-tested, but real Google login is still pending on the final TestFlight build and approved production provider configuration; it does not depend on the unused blank `iosClientId` field. The exact live migration/function inventory is in `SUPABASE_DEPLOYMENT_PROVENANCE.md`. Store credentials in Apple/Expo/EAS/server secure systems or the team password manager; never add them to the repository.
 
 ## Recommended choice: EAS Build + EAS Submit
 
@@ -27,8 +28,9 @@ Choose local Xcode instead when the owner requires all signing/build operations 
 - [ ] Accept every current agreement in Apple Developer and App Store Connect.
 - [ ] Confirm the Account Holder/Admin can create identifiers, certificates, APNs keys and App Store Connect apps.
 - [ ] Decide who owns the Expo organization/project; avoid linking production to an individual contractor account.
-- [ ] Finish source cleanup, review all changes, commit the tested release, and create a release tag only after final tests. Record commit and tag in the release ticket.
+- [x] Finalized and reviewed the complete source and created local release commit/tag `v1.0.0-rc.2`. Record it in the private release ticket before any separate push; no corresponding signed/TestFlight build is currently recorded.
 - [ ] Use a password manager. Do not put an Apple password, app-specific password, `.p8` key, certificate, provisioning profile, reviewer password, Supabase service key or Expo token in Git.
+- [ ] With explicit approval for the sensitive paste, rotate `APP_EMAIL_CHANGE_SECRET` atomically across live Supabase and Brilliant Directories widget `329`; Supabase currently lacks the replacement while widget `329` retains the prior hardcoded value. Never record either value in the repository or release ticket.
 
 ## Phase 1 — Apple identifiers and app record
 
@@ -96,9 +98,10 @@ Before building:
 - [ ] Obtain owner/legal approval for the current `ios.infoPlist.ITSAppUsesNonExemptEncryption: false` classification and answer App Store Connect consistently.
 - [ ] Add the organization-owned `extra.eas.projectId` and verify the app can obtain an Expo push token in the signed TestFlight build.
 - [ ] Add `submit.production.ios.ascAppId` after the App Store Connect app record exists.
-- [ ] Confirm the Google OAuth start/callback functions use the approved production provider credentials and redirect allowlist. Remove or document the unused blank `extra.googleOAuth.iosClientId` field. Do not claim Google login works until the exact TestFlight build passes on a physical iPhone.
+- [ ] Confirm the Google OAuth start/callback functions use the approved production provider credentials and redirect allowlist. Do not reintroduce an unused `extra.googleOAuth.iosClientId`. Do not claim Google login works until the exact TestFlight build passes on a physical iPhone.
 - [ ] Confirm the final `ios.entitlements` contains production APNs and Sign in with Apple through generated signing, not a development-only entitlement.
-- [ ] Confirm the icon, camera/photo purpose strings, URL scheme, bundle ID, version and iPad support.
+- [ ] Confirm the icon, QR-camera purpose string, absence of a native photo-library permission declaration while image sending is disabled, URL scheme, bundle ID, version and iPad support.
+- [ ] Inspect the generated Info.plist and confirm it does not reintroduce `UIBackgroundModes: remote-notification`; visible foreground/background/terminated notification behavior must still pass on hardware.
 - [ ] Store production environment variables/secrets in EAS project secrets, never in app-bundled `extra` if secret.
 
 ## Phase 3 — credentials and production build
@@ -120,7 +123,7 @@ Production push is not ready merely because `expo-notifications` is installed. B
 - the Expo project ID in the binary matches the intended production EAS project;
 - the explicit Apple App ID has Push Notifications enabled and the distribution profile contains the correct `aps-environment` entitlement;
 - EAS/Expo has a valid APNs key for the correct Apple team and bundle ID;
-- the deployed token-registration and push-sweep functions point to the production Supabase project and reject unauthorized registration;
+- the deployed token-registration and `bd-push-sweep` v8 functions point to the production Supabase project and reject unauthorized registration; migration `20260828214927` supplies durable bounded retry, `Retry-After`, and receipt expiry;
 - sign-out and account deletion disable every token associated with the member; and
 - a real iPhone receives generic, non-message-content notifications in foreground, background, and terminated states, and tapping routes to the expected conversation.
 
@@ -182,21 +185,21 @@ Required flows:
 
 - [ ] Fresh install, upgrade and reinstall.
 - [ ] Couple and vendor email login; wrong password; password reset.
-- [ ] Real Sign in with Apple, including Hide My Email and returning-user flow.
-- [ ] Real Google production OAuth and return to the app.
+- [ ] Real Sign in with Apple, including Hide My Email, returning-user flow, one-time website app-login exchange, and production rejection of Expo Go's shared audience (`ALLOW_EXPO_GO_APPLE_AUD` unset/disabled).
+- [ ] Real Google production OAuth and PKCE-bound one-time return/exchange to the app. Browser binding, missing/mismatched-cookie rejection, expiry, and replay rejection already have controlled backend evidence; repeat them through the real provider and confirm callback URLs/logs contain no member/session credentials.
 - [ ] Sign out clears native session, website cookies/cache and server push token.
-- [ ] Printed `sample-qr-review-vendor-38970.png` scans in normal/low light; duplicate and invalid QR handling; isolated review state is reset before the run.
+- [ ] Printed `sample-qr-review-vendor-38970.png` scans in normal/low light; duplicate and invalid QR handling; isolated review state is reset before the run. Backend replay idempotency is already live and verified through JWT-protected `bd-qr-bingo-sync` v13 (one row and unchanged original timestamp), but this does not prove camera permission, optics, or exact-build behavior.
 - [ ] Couple scan progress and separate vendor-draw opt-in/data-sharing consent.
 - [ ] Verify that vendor-draw entry does not subscribe the couple to marketing. Only selected-potential-winner contact may be disclosed to the vendor, solely for verification/prize fulfilment. Reviewer-fixture and production draw email remain suppressed unless a separately approved fulfilment configuration is enabled later.
-- [ ] Native text chat app→website and website→app. Confirm image-send UI/media permission remains disabled in this release.
-- [ ] Chat report closes the current website conversation and the app blocks/suppresses the reported member. Test an external website fresh-thread attempt and record the known sync-close limitation; do not claim preventive website-wide blocking without a website-side creation hook.
-- [ ] Foreground, background and force-quit push delivery; tap routes to chat; badge clears; payload contains no private text.
+- [ ] Repeat the prepared exact reviewer-pair text round trip on TestFlight. The local/live pass recorded app→website visibility in authenticated Chrome and the supported active-couple website→private-vendor-app reply after reload, in the database/API mirror, and as an incoming native Simulator bubble. Service-only, expiring pair access is deployed through migrations `20260828221025` and `20260828221307`, `bd-chat-sync` v38, and `bd-chat-status` v26. The inactive vendor website send is correctly blocked and must not be treated as delivered. Confirm image-send UI/media permission remains disabled in this release.
+- [ ] Chat report closes the current website conversation and the app blocks/suppresses the reported member. Same-sync closure of a newly discovered alias is deployed and controlled app/website tests passed; repeat on TestFlight, test an external website fresh-thread attempt, and record the remaining pre-sync limitation. Do not claim preventive website-wide blocking without a website-side creation hook.
+- [ ] Foreground, background and force-quit push delivery through the centralized sweep worker; tap routes to chat; badge clears; payload contains no private text; accepted Expo tickets and later receipts/errors are recorded; invalid-device tokens disable; retry/backoff and ambiguous-network behavior do not create an unacceptable duplicate. Backend retry controls are deployed, but this row requires APNs and a physical TestFlight build.
 - [ ] Vendor dashboard and vendor-draw settings/test-only potential-winner flow in isolated event `app-review-weddingwin-2026-38970`; confirm no production entrant data or email delivery.
-- [ ] Confirm private/nonpublic vendor `38970` can authenticate and use its documented dashboard/native-text-chat/draw paths while remaining absent from public directory/search/profile/event/marketing surfaces. The fixture is prepared, but this exact-build pass is still required.
-- [ ] Account deletion across every data store and Sign in with Apple revocation where applicable. Inspect both sides of a shared conversation and obtain owner/legal/product approval for the current complete-conversation purge.
+- [ ] Confirm private/nonpublic vendor `38970` can authenticate and use its documented dashboard/native-text-chat/draw paths only with paired couple `38971` while remaining absent from public directory/search/profile/event/marketing surfaces. Pair authorization is service-only and expiry-gated; keep it active for the review window. Native chat and the local Release dashboard/Vimeo embedding passed, but draw, signed-out privacy, and exact TestFlight verification remain required.
+- [ ] Account deletion across every data store and Sign in with Apple revocation where applicable. Verify account-owned data is removed, conversations are closed/blocked, the surviving participant retains read-only shared history/moderation evidence, and owner/legal has approved the finite retention duration/criterion and exceptions.
 - [ ] Camera and notifications denied, later enabled, and permanently denied in Settings. Confirm the disabled image-send path never prompts for photo access.
 - [ ] iPad layout, keyboard, modals, WebView pages, rotation/window behavior and screenshots.
-- [ ] Reverify final WebView hardening: only approved WeddingWin hosts remain in-app, external/off-domain URLs open through the intended system-browser path or are blocked, third-party cookies are disabled unless specifically justified, pop-ups/redirects cannot bypass the policy, and required login/logout flows still work.
+- [ ] Reverify final WebView hardening. The focused source suite passes **7/7** and the local Release dashboard stayed in-app with Vimeo visibly embedded. Top-frame routing is unchanged: only approved WeddingWin/WedWebsite HTTPS hosts remain in-app and unrelated HTTPS uses the system-browser path. Non-top-frame navigation may stay embedded only for HTTPS and `about:blank`; `http:`, `javascript:`, `data:`, and `file:` subframes must remain blocked. On TestFlight, also verify third-party cookies remain disabled, redirects/pop-ups cannot bypass either rule, and required login/logout flows still work.
 - [ ] Airplane mode, slow network, API timeout/rate limit and backend recovery.
 - [ ] Review device/system logs for crashes, fatal exceptions, privacy/entitlement errors and repeated network/auth failures.
 

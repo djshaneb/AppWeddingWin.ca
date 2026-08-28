@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
+  AccessibilityInfo,
   Alert,
   ActivityIndicator,
   AppState,
@@ -27,15 +28,16 @@ import {
 } from 'react-native-webview';
 import * as AuthSession from 'expo-auth-session';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 import {
   CameraView,
   useCameraPermissions,
   type BarcodeScanningResult,
 } from 'expo-camera';
 import Constants from 'expo-constants';
+import { StatusBar } from 'expo-status-bar';
 import { createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
-import * as ImagePicker from 'expo-image-picker';
 import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
@@ -50,7 +52,6 @@ import {
   LayoutDashboard,
   LockKeyhole,
   Mail,
-  ImagePlus,
   MessageCircle,
   QrCode,
   ScanLine,
@@ -64,6 +65,8 @@ import {
 import {
   isWeddingWinHost,
   isWedWebsiteHost,
+  qrPayloadUrlAllowed,
+  webViewSubframeUrlAllowed,
   webViewUrlAction,
 } from '../../lib/webview_url_policy';
 
@@ -76,7 +79,7 @@ Notifications.setNotificationHandler({
   }),
 });
 
-type ShouldStartLoadRequest = { url: string };
+type ShouldStartLoadRequest = { url: string; isTopFrame: boolean };
 type SignupRole = 'couple' | 'vendor';
 type LoginCredentials = { email: string; password: string; role?: SignupRole };
 type ContactProfile = {
@@ -126,6 +129,10 @@ type NativeBridgeSession = {
 
 function hasNativeBridgeSession(session?: NativeBridgeSession | null) {
   return !!session?.user_id && (!!session.token || !!session.cookie);
+}
+
+function hasNativeTokenSession(session?: NativeBridgeSession | null) {
+  return !!session?.user_id && !!session.token;
 }
 
 type ChatStatus = {
@@ -424,6 +431,17 @@ function isTrustedWebsiteBridgeUrl(url: unknown): boolean {
   }
 }
 
+function isOneTimeAppLoginUrl(url: unknown): boolean {
+  try {
+    const parsed = new URL(String(url || ''));
+    return isTrustedWebsiteBridgeUrl(parsed.toString()) &&
+      parsed.pathname === '/app-login' &&
+      /^[A-Za-z0-9_-]{43}$/.test(parsed.searchParams.get('code') || '');
+  } catch {
+    return false;
+  }
+}
+
 function isBdAppGoogleLoginUrl(url: string): boolean {
   try {
     const u = new URL(url);
@@ -438,6 +456,15 @@ function isBdAppGoogleLoginUrl(url: string): boolean {
   }
 }
 
+function isGoogleIdentityUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname.toLowerCase() === 'accounts.google.com';
+  } catch {
+    return false;
+  }
+}
+
 function membershipPlanForRole(role: SignupRole) {
   return role === 'vendor' ? VENDOR_MEMBERSHIP_PLAN_ID : COUPLE_MEMBERSHIP_PLAN_ID;
 }
@@ -445,11 +472,13 @@ function membershipPlanForRole(role: SignupRole) {
 function buildNativeGoogleStartUrl(
   returnUrl: string,
   role: SignupRole,
+  codeChallenge: string,
   consent?: SignupConsent
 ): string {
   const url = new URL('/auth/google-start', TARGET_URL);
   url.searchParams.set('redirect_to', returnUrl);
   url.searchParams.set('subscription_id', membershipPlanForRole(role));
+  url.searchParams.set('code_challenge', codeChallenge);
   if (consent) {
     url.searchParams.set('accepted_terms', '1');
     url.searchParams.set('accepted_privacy', '1');
@@ -460,33 +489,23 @@ function buildNativeGoogleStartUrl(
   return url.toString();
 }
 
-function decodeBase64UrlJson<T>(value: string | null): T | null {
-  try {
-    if (!value || typeof globalThis.atob !== 'function') return null;
-    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized.padEnd(
-      normalized.length + ((4 - (normalized.length % 4)) % 4),
-      '='
-    );
-    const decoded = globalThis.atob(padded);
-    const unicodeDecoded = decodeURIComponent(
-      decoded
-        .split('')
-        .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`)
-        .join('')
-    );
-    return JSON.parse(unicodeDecoded);
-  } catch {
-    return null;
-  }
+function base64UrlFromBytes(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return globalThis.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function buildTokenLoginUrl(token: string, accountPath: string): string {
-  const directPath = accountPath
-    .replace(/^\/account\/?/, '/')
-    .replace(/^\/$/, '/home');
-
-  return `${TARGET_URL}/login/token/${encodeURIComponent(token)}${directPath}`;
+async function createGooglePkcePair() {
+  const codeVerifier = base64UrlFromBytes(await Crypto.getRandomBytesAsync(32));
+  const base64Challenge = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    codeVerifier,
+    { encoding: Crypto.CryptoEncoding.BASE64 }
+  );
+  return {
+    codeVerifier,
+    codeChallenge: base64Challenge.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  };
 }
 
 const IOS_USER_AGENT =
@@ -1027,7 +1046,7 @@ function vendorIdentityTokens(vendor: QrBingoVendor): Set<string> {
 
 function matchQrBingoVendor(value: string, vendors: QrBingoVendor[]) {
   const raw = value.trim();
-  if (!raw) return null;
+  if (!qrPayloadUrlAllowed(raw)) return null;
 
   const normalizedUrl = normalizedVendorProfileUrl(raw);
 
@@ -1065,11 +1084,11 @@ function NativeQrScanner({
   onScan: (value: string) => void;
   nativeSession: NativeBridgeSession | null;
 }) {
-  const simulatorQrTestPayload = useMemo(() => {
-    const configuredPayload = Constants.expoConfig?.extra?.simulatorQrTestPayload;
-    return typeof configuredPayload === 'string' ? configuredPayload.trim() : '';
-  }, []);
   const [permission, requestPermission] = useCameraPermissions();
+  const requestCameraPermissionRef = useRef(requestPermission);
+  const canRequestCameraPermission = Boolean(
+    permission && !permission.granted && permission.canAskAgain
+  );
   const [scanLocked, setScanLocked] = useState(false);
   const [loadingBingo, setLoadingBingo] = useState(false);
   const [savingBingo, setSavingBingo] = useState(false);
@@ -1089,6 +1108,10 @@ function NativeQrScanner({
   const [residencyAttested, setResidencyAttested] = useState(false);
   const [exclusionsAttested, setExclusionsAttested] = useState(false);
   const scanFeedbackClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    requestCameraPermissionRef.current = requestPermission;
+  }, [requestPermission]);
 
   const resetEligibilityAttestations = useCallback(() => {
     setAgeOfMajorityAttested(false);
@@ -1111,6 +1134,9 @@ function NativeQrScanner({
     clearScanFeedbackTimer();
     setLastScanLabel(label);
     setLastScanTone(tone);
+    if (label) {
+      AccessibilityInfo.announceForAccessibility(`QR scan result: ${label}`);
+    }
 
     if (clearAfterMs) {
       scanFeedbackClearTimerRef.current = setTimeout(() => {
@@ -1175,10 +1201,10 @@ function NativeQrScanner({
     setExclusionsAttested(false);
     setBingoTotalCount(null);
     loadBingoCard();
-    if (permission && !permission.granted && permission.canAskAgain) {
-      requestPermission().catch(() => {});
+    if (canRequestCameraPermission) {
+      requestCameraPermissionRef.current().catch(() => {});
     }
-  }, [loadBingoCard, permission, requestPermission, showScanFeedback, visible]);
+  }, [canRequestCameraPermission, loadBingoCard, showScanFeedback, visible]);
 
   useEffect(() => clearScanFeedbackTimer, [clearScanFeedbackTimer]);
 
@@ -1305,8 +1331,12 @@ function NativeQrScanner({
       if (!response.ok || data?.ok === false) {
         throw new Error(data?.detail || data?.error || 'Could not enter this draw.');
       }
-      setLastScanLabel(data.already_entered ? 'You are already entered for this vendor draw.' : `Entered: ${raffleOffer.vendor_name} draw`);
-      setLastScanTone('success');
+      showScanFeedback(
+        data.already_entered
+          ? 'You are already entered for this vendor draw.'
+          : `Entered: ${raffleOffer.vendor_name} draw`,
+        'success'
+      );
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setRaffleOffer(null);
       resetEligibilityAttestations();
@@ -1315,7 +1345,7 @@ function NativeQrScanner({
     } finally {
       setRaffleSaving(false);
     }
-  }, [ageOfMajorityAttested, exclusionsAttested, nativeSession, raffleOffer, raffleRulesViewedVersion, raffleSaving, resetEligibilityAttestations, residencyAttested]);
+  }, [ageOfMajorityAttested, exclusionsAttested, nativeSession, raffleOffer, raffleRulesViewedVersion, raffleSaving, resetEligibilityAttestations, residencyAttested, showScanFeedback]);
 
   const enterGrandPrize = useCallback(async () => {
     if (!grandPrizeOffer || grandPrizeSaving || !nativeSession?.user_id || !nativeSession?.token) return;
@@ -1375,7 +1405,12 @@ function NativeQrScanner({
   const eligibilityConfirmed = ageOfMajorityAttested && residencyAttested && exclusionsAttested;
 
   return (
-    <View style={styles.qrOverlay}>
+    <View
+      style={styles.qrOverlay}
+      accessibilityViewIsModal
+      importantForAccessibility="yes"
+      onAccessibilityEscape={onClose}>
+      <StatusBar style="light" animated />
       <View style={styles.qrHeader}>
         <View>
           <Text style={styles.qrEyebrow}>Niagara Wedding Show</Text>
@@ -1399,6 +1434,8 @@ function NativeQrScanner({
             <CameraView
               style={styles.qrCamera}
               facing="back"
+              accessible={false}
+              importantForAccessibility="no-hide-descendants"
               barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
               onBarcodeScanned={scanLocked ? undefined : handleBarcodeScanned}
             />
@@ -1424,7 +1461,9 @@ function NativeQrScanner({
                   lastScanTone === 'error' && styles.qrCameraFeedbackError,
                   lastScanTone === 'success' && styles.qrCameraFeedbackSuccess,
                 ]}
-                pointerEvents="none">
+                pointerEvents="none"
+                accessible={false}
+                importantForAccessibility="no-hide-descendants">
                 <Text style={styles.qrCameraFeedbackText} numberOfLines={2}>
                   {lastScanLabel}
                 </Text>
@@ -1457,22 +1496,6 @@ function NativeQrScanner({
       </View>
 
       <View style={styles.qrFooter}>
-        {simulatorQrTestPayload ? (
-          <TouchableOpacity
-            testID="simulate-qr-scan-button"
-            style={[
-              styles.qrSimulatorButton,
-              (scanLocked || savingBingo || loadingBingo) && styles.qrSimulatorButtonDisabled,
-            ]}
-            activeOpacity={0.82}
-            onPress={() => handleBarcodeScanned({ data: simulatorQrTestPayload } as BarcodeScanningResult)}
-            disabled={scanLocked || savingBingo || loadingBingo}
-            accessibilityRole="button"
-            accessibilityLabel="Simulate QR scan"
-            accessibilityState={{ disabled: scanLocked || savingBingo || loadingBingo }}>
-            <Text style={styles.qrSimulatorButtonText}>Simulate QR scan</Text>
-          </TouchableOpacity>
-        ) : null}
         <View style={styles.qrProgressHeader}>
           <Text style={styles.qrFooterTitle}>{scannedCount} / {totalLabel} scanned</Text>
           <Text style={styles.qrProgressPercent}>{progressPercent}%</Text>
@@ -1490,7 +1513,9 @@ function NativeQrScanner({
               lastScanTone === 'duplicate' && styles.qrLastScanDuplicate,
               lastScanTone === 'error' && styles.qrLastScanError,
               completed && styles.qrLastScanComplete,
-            ]}>
+            ]}
+            accessibilityRole="text"
+            accessibilityLabel={`QR scan result: ${lastScanLabel}`}>
             {lastScanLabel}
           </Text>
         ) : (
@@ -1511,9 +1536,16 @@ function NativeQrScanner({
               return (
                 <View
                   key={vendor.id}
-                  style={[styles.qrVendorTile, isScanned && styles.qrVendorTileScanned]}>
+                  style={[styles.qrVendorTile, isScanned && styles.qrVendorTileScanned]}
+                  accessible
+                  accessibilityRole="text"
+                  accessibilityLabel={`${vendor.name}. ${isScanned ? 'Scanned' : 'Not scanned'}`}>
                   {vendor.cover_photo ? (
-                    <Image source={{ uri: vendor.cover_photo }} style={styles.qrVendorImage} />
+                    <Image
+                      source={{ uri: vendor.cover_photo }}
+                      style={styles.qrVendorImage}
+                      accessible={false}
+                    />
                   ) : (
                     <View style={styles.qrVendorImagePlaceholder}>
                       <QrCode size={22} color="#BFAFAA" strokeWidth={1.7} />
@@ -3671,8 +3703,6 @@ function NativeChatScreen({
   onDraftChange,
   onSelectThread,
   onSend,
-  onAttachImage,
-  imagesEnabled,
   onReport,
   onRefresh,
   onClose,
@@ -3696,8 +3726,6 @@ function NativeChatScreen({
   onDraftChange: (value: string) => void;
   onSelectThread: (threadToken: string) => void;
   onSend: () => void;
-  onAttachImage: () => void;
-  imagesEnabled: boolean;
   onReport: () => void;
   onRefresh: () => void;
   onClose: () => void;
@@ -3706,6 +3734,9 @@ function NativeChatScreen({
   openThreadRequestId: number;
   openingConversationLabel?: string;
 }) {
+  // This App Store release is intentionally text-only. Keep this local and
+  // immutable so a backend response cannot silently enable photo collection.
+  const imagesEnabled = false;
   const [threadSort, setThreadSort] = useState<ChatThreadSort>('recent');
   const [chatView, setChatView] = useState<'list' | 'thread'>('list');
   const handledOpenThreadRequestRef = useRef(0);
@@ -4151,20 +4182,6 @@ function NativeChatScreen({
           </View>
         ) : null}
         <View style={styles.chatComposer}>
-          {imagesEnabled ? (
-          <TouchableOpacity
-            style={[
-              styles.chatImageButton,
-              (sending || !selectedThreadToken) && styles.chatSendButtonDisabled,
-            ]}
-            disabled={sending || !selectedThreadToken}
-            activeOpacity={0.82}
-            onPress={onAttachImage}
-            accessibilityRole="button"
-            accessibilityLabel="Send an image">
-            <ImagePlus size={21} color={BRAND_COLOR} strokeWidth={2.2} />
-          </TouchableOpacity>
-          ) : null}
           <TextInput
             testID="chat-message-input"
             value={draft}
@@ -4256,7 +4273,6 @@ export default function HomeScreen() {
   const [nativeChatError, setNativeChatError] = useState<string | null>(null);
   const [nativeChatNotice, setNativeChatNotice] = useState<string | null>(null);
   const [nativeChatDraft, setNativeChatDraft] = useState('');
-  const [nativeChatImagesEnabled, setNativeChatImagesEnabled] = useState(false);
   const [nativeChatSyncDebug, setNativeChatSyncDebug] =
     useState<NativeChatSyncResponse['sync_debug'] | null>(null);
   const [nativeChatThreadOpen, setNativeChatThreadOpen] = useState(false);
@@ -4360,6 +4376,10 @@ true;
       const projectId =
         Constants.easConfig?.projectId ||
         (Constants.expoConfig?.extra?.eas as { projectId?: string } | undefined)?.projectId;
+      if (!projectId && !__DEV__) {
+        console.warn('Push registration skipped: EAS project ID is not configured.');
+        return;
+      }
       const tokenResult = projectId
         ? await Notifications.getExpoPushTokenAsync({ projectId })
         : await Notifications.getExpoPushTokenAsync();
@@ -4486,14 +4506,15 @@ true;
   }, []);
 
   useEffect(() => {
+    const nativeModalVisible = showNativeChat || showNativeQrScanner;
     navigation.setOptions({
-      tabBarStyle: showBrowser ? { display: 'none' } : TAB_BAR_STYLE,
+      tabBarStyle: showBrowser || nativeModalVisible ? { display: 'none' } : TAB_BAR_STYLE,
     });
 
     return () => {
       navigation.setOptions({ tabBarStyle: TAB_BAR_STYLE });
     };
-  }, [navigation, showBrowser]);
+  }, [navigation, showBrowser, showNativeChat, showNativeQrScanner]);
 
   const clearNativeSession = useCallback(() => {
     pendingBdFormLoginRef.current = null;
@@ -4510,7 +4531,6 @@ true;
     setNativeChatError(null);
     setNativeChatNotice(null);
     setNativeChatDraft('');
-    setNativeChatImagesEnabled(false);
     chatUnreadSnapshotRef.current = null;
     pushRegistrationKeyRef.current = '';
     expoPushTokenRef.current = '';
@@ -4705,7 +4725,12 @@ true;
       });
       const data = await response.json();
 
-      if (!response.ok || !data?.ok || !data?.user?.email) {
+      if (
+        !response.ok ||
+        !data?.ok ||
+        !data?.user?.email ||
+        !hasNativeTokenSession(data?.native_session)
+      ) {
         const detail =
           typeof data?.detail === 'string' && data.detail
             ? `: ${data.detail}`
@@ -4718,44 +4743,21 @@ true;
         return;
       }
 
-      const websiteLoginUrl =
-        typeof data.app_login_url === 'string' && data.app_login_url
-          ? data.app_login_url
-          : data.login_url;
-
-      if (typeof websiteLoginUrl !== 'string' || !websiteLoginUrl) {
-        Alert.alert(
-          'Login failed',
-          'WeddingWin did not return a website login link for this account.'
-        );
-        return;
-      }
-
-      addDebugLine(
-        websiteLoginUrl.includes('/app-login')
-          ? 'email login ok -> app-login bridge'
-          : websiteLoginUrl.includes('/login/fromsignup/')
-            ? 'email login ok -> BD fromsignup login'
-            : websiteLoginUrl.includes('/login/token/')
-              ? 'email login ok -> BD token login'
-              : 'email login ok -> fallback login url'
-      );
+      addDebugLine('email login ok -> native session');
       const signedInUser = withMemberRole(
         data.user as NativeMember,
         credentials.role || 'couple'
       );
       setNativeMember(signedInUser);
-      setNativeBridgeSession(data.native_session || null);
+      setNativeBridgeSession(data.native_session);
       SecureStore.setItemAsync(
         NATIVE_MEMBER_SESSION_KEY,
         JSON.stringify(signedInUser)
       ).catch(() => {});
-      if (data.native_session) {
-        SecureStore.setItemAsync(
-          NATIVE_BRIDGE_SESSION_KEY,
-          JSON.stringify(data.native_session)
-        ).catch(() => {});
-      }
+      SecureStore.setItemAsync(
+        NATIVE_BRIDGE_SESSION_KEY,
+        JSON.stringify(data.native_session)
+      ).catch(() => {});
 
       setShowBrowser(false);
     } catch {
@@ -4783,6 +4785,47 @@ true;
         JSON.stringify(session)
       ).catch(() => {});
     }
+  }, []);
+
+  const createWebsiteLoginBridge = useCallback(async (
+    session: NativeBridgeSession,
+    targetPath: '/account/home' | '/builder-sso'
+  ) => {
+    const response = await fetch(`${APP_BACKEND_URL}/functions/v1/bd-email-login`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+        apikey: APP_BACKEND_PUBLISHABLE_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ native_session: session, target_path: targetPath }),
+    });
+    const data = await response.json().catch(() => ({}));
+    const bridgeUrl = typeof data?.app_login_url === 'string' ? data.app_login_url : '';
+    let parsedBridge: URL | null = null;
+    try {
+      parsedBridge = new URL(bridgeUrl);
+    } catch {
+      parsedBridge = null;
+    }
+    if (
+      !response.ok ||
+      data?.ok !== true ||
+      !parsedBridge ||
+      !isOneTimeAppLoginUrl(parsedBridge.toString())
+    ) {
+      throw new Error(data?.error || 'A secure website session could not be created.');
+    }
+
+    if (data.native_session) {
+      const refreshedSession = { ...session, ...data.native_session };
+      setNativeBridgeSession(refreshedSession);
+      SecureStore.setItemAsync(
+        NATIVE_BRIDGE_SESSION_KEY,
+        JSON.stringify(refreshedSession)
+      ).catch(() => {});
+    }
+    return parsedBridge.toString();
   }, []);
 
   const runMemberSignup = useCallback(async (signup: MemberSignup) => {
@@ -4821,7 +4864,12 @@ true;
       });
       const data = await response.json();
 
-      if (!response.ok || !data?.ok || !data?.user?.email) {
+      if (
+        !response.ok ||
+        !data?.ok ||
+        !data?.user?.email ||
+        !hasNativeTokenSession(data?.native_session)
+      ) {
         const detail =
           typeof data?.detail === 'string' && data.detail
             ? `\n\n${data.detail}`
@@ -4839,7 +4887,7 @@ true;
         subscription_id:
           data.user?.subscription_id || membershipPlanForRole(signup.role),
       };
-      saveNativeSession(signedUpUser, data.native_session || null);
+      saveNativeSession(signedUpUser, data.native_session);
       setShowBrowser(false);
     } catch {
       Alert.alert('Signup unavailable', 'Please check your connection and try again.');
@@ -4919,14 +4967,18 @@ true;
 
       // Match the button promise: a successful save should continue directly
       // into the authenticated website dashboard, not stop at the app menu.
+      const websiteLoginUrl = await createWebsiteLoginBridge(
+        completedSession,
+        '/account/home'
+      );
       startBridgeRedirect();
-      openAbsoluteUrl(buildTokenLoginUrl(completedSession.token!, '/account/home'));
+      openAbsoluteUrl(websiteLoginUrl);
     } catch {
       Alert.alert('Profile not saved', 'Please check your connection and try again.');
     } finally {
       setProfileSaveLoading(false);
     }
-  }, [addDebugLine, nativeBridgeSession, nativeMember, openAbsoluteUrl, saveNativeSession, startBridgeRedirect]);
+  }, [addDebugLine, createWebsiteLoginBridge, nativeBridgeSession, nativeMember, openAbsoluteUrl, saveNativeSession, startBridgeRedirect]);
 
   const openDashboardWithBridge = useCallback(async () => {
     if (!nativeBridgeSession?.user_id || !nativeBridgeSession?.token) {
@@ -4945,10 +4997,18 @@ true;
       return;
     }
 
-    addDebugLine('open dashboard with saved BD token');
-    startBridgeRedirect();
-    openAbsoluteUrl(buildTokenLoginUrl(nativeBridgeSession.token, '/account/home'));
-  }, [addDebugLine, nativeBridgeSession, nativeMember, openAbsoluteUrl, startBridgeRedirect]);
+    try {
+      addDebugLine('open dashboard with one-time website bridge');
+      const bridgeUrl = await createWebsiteLoginBridge(nativeBridgeSession, '/account/home');
+      startBridgeRedirect();
+      openAbsoluteUrl(bridgeUrl);
+    } catch (error) {
+      Alert.alert(
+        'Dashboard unavailable',
+        error instanceof Error ? error.message : 'Please sign in again and try once more.'
+      );
+    }
+  }, [addDebugLine, createWebsiteLoginBridge, nativeBridgeSession, nativeMember, openAbsoluteUrl, startBridgeRedirect]);
 
   const openWebsiteBuilderWithBridge = useCallback(async () => {
     if (!nativeBridgeSession?.user_id || !nativeBridgeSession?.token) {
@@ -4967,10 +5027,18 @@ true;
       return;
     }
 
-    addDebugLine('open website builder with saved BD token');
-    startBridgeRedirect('/builder-sso');
-    openAbsoluteUrl(buildTokenLoginUrl(nativeBridgeSession.token, '/builder-sso'));
-  }, [addDebugLine, nativeBridgeSession, nativeMember, openAbsoluteUrl, startBridgeRedirect]);
+    try {
+      addDebugLine('open website builder with one-time website bridge');
+      const bridgeUrl = await createWebsiteLoginBridge(nativeBridgeSession, '/builder-sso');
+      startBridgeRedirect('/builder-sso');
+      openAbsoluteUrl(bridgeUrl);
+    } catch (error) {
+      Alert.alert(
+        'Website builder unavailable',
+        error instanceof Error ? error.message : 'Please sign in again and try once more.'
+      );
+    }
+  }, [addDebugLine, createWebsiteLoginBridge, nativeBridgeSession, nativeMember, openAbsoluteUrl, startBridgeRedirect]);
 
   const requestWebsiteSessionBridge = useCallback(() => {
     const bridgeNonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
@@ -5142,10 +5210,6 @@ true;
       });
       const data = (await response.json()) as NativeChatSyncResponse;
 
-      if (typeof data.chat_images_enabled === 'boolean') {
-        setNativeChatImagesEnabled(data.chat_images_enabled);
-      }
-
       if (!response.ok || data?.ok === false) {
         const detail = data?.detail ? ` ${data.detail}` : '';
         throw new Error(`${data?.error || 'Chat sync failed.'}${detail}`);
@@ -5158,7 +5222,6 @@ true;
       }
 
       const threads = data.threads || [];
-      setNativeChatImagesEnabled(data.chat_images_enabled === true);
       setNativeChatSyncDebug(data.sync_debug || null);
       const nextThreadToken = data.selected_thread_token || options.threadToken || threads[0]?.token || '';
       setNativeChatThreads(threads);
@@ -5451,75 +5514,6 @@ true;
     setNativeChatSending(false);
   }, [nativeChatDraft, nativeChatThreads, selectedChatThreadToken, syncNativeChat]);
 
-  const sendNativeChatImage = useCallback(async () => {
-    if (!nativeChatImagesEnabled) {
-      Alert.alert('Photo sharing unavailable', CHAT_IMAGES_DISABLED_NOTICE);
-      return;
-    }
-    if (!selectedChatThreadToken) return;
-    const selectedThread = nativeChatThreads.find((thread) => thread.token === selectedChatThreadToken);
-    if (selectedThread?.closed || selectedThread?.reported) {
-      setNativeChatError(selectedThread.report_notice || CHAT_REPORTED_NOTICE);
-      return;
-    }
-
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Photos permission needed', 'Allow photo access to send images in chat.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.7,
-      base64: true,
-    });
-    if (result.canceled) return;
-
-    const asset = result.assets[0];
-    if (!asset?.base64) {
-      Alert.alert('Image unavailable', 'Please choose a different image.');
-      return;
-    }
-
-    const mimeType = asset.mimeType || (asset.uri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
-    if (!/^image\/(png|jpe?g|gif|webp)$/i.test(mimeType)) {
-      Alert.alert('Unsupported image', 'Please choose a JPG, PNG, GIF, or WebP image.');
-      return;
-    }
-    const imageDataUri = `data:${mimeType};base64,${asset.base64}`;
-    setNativeChatSending(true);
-    setNativeChatNotice(null);
-    const sent = await syncNativeChat('send', {
-      threadToken: selectedChatThreadToken,
-      threadId: selectedThread?.thread_id || selectedThread?.id,
-      threadTitle: selectedThread?.title,
-      requestUri: selectedThread?.request_uri,
-      message: nativeChatDraft.trim(),
-      imageDataUri,
-    });
-    if (
-      sent?.send_delivery_state === 'stored' ||
-      sent?.send_delivery_state === 'delivered' ||
-      sent?.send_delivery_state === 'queued'
-    ) {
-      setNativeChatDraft('');
-      if (sent.send_delivery_state === 'queued') {
-        setNativeChatNotice('Message saved and queued for website delivery.');
-      }
-    } else if (sent?.send_delivery_state === 'failed') {
-      setNativeChatError(
-        sent.send_delivery_error || 'Message delivery failed. Your draft is still here so you can try again.'
-      );
-    } else if (sent) {
-      setNativeChatError(
-        sent.send_delivery_error || 'WeddingWin could not confirm delivery. Your draft is still here so you can try again.'
-      );
-    }
-    setNativeChatSending(false);
-  }, [nativeChatDraft, nativeChatImagesEnabled, nativeChatThreads, selectedChatThreadToken, syncNativeChat]);
-
   const reportNativeChatConversation = useCallback(() => {
     if (!selectedChatThreadToken) {
       Alert.alert('Choose a conversation', 'Select a message thread before reporting it.');
@@ -5746,7 +5740,7 @@ true;
         }),
       });
       const data = await response.json();
-      if (!response.ok || !data?.redirect_url) {
+      if (!response.ok || (!data?.user?.email && !data?.redirect_url)) {
         const diagnostic = data?.diagnostic_id ? `\n\nDiagnostic: ${data.diagnostic_id}` : '';
         Alert.alert(
           'Apple sign-in setup needed',
@@ -5755,20 +5749,28 @@ true;
         return;
       }
 
-      if (data?.user?.email) {
+      const hasNativeAppleSession = Boolean(
+        data?.native_session?.user_id && data?.native_session?.token
+      );
+
+      if (data?.user?.email && hasNativeAppleSession) {
         saveNativeSession(data.user, data.native_session || null, role);
       }
 
-      if (data?.user?.email && needsContactProfile(data.user)) {
+      if (data?.user?.email && hasNativeAppleSession && needsContactProfile(data.user)) {
         setShowBrowser(false);
         return;
       }
 
-      if (data?.user?.email) {
+      if (data?.user?.email && hasNativeAppleSession) {
         setShowBrowser(false);
         return;
       }
 
+      if (!data?.redirect_url) {
+        Alert.alert('Apple sign-in failed', 'WeddingWin could not create an app session.');
+        return;
+      }
       startBridgeRedirect();
       openAbsoluteUrl(data.redirect_url);
     } catch (e) {
@@ -5809,8 +5811,9 @@ true;
 
     setGoogleLoginLoading(true);
     try {
+      const { codeVerifier, codeChallenge } = await createGooglePkcePair();
       const result = await WebBrowser.openAuthSessionAsync(
-        buildNativeGoogleStartUrl(returnUrl, role, consent),
+        buildNativeGoogleStartUrl(returnUrl, role, codeChallenge, consent),
         returnUrl,
         { showInRecents: true }
       );
@@ -5826,23 +5829,8 @@ true;
         return;
       }
 
-      const appLoginUrl = callbackUrl.searchParams.get('app_login_url');
-      const user = decodeBase64UrlJson<NativeMember>(
-        callbackUrl.searchParams.get('user')
-      );
-      const nativeSession = decodeBase64UrlJson<NativeBridgeSession>(
-        callbackUrl.searchParams.get('native_session')
-      );
-
-      if (appLoginUrl && user?.email) {
-        addDebugLine('Google login ok -> app-login bridge');
-        saveNativeSession(user, nativeSession || null, role);
-        setShowBrowser(false);
-        return;
-      }
-
-      const token = callbackUrl.searchParams.get('token');
-      if (!token) {
+      const exchangeCode = callbackUrl.searchParams.get('exchange_code');
+      if (!exchangeCode) {
         Alert.alert(
           'Google sign-in failed',
           'WeddingWin could not finish the app login session.'
@@ -5850,15 +5838,44 @@ true;
         return;
       }
 
-      const loginUrl = `${TARGET_URL}/login/token/${encodeURIComponent(token)}/home`;
-      startBridgeRedirect();
-      openAbsoluteUrl(loginUrl);
+      const exchangeResponse = await fetch(
+        `${APP_BACKEND_URL}/functions/v1/google-native-exchange`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+            apikey: APP_BACKEND_PUBLISHABLE_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            code: exchangeCode,
+            code_verifier: codeVerifier,
+          }),
+        }
+      );
+      const exchange = await exchangeResponse.json();
+      if (
+        !exchangeResponse.ok ||
+        !exchange?.ok ||
+        !exchange?.user?.email ||
+        !hasNativeTokenSession(exchange?.native_session)
+      ) {
+        Alert.alert(
+          'Google sign-in failed',
+          exchange?.error || 'The secure Google login exchange expired. Please try again.'
+        );
+        return;
+      }
+
+      addDebugLine('Google login ok -> one-time native exchange');
+      saveNativeSession(exchange.user, exchange.native_session, role);
+      setShowBrowser(false);
     } catch {
-      // user dismissed or system browser failed; leave WebView as-is
+      Alert.alert('Google sign-in failed', 'Please check your connection and try again.');
     } finally {
       setGoogleLoginLoading(false);
     }
-  }, [addDebugLine, openAbsoluteUrl, saveNativeSession, startBridgeRedirect]);
+  }, [addDebugLine, saveNativeSession]);
 
   const applyChatPageChrome = useCallback(() => {
     webviewRef.current?.injectJavaScript(`
@@ -5900,10 +5917,31 @@ true;
   const handleShouldStart = useCallback(
     (request: ShouldStartLoadRequest) => {
       const { url } = request;
+      const hasSignedInAppSession = Boolean(
+        nativeMember ||
+          hasNativeBridgeSession(nativeBridgeSessionRef.current || nativeBridgeSession)
+      );
       const weddingWinPath = getWeddingWinPath(url);
 
       if (weddingWinPath) {
         addDebugLine(`should start ${weddingWinPath}`);
+      }
+
+      if (
+        hasSignedInAppSession &&
+        (isBdAppGoogleLoginUrl(url) || isOAuthStartUrl(url) || isGoogleIdentityUrl(url))
+      ) {
+        addDebugLine('blocked signed-in website authentication request');
+        setLoading(false);
+        return false;
+      }
+
+      if (request.isTopFrame === false) {
+        const allowed = webViewSubframeUrlAllowed(url);
+        if (!allowed) {
+          addDebugLine('blocked insecure or active-content WebView subframe');
+        }
+        return allowed;
       }
 
       if (isWeddingWinLogoutActionUrl(url)) {
@@ -5978,6 +6016,11 @@ true;
       const navigationAction = webViewUrlAction(url);
       if (navigationAction === 'in-app') {
         return true;
+      }
+      if (navigationAction === 'system-browser' && isGoogleIdentityUrl(url)) {
+        setLoading(false);
+        addDebugLine('blocked unsolicited Google identity navigation');
+        return false;
       }
       if (navigationAction === 'system-browser' || navigationAction === 'external-app') {
         setLoading(false);
@@ -6183,6 +6226,19 @@ true;
     (event: { nativeEvent: { targetUrl?: string } }) => {
       const target = event.nativeEvent.targetUrl;
       if (!target) return;
+      const hasSignedInAppSession = Boolean(
+        nativeMember ||
+          hasNativeBridgeSession(nativeBridgeSessionRef.current || nativeBridgeSession)
+      );
+
+      if (
+        hasSignedInAppSession &&
+        (isBdAppGoogleLoginUrl(target) || isOAuthStartUrl(target) || isGoogleIdentityUrl(target))
+      ) {
+        setLoading(false);
+        addDebugLine('blocked signed-in website authentication window');
+        return;
+      }
 
       if (isBdAppGoogleLoginUrl(target)) {
         setLoading(false);
@@ -6224,6 +6280,11 @@ true;
         navigateWebViewTo(target);
         return;
       }
+      if (navigationAction === 'system-browser' && isGoogleIdentityUrl(target)) {
+        setLoading(false);
+        addDebugLine('blocked unsolicited Google identity window');
+        return;
+      }
       if (navigationAction === 'system-browser' || navigationAction === 'external-app') {
         setLoading(false);
         Linking.openURL(target).catch(() => {});
@@ -6232,7 +6293,7 @@ true;
       setLoading(false);
       addDebugLine('blocked non-allowlisted WebView window');
     },
-    [addDebugLine, interceptVendorConnectChat, nativeBridgeSession, navigateWebViewTo, openNativeChatDeepLink, runBdGoogleLoginInSystemBrowser, runOAuthInSystemBrowser, startLoadingFeedback]
+    [addDebugLine, interceptVendorConnectChat, nativeBridgeSession, nativeMember, navigateWebViewTo, openNativeChatDeepLink, runBdGoogleLoginInSystemBrowser, runOAuthInSystemBrowser, startLoadingFeedback]
   );
 
   const submitPendingBdFormLogin = useCallback(() => {
@@ -6506,9 +6567,20 @@ true;
     );
   }, []);
 
+  const closeNativeChat = useCallback(() => {
+    setNativeChatNotice(null);
+    setNativeChatOpenRequestId(0);
+    setNativeChatThreadOpen(false);
+    setShowNativeChat(false);
+  }, []);
+
   const renderNativeChatOverlay = () => (
     showNativeChat ? (
-      <View style={styles.nativeChatOverlay}>
+      <View
+        style={styles.nativeChatOverlay}
+        accessibilityViewIsModal
+        importantForAccessibility="yes"
+        onAccessibilityEscape={closeNativeChat}>
       <NativeChatScreen
         member={nativeMember}
         nativeSession={nativeBridgeSession}
@@ -6525,16 +6597,9 @@ true;
         onDraftChange={setNativeChatDraft}
         onSelectThread={selectNativeChatThread}
         onSend={sendNativeChatMessage}
-        onAttachImage={sendNativeChatImage}
-        imagesEnabled={nativeChatImagesEnabled}
         onReport={reportNativeChatConversation}
         onRefresh={() => syncNativeChat('list')}
-        onClose={() => {
-          setNativeChatNotice(null);
-          setNativeChatOpenRequestId(0);
-          setNativeChatThreadOpen(false);
-          setShowNativeChat(false);
-        }}
+        onClose={closeNativeChat}
         onThreadViewChange={setNativeChatThreadOpen}
         chatUnreadCount={chatUnreadCount}
         openThreadRequestId={nativeChatOpenRequestId}
@@ -6546,31 +6611,37 @@ true;
   const nativeMemberIsCouple = isCoupleAccount(nativeMember);
 
   if (!showBrowser) {
+    const nativeOverlayVisible = showNativeChat || showNativeQrScanner;
     return (
       <View style={styles.nativeShell}>
-        <NativeHome
-          onOpenUrl={openUrl}
-          onOpenWebsiteBuilder={openWebsiteBuilderWithBridge}
-          onOpenDashboard={openDashboardWithBridge}
-          onOpenChat={openChatWithBridge}
-          onOpenQrScanner={openNativeQrScanner}
-          onAppleSignIn={runNativeAppleLogin}
-          onGoogleSignIn={runBdGoogleLoginInSystemBrowser}
-          onEmailLogin={runEmailLogin}
-          onMemberSignup={runMemberSignup}
-          onCompleteProfile={runCompleteProfile}
-          googleLoginLoading={googleLoginLoading}
-          emailLoginLoading={emailLoginLoading}
-          signupLoading={signupLoading}
-          profileSaveLoading={profileSaveLoading}
-          member={nativeMember}
-          chatUnreadCount={chatUnreadCount}
-          chatStatusLabel={chatStatusLabel}
-          websiteSessionReady={true}
-          onSignOut={signOutEverywhere}
-          nativeSession={nativeBridgeSession}
-          vendorDrawOpenRequestId={vendorDrawOpenRequestId}
-        />
+        <View
+          style={styles.nativeHomeLayer}
+          accessibilityElementsHidden={nativeOverlayVisible}
+          importantForAccessibility={nativeOverlayVisible ? 'no-hide-descendants' : 'auto'}>
+          <NativeHome
+            onOpenUrl={openUrl}
+            onOpenWebsiteBuilder={openWebsiteBuilderWithBridge}
+            onOpenDashboard={openDashboardWithBridge}
+            onOpenChat={openChatWithBridge}
+            onOpenQrScanner={openNativeQrScanner}
+            onAppleSignIn={runNativeAppleLogin}
+            onGoogleSignIn={runBdGoogleLoginInSystemBrowser}
+            onEmailLogin={runEmailLogin}
+            onMemberSignup={runMemberSignup}
+            onCompleteProfile={runCompleteProfile}
+            googleLoginLoading={googleLoginLoading}
+            emailLoginLoading={emailLoginLoading}
+            signupLoading={signupLoading}
+            profileSaveLoading={profileSaveLoading}
+            member={nativeMember}
+            chatUnreadCount={chatUnreadCount}
+            chatStatusLabel={chatStatusLabel}
+            websiteSessionReady={true}
+            onSignOut={signOutEverywhere}
+            nativeSession={nativeBridgeSession}
+            vendorDrawOpenRequestId={vendorDrawOpenRequestId}
+          />
+        </View>
         {renderNativeChatOverlay()}
         <NativeQrScanner
           visible={showNativeQrScanner}
@@ -6629,19 +6700,20 @@ true;
           allowsBackForwardNavigationGestures
           pullToRefreshEnabled
           startInLoadingState
-          originWhitelist={[
-            'https://weddingwin.ca',
-            'https://*.weddingwin.ca',
-            'https://wedwebsite.ca',
-            'https://*.wedwebsite.ca',
-            'https://pszcjoyabwvzsxxjtkhs.supabase.co',
-            'about:blank',
-          ]}
+          // Let every attempted navigation reach handleShouldStart. The
+          // centralized webViewUrlAction policy then keeps trusted HTTPS in
+          // app, routes approved external schemes out, and fails closed for
+          // insecure or active-content URLs.
+          originWhitelist={['*']}
           setSupportMultipleWindows
           allowsInlineMediaPlayback
           mediaPlaybackRequiresUserAction
           allowsPictureInPictureMediaPlayback={false}
-          mediaCapturePermissionGrantType="prompt"
+          // The embedded site is for account management and chat, not media
+          // capture. Deny camera/microphone requests so WebKit cannot surface
+          // a permission prompt for capabilities the native app does not use
+          // or declare in its App Store privacy metadata.
+          mediaCapturePermissionGrantType="deny"
           javaScriptCanOpenWindowsAutomatically
           decelerationRate="normal"
           contentInsetAdjustmentBehavior="never"
@@ -6775,6 +6847,9 @@ const styles = StyleSheet.create({
   nativeShell: {
     flex: 1,
     backgroundColor: '#FFF8F5',
+  },
+  nativeHomeLayer: {
+    flex: 1,
   },
   nativeChatOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -8332,24 +8407,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8F5',
     padding: 16,
     marginTop: 14,
-  },
-  qrSimulatorButton: {
-    minHeight: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#2E2E32',
-    paddingHorizontal: 18,
-    marginBottom: 12,
-  },
-  qrSimulatorButtonDisabled: {
-    opacity: 0.5,
-  },
-  qrSimulatorButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '900',
   },
   qrProgressHeader: {
     flexDirection: 'row',

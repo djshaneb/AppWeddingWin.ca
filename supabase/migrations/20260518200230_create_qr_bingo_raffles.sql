@@ -1,3 +1,4 @@
+-- Filename version reconciled with the linked Supabase migration history.
 create table if not exists public.qr_bingo_raffle_settings (
   id uuid primary key default gen_random_uuid(),
   event_key text not null default 'niagara-wedding-show-2026',

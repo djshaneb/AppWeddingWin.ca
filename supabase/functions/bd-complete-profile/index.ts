@@ -2,8 +2,6 @@ import {
   buildBdNativeSession,
   callBd,
   corsHeaders,
-  createAppLoginUrl,
-  admin,
   ensureBdSessionCookie,
   fetchBdUserByEmail,
   fetchFullBdUserById,
@@ -11,11 +9,14 @@ import {
   sanitizeBdUser,
   type BdNativeSession,
 } from "../_shared/apple_auth.ts";
-
+import {
+  applyLinkedAuthEmail,
+  AuthEmailConflictError,
+  AuthEmailSyncError,
+  preflightLinkedAuthEmail,
+} from "../_shared/auth_email_sync.ts";
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
-const APP_EMAIL_CHANGE_SECRET =
-  Deno.env.get("APP_EMAIL_CHANGE_SECRET") ||
-  "ww-app-email-change-v1-2026-05-19-2e87d51b6b6f4ef6a3f060bb7b";
+const APP_EMAIL_CHANGE_SECRET = (Deno.env.get("APP_EMAIL_CHANGE_SECRET") || "").trim();
 
 type ProfileInput = {
   first_name?: string;
@@ -77,31 +78,6 @@ function profileUpdateMessage(detail: string) {
   return "Profile could not be saved.";
 }
 
-async function syncSupabaseEmail(previousEmail: string, nextEmail: string, userId: unknown) {
-  const oldEmail = previousEmail.trim().toLowerCase();
-  const newEmail = nextEmail.trim().toLowerCase();
-  if (!oldEmail || !newEmail || oldEmail === newEmail) return;
-
-  try {
-    await admin.from("profiles").update({ email: newEmail, updated_at: new Date().toISOString() }).eq("email", oldEmail);
-    const { data: list } = await admin.auth.admin.listUsers({ page: 1, perPage: 200 });
-    const authUser = list?.users.find((candidate) => {
-      return String(candidate.email || "").trim().toLowerCase() === oldEmail;
-    });
-    if (authUser?.id) {
-      await admin.auth.admin.updateUserById(authUser.id, {
-        email: newEmail,
-        email_confirm: true,
-      });
-    }
-  } catch (syncError) {
-    console.error("bd-complete-profile:supabase-email-sync-failed", {
-      user_id: userId,
-      detail: syncError instanceof Error ? syncError.message : String(syncError),
-    });
-  }
-}
-
 function parseWebsiteEmailResponse(text: string): { ok?: boolean; message?: string } | null {
   try {
     return JSON.parse(text);
@@ -123,6 +99,9 @@ function hexFromBytes(bytes: Uint8Array) {
 }
 
 async function signAppEmailChange(userId: string, nextEmail: string, expires: number) {
+  if (APP_EMAIL_CHANGE_SECRET.length < 32) {
+    throw new Error("Email change confirmation is temporarily unavailable.");
+  }
   const payload = `${Number(userId)}|${nextEmail.trim().toLowerCase()}|${expires}`;
   const key = await crypto.subtle.importKey(
     "raw",
@@ -205,12 +184,31 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "Stored session expired. Please sign in again." }, 401);
     }
 
+    if (body.action === "refresh") {
+      const email = String(user?.email || "").trim().toLowerCase();
+      if (!email) {
+        return jsonResponse({ error: "Account refresh is temporarily unavailable." }, 503);
+      }
+      const linkedEmailPlan = await preflightLinkedAuthEmail(session.user_id, email);
+      await applyLinkedAuthEmail(linkedEmailPlan);
+      return jsonResponse({
+        ok: true,
+        user: sanitizeBdUser(user, email),
+        native_session: buildBdNativeSession(user, email),
+        dashboard_url: `${BD_API_BASE_URL}/account/home`,
+      });
+    }
+
     const profile = (body.profile || {}) as ProfileInput;
     const existingEmail = String(user?.email || session.email || "").trim().toLowerCase();
     const nextEmail = cleanRealEmail(profile.email || existingEmail);
     if (isApplePrivateRelayEmail(existingEmail) && !nextEmail) {
       return jsonResponse({ error: "Please enter your regular email address." }, 400);
     }
+
+    // Resolve the linked GoTrue identity and reject ownership conflicts before
+    // changing any provider-side profile fields or sending a confirmation.
+    const linkedEmailPlan = await preflightLinkedAuthEmail(session.user_id, nextEmail);
 
     const updateBody = new URLSearchParams({
       user_id: String(session.user_id),
@@ -298,24 +296,32 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: profileUpdateMessage(detail), detail }, 502);
     }
 
-    await syncSupabaseEmail(existingEmail, nextEmail, session.user_id);
-
     user = await fetchFullBdUserById(session.user_id);
     user = await ensureBdSessionCookie(user);
-    const email = String(user?.email || session.email || "").trim().toLowerCase();
-    await syncSupabaseEmail(String(session.email || ""), email, session.user_id);
-    const appLoginUrl = await createAppLoginUrl(user, email);
-
+    const email = String(user?.email || "").trim().toLowerCase();
+    if (!email) {
+      return jsonResponse({ error: "Account refresh is temporarily unavailable." }, 503);
+    }
+    // BD now holds this same email. A synchronization failure is returned to
+    // the app instead of being logged and presented as a successful save.
+    const confirmedEmailPlan = email === nextEmail
+      ? linkedEmailPlan
+      : await preflightLinkedAuthEmail(session.user_id, email);
+    await applyLinkedAuthEmail(confirmedEmailPlan);
     return jsonResponse({
       ok: true,
       user: sanitizeBdUser(user, email),
       native_session: buildBdNativeSession(user, email),
-      app_login_url: appLoginUrl,
       dashboard_url: `${BD_API_BASE_URL}/account/home`,
     });
   } catch (error) {
+    const status = error instanceof AuthEmailConflictError
+      ? 409
+      : error instanceof AuthEmailSyncError
+      ? 503
+      : 400;
     const message = error instanceof Error ? error.message : "Profile update failed.";
     console.error("bd-complete-profile:error", message);
-    return jsonResponse({ error: message }, 400);
+    return jsonResponse({ error: message }, status);
   }
 });

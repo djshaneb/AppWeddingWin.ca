@@ -1,3 +1,4 @@
+-- Filename version reconciled with the linked Supabase migration history.
 create or replace function public.app_native_chat_touch_updated_at()
 returns trigger
 language plpgsql

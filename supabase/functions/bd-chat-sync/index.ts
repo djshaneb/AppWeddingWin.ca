@@ -27,6 +27,7 @@ import {
   firstRow,
   flushOutbox,
   getSessionUser,
+  hasPrivateAppReviewerAccess,
   imageUrlsFromHtml,
   loadSharedRateLimit,
   markMirrorThreadRead,
@@ -47,6 +48,7 @@ import {
   participantTokens,
   pendingSendsForThreads,
   persistThreadIdentitiesFromSession,
+  privateAppReviewerPairAllowed,
   randomToken,
   rateLimitedNow,
   refreshMirrorIfStale,
@@ -188,40 +190,55 @@ async function chatPlanForUser(user: BdRow) {
   return plan;
 }
 
-function assertActiveChatMember(user: BdRow | undefined, label: "account" | "recipient") {
-  if (!user?.user_id || String(user.active ?? "").trim() !== "2") {
+async function assertActiveChatMember(user: BdRow | undefined, label: "account" | "recipient") {
+  if (!user?.user_id) {
     throw new ChatPolicyError(
       label === "account"
         ? "This account is not active, so private messages are unavailable."
         : "This member is not currently available for private messages.",
     );
   }
+  if (String(user.active ?? "").trim() === "2") return false;
+  if (await hasPrivateAppReviewerAccess(user.user_id)) return true;
+  throw new ChatPolicyError(
+    label === "account"
+      ? "This account is not active, so private messages are unavailable."
+      : "This member is not currently available for private messages.",
+  );
 }
 
 async function assertCurrentUserCanSend(user: BdRow) {
-  assertActiveChatMember(user, "account");
+  await assertActiveChatMember(user, "account");
   const plan = await chatPlanForUser(user);
   if (!enabledPlanFlag(plan.enable_direct_messages)) {
     throw new ChatPolicyError("Your membership plan does not allow private messages.");
   }
 }
 
-async function assertTargetCanReceive(user: BdRow | undefined) {
-  assertActiveChatMember(user, "recipient");
+async function assertTargetCanReceive(user: BdRow | undefined, currentUser: BdRow) {
+  const currentUserIsPrivateReviewer = String(currentUser.active ?? "").trim() !== "2";
+  const targetIsPrivateReviewer = await assertActiveChatMember(user, "recipient");
+  if (
+    (currentUserIsPrivateReviewer || targetIsPrivateReviewer) &&
+    !(await privateAppReviewerPairAllowed(currentUser.user_id, user?.user_id))
+  ) {
+    throw new ChatPolicyError("This private reviewer account can only message its paired reviewer account.");
+  }
+  if (targetIsPrivateReviewer) return;
   const plan = await chatPlanForUser(user!);
   if (!enabledPlanFlag(plan.receive_messages)) {
     throw new ChatPolicyError("This member is not accepting private messages.");
   }
 }
 
-async function verifiedChatTargetById(userId: unknown) {
+async function verifiedChatTargetById(userId: unknown, currentUser: BdRow) {
   const id = String(userId || "").trim();
   if (!id) throw new ChatPolicyError("The message recipient could not be verified.");
   const target = await bdFetchUserById(id);
   if (!target?.user_id || String(target.user_id) !== id) {
     throw new ChatPolicyError("The message recipient could not be verified.");
   }
-  await assertTargetCanReceive(target);
+  await assertTargetCanReceive(target, currentUser);
   return target;
 }
 
@@ -229,16 +246,17 @@ async function verifiedChatTargetForThread(
   thread: MirrorThread,
   userTokens: string[],
   userId: string,
+  currentUser: BdRow,
 ) {
   const knownId = otherUserIdForThread(thread, userTokens, userId);
-  if (knownId) return await verifiedChatTargetById(knownId);
+  if (knownId) return await verifiedChatTargetById(knownId, currentUser);
 
   const participant = otherParticipantValue(thread, userTokens);
   const target = participant ? await bdFindUserByParticipant(participant) : undefined;
   if (!target?.user_id || String(target.user_id) === userId) {
     throw new ChatPolicyError("The message recipient could not be verified.");
   }
-  await assertTargetCanReceive(target);
+  await assertTargetCanReceive(target, currentUser);
   return target;
 }
 
@@ -461,9 +479,12 @@ async function recordThreadReport(
     .from("app_chat_thread_reports")
     .upsert(rows, { onConflict: "thread_token" });
   if (error) throw new Error(error.message);
+  let reportCloseQueued = false;
   if (bdThreadToken) {
     await enqueueCloseOutbox(bdThreadToken, bdThreadId);
+    reportCloseQueued = true;
   }
+  return reportCloseQueued;
 }
 
 function chatReportedPayload(report?: AppChatThreadReport) {
@@ -692,6 +713,7 @@ async function buildChatPayload(
     ...threadTokens,
     ...visibleAppThreads.flatMap((thread) => [thread.thread_token, String(thread.bd_thread_token || "").trim()]),
   ]);
+  let reportCloseQueued = false;
 
   // Repair the rare partial-write case where the report committed but the
   // close-row insert failed. A later read recreates the durable close intent;
@@ -699,6 +721,7 @@ async function buildChatPayload(
   for (const thread of visibleBdThreads) {
     if (reportMap.has(thread.thread_token) && !threadIsClosed(thread)) {
       await enqueueCloseOutbox(thread.thread_token, String(thread.thread_id || ""));
+      reportCloseQueued = true;
     }
   }
 
@@ -709,7 +732,7 @@ async function buildChatPayload(
     const block = blockForBdThread(thread);
     if (!block || reportMap.has(thread.thread_token)) continue;
     const linkedApp = appThreads.find((row) => String(row.bd_thread_token || "").trim() === thread.thread_token);
-    await recordThreadReport(
+    reportCloseQueued = (await recordThreadReport(
       thread.thread_token,
       block.blocked_by_bd_user_id,
       block.member_a_bd_user_id,
@@ -718,7 +741,7 @@ async function buildChatPayload(
       thread.thread_token,
       String(thread.thread_id || ""),
       block.created_at,
-    );
+    )) || reportCloseQueued;
     const blockedReport: AppChatThreadReport = {
       thread_token: thread.thread_token,
       app_thread_token: linkedApp?.thread_token || null,
@@ -738,7 +761,7 @@ async function buildChatPayload(
     const bdThread = bdToken
       ? visibleBdThreads.find((row) => row.thread_token === bdToken)
       : undefined;
-    await recordThreadReport(
+    reportCloseQueued = (await recordThreadReport(
       thread.thread_token,
       block.blocked_by_bd_user_id,
       block.member_a_bd_user_id,
@@ -747,7 +770,7 @@ async function buildChatPayload(
       bdToken,
       String(bdThread?.thread_id || thread.bd_thread_id || ""),
       block.created_at,
-    );
+    )) || reportCloseQueued;
     const blockedReport: AppChatThreadReport = {
       thread_token: thread.thread_token,
       app_thread_token: thread.thread_token,
@@ -911,7 +934,7 @@ async function buildChatPayload(
       userId,
     );
 
-  return {
+  return [{
     ok: true,
     threads: allSummaries,
     selected_thread_token: selectedToken,
@@ -927,7 +950,7 @@ async function buildChatPayload(
       app_threads: appThreads.length,
       visible_app_threads: visibleAppThreads.length,
     },
-  };
+  }, reportCloseQueued] as const;
 }
 
 // ---------------------------------------------------------------------------
@@ -960,7 +983,7 @@ Deno.serve(async (request) => {
     if (!user?.user_id || String(user.user_id) !== String(authenticatedUser.user_id)) {
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
     }
-    assertActiveChatMember(user, "account");
+    await assertActiveChatMember(user, "account");
     if (action === "send" || action === "open_vendor_profile") {
       await assertCurrentUserCanSend(user);
     }
@@ -989,7 +1012,7 @@ Deno.serve(async (request) => {
       if (vendorId === userId) {
         return jsonResponse({ ok: false, error: "You cannot message your own listing from the app." }, 400);
       }
-      await assertTargetCanReceive(vendor);
+      await assertTargetCanReceive(vendor, user);
       await assertChatMemberPairAllowed(userId, vendorId);
       const vendorTokens = participantTokens(vendor, {
         user_id: vendor.user_id as string | number,
@@ -1072,7 +1095,7 @@ Deno.serve(async (request) => {
         const appThread = await getAppThread(token, userId);
         const targetId = otherAppMemberId(appThread, userId);
         await assertChatMemberPairAllowed(userId, targetId);
-        await verifiedChatTargetById(targetId);
+        await verifiedChatTargetById(targetId, user);
         const reportMap = await listThreadReportsByTokens([token, String(appThread.bd_thread_token || "").trim()]);
         const report = reportMap.get(token) || reportMap.get(String(appThread.bd_thread_token || "").trim());
         if (report) return jsonResponse(chatReportedPayload(report), 423);
@@ -1097,7 +1120,7 @@ Deno.serve(async (request) => {
         if (!thread || !threadMatchesUser(thread, userTokens, userId)) {
           return jsonResponse({ ok: false, error: "Conversation was not found for this account." }, 404);
         }
-        const target = await verifiedChatTargetForThread(thread, userTokens, userId);
+        const target = await verifiedChatTargetForThread(thread, userTokens, userId, user);
         await assertChatMemberPairAllowed(userId, target.user_id);
         // Send as the identity BD already has for the user's side of this
         // thread, so the website renders the message on the correct side even
@@ -1167,7 +1190,16 @@ Deno.serve(async (request) => {
       }
     }
 
-    const payload = await buildChatPayload(user, session, selectedThread);
+    const [payload, reportCloseQueued] = await buildChatPayload(user, session, selectedThread);
+    // Payload assembly can discover a replacement BD website token for a pair
+    // that is already blocked. It durably records the alias and queues the
+    // close; flush once more so that close is delivered in this same sync
+    // instead of waiting for a later mirror refresh.
+    if (reportCloseQueued && !rateLimitedNow()) {
+      await flushOutbox(4).catch((error) =>
+        console.error("Chat report close flush failed", shortError(error))
+      );
+    }
     console.info("bd-chat-sync result", {
       action,
       member_id: payload.sync_debug.member_id,

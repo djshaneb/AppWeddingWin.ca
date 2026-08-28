@@ -9,12 +9,6 @@ const BRAND_COLOR = '#C66A6A';
 export default function AuthCallback() {
   const [status, setStatus] = useState<Status>('working');
   const [message, setMessage] = useState('Signing you in...');
-  const [debug, setDebug] = useState<string[]>([]);
-
-  const log = (line: string) => {
-    if (Platform.OS === 'web') console.log('[auth-callback]', line);
-    setDebug((prev) => [...prev, line]);
-  };
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -24,14 +18,10 @@ export default function AuthCallback() {
     }
 
     try {
-      const href = window.location.href;
       const hash = (window.location.hash || '').replace(/^#/, '');
       const search = (window.location.search || '').replace(/^\?/, '');
       const ua = navigator.userAgent || '';
       const inApp = /WeddingWinApp/.test(ua);
-
-      log(`href=${href}`);
-      log(`hashLen=${hash.length} searchLen=${search.length} inApp=${inApp}`);
 
       let combined = hash;
       if (search) combined = combined ? `${combined}&${search}` : search;
@@ -39,7 +29,6 @@ export default function AuthCallback() {
       if (!combined) {
         setStatus('no-params');
         setMessage('No auth data found on this URL.');
-        log('no hash or query params; staying put');
         return;
       }
 
@@ -47,13 +36,11 @@ export default function AuthCallback() {
         const deepLink = `weddingwin://auth-callback#${combined}`;
         setStatus('redirecting');
         setMessage('Returning to the app...');
-        log(`deepLink=${deepLink}`);
 
         const w = window as unknown as {
           WeddingWinApp?: { completeAuth?: (link: string) => void };
         };
         if (w.WeddingWinApp && typeof w.WeddingWinApp.completeAuth === 'function') {
-          log('calling WeddingWinApp.completeAuth bridge');
           w.WeddingWinApp.completeAuth(deepLink);
           return;
         }
@@ -64,13 +51,10 @@ export default function AuthCallback() {
       setStatus('redirecting');
       setMessage('Signed in. Redirecting...');
       const dest = `https://www.weddingwin.ca/#${combined}`;
-      log(`redirecting to ${dest}`);
       setTimeout(() => window.location.replace(dest), 400);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+    } catch {
       setStatus('error');
       setMessage('Something went wrong.');
-      log(`error: ${msg}`);
     }
   }, []);
 
@@ -102,15 +86,6 @@ export default function AuthCallback() {
           </Pressable>
         ) : null}
 
-        {debug.length > 0 ? (
-          <View style={styles.debugBox}>
-            {debug.map((line, i) => (
-              <Text key={i} style={styles.debugText}>
-                {line}
-              </Text>
-            ))}
-          </View>
-        ) : null}
       </View>
     </View>
   );
@@ -153,20 +128,5 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '600',
     fontSize: 14,
-  },
-  debugBox: {
-    marginTop: 24,
-    padding: 12,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#F0D5D1',
-    width: '100%',
-    gap: 4,
-  },
-  debugText: {
-    color: '#9B8583',
-    fontSize: 11,
-    fontFamily: Platform.select({ web: 'monospace', default: 'Courier' }),
   },
 });

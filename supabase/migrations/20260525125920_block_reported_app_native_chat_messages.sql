@@ -1,3 +1,4 @@
+-- Filename version reconciled with the linked Supabase migration history.
 create or replace function public.block_reported_app_native_chat_message()
 returns trigger
 language plpgsql

@@ -5,6 +5,7 @@ import {
   decodeJwtPayloadUnsafe,
   getAppleConfig,
   getNativeAppleAudiences,
+  linkProfileToBdMember,
   makeBdAppleLoginResult,
   upsertAppleUser,
   verifyAppleIdentityToken,
@@ -66,10 +67,14 @@ Deno.serve(async (req: Request) => {
               privacyVersion: String(body.privacy_version || ""),
             }
           : null,
+      includeWebsiteRedirect: false,
     });
+    if (bdLogin.nativeSession.user_id) {
+      await linkProfileToBdMember(user.userId, bdLogin.nativeSession);
+    }
 
     return new Response(JSON.stringify({
-      redirect_url: bdLogin.redirectUrl,
+      ...(bdLogin.redirectUrl ? { redirect_url: bdLogin.redirectUrl } : {}),
       user: bdLogin.user,
       native_session: bdLogin.nativeSession,
     }), {

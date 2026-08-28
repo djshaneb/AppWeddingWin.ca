@@ -76,7 +76,7 @@ async function importHmacKey(secret: string, usages: KeyUsage[]) {
 
 export async function createSignedAppleOAuthState(
   options: CreateAppleOAuthStateOptions,
-): Promise<{ state: string; nonce: string; redirectTo: string }> {
+): Promise<{ state: string; nonce: string; redirectTo: string; expiresAt: number }> {
   const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
   const nonce = (options.nonce || crypto.randomUUID()).trim();
   if (!nonce) throw new Error("OAuth state nonce is required.");
@@ -102,6 +102,7 @@ export async function createSignedAppleOAuthState(
     })),
     nonce,
     redirectTo: payload.r,
+    expiresAt: payload.exp,
   };
 }
 

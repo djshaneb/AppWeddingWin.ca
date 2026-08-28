@@ -1,6 +1,11 @@
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import { createRemoteJWKSet, jwtVerify } from "npm:jose@5.9.6";
 import { ensureStableBdIdentity } from "../_shared/bd_identity.ts";
+import {
+  createNativeAuthExchange,
+} from "../_shared/auth_exchange.ts";
+import { findAuthUserByEmail } from "../_shared/auth_users.ts";
+import { redeemOAuthLoginAttempt } from "../_shared/oauth_attempt.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -61,20 +66,6 @@ const SAFE_BD_USER_FIELDS = [
   "wedding_date",
 ] as const;
 
-const APP_LOGIN_TICKET_FIELDS = [
-  "user_id",
-  "first_name",
-  "last_name",
-  "email",
-  "company",
-  "active",
-  "subscription_id",
-  "profession_id",
-  "filename",
-  "token",
-  "cookie",
-] as const;
-
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
@@ -85,21 +76,10 @@ function b64urlDecode(s: string): string {
   return new TextDecoder().decode(Uint8Array.from(binary, (value) => value.charCodeAt(0)));
 }
 
-function b64urlEncode(s: string): string {
-  const bytes = new TextEncoder().encode(s);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 function base64UrlFromBytes(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-function base64UrlFromString(value: string): string {
-  return base64UrlFromBytes(new TextEncoder().encode(value));
 }
 
 function base64UrlToBytes(value: string): Uint8Array {
@@ -130,6 +110,7 @@ type VerifiedGoogleState = {
   n: string;
   s: string;
   c: SignupConsent;
+  p: string;
   exp: number;
 };
 
@@ -140,7 +121,14 @@ async function verifyGoogleState(encoded: string): Promise<VerifiedGoogleState> 
   const nonce = String(parsed.n || "").trim();
   const expires = Number(parsed.exp || 0);
   const signature = String(parsed.h || "").trim();
-  if (!redirect || !nonce || !signature || !Number.isFinite(expires)) {
+  const codeChallenge = String(parsed.p || "").trim();
+  if (
+    !redirect ||
+    !nonce ||
+    !signature ||
+    !/^[A-Za-z0-9_-]{43,128}$/.test(codeChallenge) ||
+    !Number.isFinite(expires)
+  ) {
     throw new Error("Invalid Google sign-in state.");
   }
   const now = Math.floor(Date.now() / 1000);
@@ -158,6 +146,7 @@ async function verifyGoogleState(encoded: string): Promise<VerifiedGoogleState> 
     n: nonce,
     s: requestedSubscriptionId(parsed.s),
     c: consent,
+    p: codeChallenge,
     exp: expires,
   };
   const key = await crypto.subtle.importKey(
@@ -339,50 +328,12 @@ async function ensureBdSessionCookie(user: BdUser | undefined): Promise<BdUser |
   return (await ensureStableBdIdentity(user, callBd)) as BdUser | undefined;
 }
 
-async function createAppLoginUrl(user: BdUser | undefined, email: string): Promise<string> {
-  if (!APP_LOGIN_SECRET) {
-    throw new Error("APP_LOGIN_SECRET is not configured");
-  }
-
-  if (!user?.user_id || typeof user?.token !== "string" || !user.token.trim()) {
-    throw new Error("BD member is missing a login token.");
-  }
-
-  const payload: Record<string, unknown> = {
-    email,
-    exp: Math.floor(Date.now() / 1000) + 120,
-  };
-
-  for (const field of APP_LOGIN_TICKET_FIELDS) {
-    if (user[field] !== undefined && user[field] !== null) {
-      payload[field] = user[field];
-    }
-  }
-
-  const encodedPayload = base64UrlFromString(JSON.stringify(payload));
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(APP_LOGIN_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(encodedPayload),
-  );
-  const ticket = `${encodedPayload}.${base64UrlFromBytes(new Uint8Array(signature))}`;
-
-  return `${BD_API_BASE_URL}/app-login?t=${encodeURIComponent(ticket)}`;
-}
-
 async function makeDirectBdGoogleLoginResult(args: {
   email: string;
   fullName?: string | null;
   subscriptionId?: string;
   consent?: SignupConsent;
-}): Promise<{ redirectUrl: string; user: Record<string, unknown>; nativeSession: BdNativeSession }> {
+}): Promise<{ user: Record<string, unknown>; nativeSession: BdNativeSession }> {
   const email = args.email.trim().toLowerCase();
   let user = await fetchBdUserByEmail(email);
   if (!user?.user_id) {
@@ -395,12 +346,14 @@ async function makeDirectBdGoogleLoginResult(args: {
   }
 
   user = await ensureBdSessionCookie(user);
-  const redirectUrl = await createAppLoginUrl(user, email);
+  const nativeSession = buildBdNativeSession(user, email);
+  if (!nativeSession.user_id || !nativeSession.token) {
+    throw new Error("WeddingWin could not create a secure app session. Please try again.");
+  }
 
   return {
-    redirectUrl,
     user: sanitizeBdUser(user, email),
-    nativeSession: buildBdNativeSession(user, email),
+    nativeSession,
   };
 }
 
@@ -473,8 +426,6 @@ Deno.serve(async (req: Request) => {
     const stateRaw = url.searchParams.get("state");
     const oauthError = url.searchParams.get("error");
 
-    if (oauthError) return errorPage(`Google returned: ${oauthError}`);
-    if (!code) return errorPage("Missing authorization code.");
     if (!stateRaw) return errorPage("Missing Google sign-in state.");
 
     let state: VerifiedGoogleState;
@@ -486,6 +437,20 @@ Deno.serve(async (req: Request) => {
     const finalRedirect = state.r;
     const subscriptionId = state.s;
     const consent = state.c;
+
+    try {
+      await redeemOAuthLoginAttempt({
+        admin,
+        request: req,
+        provider: "google",
+        state: stateRaw,
+      });
+    } catch (error) {
+      return errorPage(error instanceof Error ? error.message : "Invalid Google sign-in state.");
+    }
+
+    if (oauthError) return errorPage(`Google returned: ${oauthError}`);
+    if (!code) return errorPage("Missing authorization code.");
 
     const { id: clientId, secret: clientSecret } = await getConfig();
 
@@ -551,14 +516,19 @@ Deno.serve(async (req: Request) => {
           consent,
         });
 
+        const exchangeCode = await createNativeAuthExchange({
+          provider: "google",
+          codeChallenge: state.p,
+          bdMemberId: bd.nativeSession.user_id,
+          payload: {
+            user: bd.user,
+            native_session: bd.nativeSession,
+          },
+        });
+
         appRedirect.searchParams.set("ok", "1");
         appRedirect.searchParams.set("provider", "google");
-        appRedirect.searchParams.set("app_login_url", bd.redirectUrl);
-        appRedirect.searchParams.set("user", b64urlEncode(JSON.stringify(bd.user)));
-        appRedirect.searchParams.set(
-          "native_session",
-          b64urlEncode(JSON.stringify(bd.nativeSession)),
-        );
+        appRedirect.searchParams.set("exchange_code", exchangeCode);
 
         return new Response(null, {
           status: 302,
@@ -575,14 +545,7 @@ Deno.serve(async (req: Request) => {
     }
 
     let userId: string | null = null;
-    const { data: list, error: listErr } = await admin.auth.admin.listUsers({
-      page: 1,
-      perPage: 200,
-    });
-    if (listErr) return errorPage(`listUsers failed: ${listErr.message}`);
-    const existing = list.users.find(
-      (u) => (u.email || "").toLowerCase() === email.toLowerCase()
-    );
+    const existing = await findAuthUserByEmail(email);
 
     if (existing) {
       userId = existing.id;

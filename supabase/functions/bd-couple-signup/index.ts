@@ -2,7 +2,6 @@ import {
   buildBdNativeSession,
   callBd,
   corsHeaders,
-  createAppLoginUrl,
   ensureBdSessionCookie,
   fetchBdUserByEmail,
   fetchFullBdUserById,
@@ -145,13 +144,16 @@ Deno.serve(async (req) => {
     }
 
     user = await ensureBdSessionCookie(user);
-    const appLoginUrl = await createAppLoginUrl(user, email);
-
+    const nativeSession = buildBdNativeSession(user, email);
+    if (!nativeSession.user_id || !nativeSession.token) {
+      return jsonResponse({
+        error: "Account was created, but the app session is not ready yet. Please log in to continue.",
+      }, 503);
+    }
     return jsonResponse({
       ok: true,
       user: sanitizeBdUser(user, email),
-      native_session: buildBdNativeSession(user, email),
-      app_login_url: appLoginUrl,
+      native_session: nativeSession,
       dashboard_url: `${BD_API_BASE_URL}/account/home`,
     });
   } catch (error) {

@@ -40,6 +40,43 @@ export const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
+export async function hasPrivateAppReviewerAccess(memberId: unknown) {
+  const id = String(memberId || "").trim();
+  if (!/^[1-9]\d*$/.test(id)) return false;
+
+  const { data, error } = await admin
+    .from("app_private_reviewers")
+    .select("bd_member_id")
+    .eq("bd_member_id", id)
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+  if (error) {
+    console.warn("Private app reviewer access check failed:", error.message);
+    return false;
+  }
+  return Boolean(data?.bd_member_id);
+}
+
+export async function privateAppReviewerPairAllowed(firstMemberId: unknown, secondMemberId: unknown) {
+  const first = String(firstMemberId || "").trim();
+  const second = String(secondMemberId || "").trim();
+  if (!/^[1-9]\d*$/.test(first) || !/^[1-9]\d*$/.test(second) || first === second) return false;
+
+  const { data, error } = await admin
+    .from("app_private_reviewers")
+    .select("bd_member_id, paired_bd_member_id")
+    .in("bd_member_id", [first, second])
+    .gt("expires_at", new Date().toISOString());
+  if (error) {
+    console.warn("Private app reviewer pair check failed:", error.message);
+    return false;
+  }
+  return (data || []).some((row) =>
+    (String(row.bd_member_id) === first && String(row.paired_bd_member_id) === second) ||
+    (String(row.bd_member_id) === second && String(row.paired_bd_member_id) === first)
+  );
+}
+
 export type BdEnvelope = {
   status?: string;
   message?: unknown;

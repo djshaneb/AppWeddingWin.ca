@@ -6,9 +6,9 @@ Apple requires a demo account that does not expire when login is required. Weddi
 
 ## Current prepared fixture
 
-Private/nonpublic vendor review member `38970` and controlled couple member `38971` are assigned to isolated event `app-review-weddingwin-2026-38970`. Couple `38971` currently displays the first name `App Review`. The event has a dedicated QR payload (`https://www.weddingwin.ca/qr?vendor_id=38970`), fictional prize data, isolated scan/entry/draw state, and suppressed email delivery. The vendor remains inactive/nonpublic so its listing is not intentionally published.
+Private/nonpublic vendor review member `38970` and controlled couple member `38971` are assigned to isolated event `app-review-weddingwin-2026-38970`. Couple `38971` currently displays the first name `App Review`. The event has a dedicated QR payload (`https://www.weddingwin.ca/qr?vendor_id=38970`), fictional prize data, isolated scan/entry/draw state, and suppressed email delivery. The vendor remains inactive/nonpublic so its listing is not intentionally published. Live reviewer access is service-role-only, expiry-gated, and limited to the exact vendor `38970` ↔ couple `38971` pair through migrations `20260828221025` and `20260828221307`, `bd-chat-sync` v38, and `bd-chat-status` v26.
 
-This prepared fixture is not a recorded full-flow pass. Before submission, verify while signed out that the listing is absent from directory results, direct public profile access, search engines, sitemap, featured areas, public event rosters, and marketing feeds. Then verify couple/vendor login, dashboard, native text chat, QR scan, entry, and vendor draw from a clean install of the exact uploaded build. Do not describe a path to Apple until its checkbox below has evidence in the private release ticket.
+This prepared fixture is not a recorded full-flow pass. Pair scoping, service-only management, expiry behavior, and a fresh controlled cross-client text round trip now have evidence. The supported website→app direction is active couple website to private/nonpublic vendor app; Brilliant Directories correctly blocks inactive-vendor website sending. Before submission, still verify while signed out that the listing is absent from directory results, direct public profile access, search engines, sitemap, featured areas, public event rosters, and marketing feeds. Then repeat login/chat, dashboard, QR scan, entry, and vendor draw from a clean install of the exact uploaded build. Do not describe an unverified path to Apple.
 
 Use `assets/app-store/sample-qr-review-vendor-38970.png`. Do not supply the legacy `23608` sample for App Review. The official-rules page and backend controls are deployed, but legal/owner approval of the sponsor model, vendor agreement, alternate free-entry operation, and final rules remains required. Production email is fail-closed and the reviewer fixture always suppresses email.
 
@@ -34,13 +34,15 @@ Use unique strong passwords held in the team password manager. Paste them direct
 - [ ] Account and any profile are private/nonpublic and excluded from search/indexing.
 - [ ] Email confirmation and any account activation are complete.
 - [ ] Native session creation works from a clean install.
-- [ ] A normal, unreported thread with the vendor review account is visible in both native chat and the website inbox.
-- [ ] The account can send text in both directions. Native image sending is intentionally disabled for this release and is not included in the reviewer script.
+- [x] Backend reviewer access is restricted to the exact vendor `38970` ↔ couple `38971` pair, is service-role-managed, and expires.
+- [x] A normal, unreported thread with the vendor review account was visible in native chat and the authenticated website inbox; the website reply persisted after reload and was confirmed in the database/API mirror.
+- [x] Controlled text passed app→website and in the supported active-couple website→private-vendor-app direction. The inactive-vendor website send was correctly blocked and was not counted as delivered. Native image sending is intentionally disabled for this release and is not included in the reviewer script.
 - [ ] Push token can register on TestFlight and receive generic chat notifications.
 - [ ] QR Bingo is available and the sample vendor has not already been scanned when the reviewer starts.
+- [x] Controlled backend replay for the prepared fixture is idempotent: `bd-qr-bingo-sync` v13 kept one scan row and the original timestamp. Printed-camera and exact-build behavior remain unchecked.
 - [ ] If reviewing a vendor draw, the account has fictional name/email/phone/wedding date suitable for sharing with the controlled vendor.
 - [ ] Draw entry does not subscribe the account to newsletters or vendor marketing; entry consent covers only draw administration and prize fulfilment.
-- [x] A fresh disposable email account was created and passed the working-tree Simulator/backend deletion test (`38975`); its credentials no longer work and were not stored here. Create a new disposable account if App Review requests another destructive test.
+- [x] Fresh disposable email members `38978` and `38979` passed the deployed two-participant deletion-preservation test; their credentials no longer work and were not stored here. Create a new disposable account if App Review requests another destructive test.
 - [ ] Repeat deletion against the exact uploaded build. An Apple-linked disposable account must also verify physical-device reauthentication/revocation and provider/backup behavior.
 
 ## Vendor account checklist
@@ -50,6 +52,8 @@ Use unique strong passwords held in the team password manager. Paste them direct
 - [ ] Business name, owner name, email, phone, logo and profile content are fictional/test-safe.
 - [ ] Listing is hidden from public directory results, direct public profile browsing, search engines, sitemap, featured sections and marketing feeds. Verify while signed out in a private browser.
 - [ ] The private/nonpublic setting does not prevent App Review from opening Vendor Dashboard, native chat, or Vendor Draw Settings.
+- [x] Private reviewer chat authorization is pair-scoped and does not require publishing or activating the vendor listing.
+- [x] The private/nonpublic vendor app received the controlled couple-website reply as an incoming native Simulator bubble.
 - [ ] If the reviewer must test QR Bingo vendor tools, the account is present in the test event roster/tag without becoming publicly discoverable.
 - [ ] Vendor draw contains a clearly labeled test prize and only fictional entries.
 - [ ] Vendor draw rules are accessible before enabling entries.
@@ -63,17 +67,19 @@ Use unique strong passwords held in the team password manager. Paste them direct
 - [ ] Normal messaging thread is open before review begins.
 - [ ] Report is tested last because it intentionally closes a conversation.
 - [ ] A reported conversation cannot send from native app or website for either participant.
-- [ ] Record the known boundary accurately: reporting closes the current website conversation and the app blocks/suppresses the reported member, but an external website entry point may create a fresh thread until synchronization discovers and closes it. Do not claim preventive website-wide user blocking unless a website-side creation hook is implemented and verified.
+- [x] Record the known boundary accurately: reporting closes the current website conversation and the app blocks/suppresses the reported member. Same-sync closure of a newly discovered replacement alias is deployed and tested, but an external website entry point may create a fresh thread before synchronization. Do not claim preventive website-wide user blocking unless a website-side creation hook is implemented and verified.
 - [ ] Staff can see the report, respond within the published moderation timeframe, resolve it, and reset the review data if Apple requests.
 - [ ] `info@weddingwin.ca` or the published safety contact is actively monitored during review.
 
 ## Operational safeguards
 
 - [ ] Exempt review accounts from routine inactivity cleanup until review completes.
+- [ ] Monitor and, through an authorized service-role operation, renew the pair-access expiry for the full App Review window without making the vendor public.
 - [ ] Do not exempt them from authorization, privacy, moderation, or data-sharing controls.
 - [ ] Disable newsletters/promotional campaigns unless testing them is part of review.
 - [ ] Monitor backend availability and test-inbox delivery during the review window.
 - [ ] Store a documented reset procedure for messages, QR scans, raffle entries, report/block state and disposable deletion accounts.
-- [ ] Obtain an owner/legal/product decision on account deletion removing the complete shared conversation, including the other participant's copy; make the warning, public policy, and implementation agree.
+- [x] The current account-deletion backend is deployed and a fresh disposable two-participant email test verified account-owned deletion, related-conversation closure/blocking, and preserved read-only history for the surviving participant.
+- [ ] Repeat deletion on the exact uploaded build, including a physical Apple-linked disposable account, provider/backup behavior, and the approved finite retention duration or objective criterion and exceptions; make the warning, public policy, operations, and exact-build behavior agree.
 - [ ] Keep reviewer credentials only in the team password manager and App Store Connect's credential fields. Confirm `docs/app-store/private-reviewer-credentials.md` remains ignored and untracked.
 - [ ] Re-verify credentials immediately before pressing Submit for Review and daily while in review.
