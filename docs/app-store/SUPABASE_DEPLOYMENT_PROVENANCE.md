@@ -50,7 +50,7 @@ The following migration identifiers and names are live and match the filenames n
 
 ## Verified backend controls
 
-- The complete shared Deno regression suite passes: **60/60** with `deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts`.
+- The deployed/tagged snapshot's complete shared Deno regression suite passed **60/60**. The current untagged working tree passes **71/71** after adding Apple private-relay, transactional chat-email, and current/legacy chat-membership regressions, but the corresponding `bd-complete-profile`, `bd-couple-signup`, `bd-vendor-signup`, and `bd-chat-sync` source changes are not deployed. Do not attribute the new relay-safe, app-originated chat-email, or recipient-plan compatibility behavior to the live function versions listed above until deployment provenance and physical TestFlight evidence are recorded.
 - Browser-bound OAuth attempts are live. Controlled tests exercised host-only binding cookies, provider matching, missing/mismatched browser binding, atomic redemption, expiry, and replay rejection. This is backend security evidence, not proof of a real Apple or Google identity-provider login on the submitted app.
 - One-time native/website login exchanges, exchange cleanup, Google PKCE binding, email-consistency checks, and the corrected first-attempt login throttle are deployed.
 - Durable push retry is live in `bd-push-sweep` v8 with migration `20260828214927`: retryable Expo/network outcomes persist bounded backoff and `Retry-After`, accepted tickets are reconciled, and missing receipts expire. APNs signing and foreground/background/terminated delivery still require a physical TestFlight build.
@@ -61,7 +61,7 @@ The following migration identifiers and names are live and match the filenames n
 ## Remaining release and security gaps
 
 - This tested source is recorded by local release-candidate tag `v1.0.0-rc.2`. Nothing has been pushed, associated with a signed archive, or represented in TestFlight. Record the source/deployment checksums privately before push and submission.
-- No processed EAS/TestFlight build or App Store distribution archive is recorded. `extra.eas.projectId`, App Store Connect app linkage, Apple signing, APNs credentials, and physical iPhone/iPad evidence remain pending.
+- Current source links `@blair.shane/weddingwin-app` through `extra.eas.projectId` and includes required-reason privacy-manifest declarations. No processed EAS/TestFlight build or App Store distribution archive is recorded; App Store Connect app linkage, merged signed-archive manifest validation, Apple signing, APNs credentials, and physical iPhone/iPad evidence remain pending.
 - Real Apple/Google login, printed-camera QR, push delivery/token lifecycle, network interruption, and Apple-linked deletion remain physical-device gates.
 - The controlled reviewer-pair text round trip is recorded locally/live, including website reload persistence and native incoming visibility. Repeat it on the exact processed TestFlight build, keep the expiring pair authorization active for the review window, and document that inactive-vendor website sending is intentionally unavailable rather than presenting that rejected direction as a failure.
 - App Privacy answers, the public policy, deletion retention, raffle sponsor/rules/vendor terms, production WebView tracking inventory, and other owner/legal decisions remain blockers.

@@ -1,82 +1,43 @@
-# Privacy Policy amendment checklist
+# Privacy policy publication checklist
 
-Status: **DRAFT CHECKLIST — owner and legal review required.**
+Status: **CODE-OWNED CHECKLIST FINAL — publication remains blocked on owner/legal/live-system facts.**
 
-The current public policy at `https://www.weddingwin.ca/about/privacy` is website-oriented and does not precisely describe the iOS app, native chat mirror, Expo push, Supabase tables, QR scans, vendor-draw sharing, or complete account deletion. It also broadly says targeted advertising/ad-network tracking “may” occur. Before submission, publish a dated revision that accurately reflects production behavior.
+Use `PRIVACY_POLICY_REPLACEMENT_DRAFT.md` as the publication candidate. Its code-backed prose is complete; unresolved facts are isolated in four schedules. Do not patch the current generic website policy with selected paragraphs or publish either tracking variant speculatively.
 
-## Required structural changes
+## Why the current public page must be replaced
 
-- [ ] Name the legal controller/developer consistently: `Wedding Win Inc.` versus `WeddingWin.ca`. State the legal address and privacy contact. **OWNER/LEGAL CONFIRMATION**
-- [ ] State that the policy covers the WeddingWin iOS app, WeddingWin.ca pages embedded in the app, related APIs, QR Bingo, private messaging, and vendor draws.
-- [ ] Add an effective date, revision date, and version that matches the consent version used by the release build.
-- [ ] Replace broad template language with specific present-tense practices. If advertising or cross-site tracking is not actually used, remove those statements; if it is used, name the categories/vendors and implement the required consent and App Privacy answers.
-- [ ] Add a concise table of data category, source, purpose, recipient, retention, and user choice.
+The live `https://www.weddingwin.ca/about/privacy` page is website-oriented and does not adequately cover the iOS app, Supabase, native/website chat synchronization, Expo/APNs push, QR scans, vendor-draw sharing, or current account deletion. It broadly describes targeted advertising and third-party tracking, and the live site currently requests Meta Pixel from `connect.facebook.net` (pixel ID `1947515779077331`). The native WebView uses the `WeddingWinApp/1.0` user-agent tag, incognito mode, disabled third-party cookies, and client-side interception, but none of those facts alone proves the pixel request is prevented. App Store Privacy answers cannot be made consistent until exact-build traffic is inventoried and one accurate tracking path is implemented.
 
-## Data categories to describe explicitly
+The existing `https://www.weddingwin.ca/account/deleteaccount` route redirects signed-out users to login. It is not ready to serve as the public privacy-choices URL.
 
-- [ ] Account/contact: name, email, phone, company, role/membership plan, city/province/country/postal code, profile photo and listing/profile information.
-- [ ] Wedding planning: wedding date and any other planning/profile details. Wedding date is not automatically Apple “Sensitive Info,” but it is personal information.
-- [ ] Authentication: Sign in with Apple/Google claims, Apple stable subject identifier, WeddingWin member ID, Supabase profile ID, session token and cookie. Explain that secrets/session data are protected and are not sold.
-- [ ] Private chat: participants, message text, thread/message IDs, timestamps, read/delivery state, delivery errors, reports and conversation closures/blocks; explain app↔website synchronization. Native image sending is disabled in this release; separately describe any retained historical message media.
-- [ ] Describe report/block scope accurately: reporting closes the current website conversation and the app suppresses the reported member, but an external website entry point may create a fresh thread until synchronization closes it. Do not promise preventive website-wide blocking unless that hook is added and verified.
-- [ ] QR Bingo: decoded vendor ID, scan/progress history, event and vendor identifiers.
-- [ ] Vendor draw: vendor prize/settings, entrant member ID, name, email, phone, wedding date, opt-in wording/version/time, winner/draw records, and email-delivery status.
-- [ ] Push: Expo push token, device platform, member ID/token linkage, unread count and notification timestamps; state that current push payloads do not contain private message text.
-- [ ] Web traffic: actual cookies, local/DOM storage, IP address, user agent/browser data, page/link/search activity, referrer, captcha, analytics, ads/pixels and logs used on WeddingWin.ca pages embedded in the app.
-- [ ] Describe the final verified WebView behavior, not source intent: allowed in-app hosts, external/off-domain navigation, redirects/pop-ups, bridge origin, third-party cookies, session storage, login/logout clearing, blocked tracking scripts, and the fact that server-side collection still occurs where disclosed.
-- [ ] Support: support emails/contact-form messages and attachments, if retained.
-- [ ] Payments: actual current vendor-subscription/payment flow and processor. State whether Wedding Win can access payment-card data. **OWNER CONFIRMATION**
+## Owner/legal completion
 
-## Collection sources and purposes
+- [ ] Confirm the exact legal controller/developer identity, mailing address, monitored privacy contact, support contact, effective date, minimum account age, launch territories, and applicable privacy regimes.
+- [ ] Publish a mobile-friendly privacy-request page that is reachable without login while still verifying identity before changing data.
+- [ ] Approve the finite duration or objective criterion for every category in publication schedule 3, including surviving-participant message history, moderation records, draw/contest records, logs, backups, and legal holds.
+- [ ] Confirm payment/purchase behavior reachable in the submitted app and whether WeddingWin receives payment or purchase information.
+- [ ] Decide the prize-vendor privacy role and request handoff; make the vendor agreement support the selected-potential-winner-only, verification/fulfilment-only, no-marketing promise.
+- [ ] Confirm the draw developer/sponsor/administrator identity, rules, territory, age, no-purchase method, dates, skill question, prize, vendor role, and Apple non-involvement language.
+- [ ] Obtain qualified privacy and promotions counsel review for every launch territory. The repository materials are technical preparation, not legal advice.
 
-- [ ] Explain data received directly from users, from Apple/Google login, from WeddingWin.ca membership/profile records, from device/app events, and from participating vendors.
-- [ ] Tie each category to a purpose: authentication/account management, vendor discovery, private messaging, security/fraud prevention, push alerts, QR scan progress, raffle administration/fulfilment, support, analytics, and marketing only where genuinely applicable. Raffle entry is not marketing consent in the release posture.
-- [ ] State that camera frames remain on-device for QR decoding and only the matched vendor identifier is sent, if production behavior remains as audited.
-- [ ] State that native chat image selection/upload is disabled in this release. If it is re-enabled later, add a separate photo-library collection/retention disclosure and retest permission behavior before release.
-- [ ] Explain why phone and wedding date may be disclosed to the selected raffle vendor and that this occurs only for a selected potential winner after a separate, named-vendor opt-in, solely for verification and prize fulfilment.
+## Release-owner evidence
 
-## Sharing and processors
+- [ ] Audit exact TestFlight traffic for every embedded WeddingWin page and subresource: scripts, first/third-party cookies, local storage, redirects, Vimeo/other embeds, analytics, ads, captcha, CDN, email, support, payment, logging, IP/user-agent retention, and recipients.
+- [ ] Preferred v1 path: suppress Meta Pixel server-side whenever the `WeddingWinApp/1.0` user-agent tag is present, then capture exact-TestFlight evidence that no Meta/tracking request occurs before or after page load.
+- [ ] If server-side suppression is not used or does not pass, implement required consent/ATT before tracking data is sent and disclose the affected data types, partners, purposes, linking, and tracking in App Store Connect and the policy.
+- [ ] Replace the tracking/advertising schedule with one present-tense answer and make App Store Privacy, website notices, provider contracts, and the implemented suppression or consent path agree.
+- [ ] Verify physical printed-QR behavior: camera frames stay on device and only the decoded/matched vendor identifier is transmitted.
+- [ ] Verify native image upload remains unavailable and inventory profile/listing images plus retained historical message media.
+- [ ] Verify physical TestFlight push token registration/rotation, generic payload with no message text, foreground/background/terminated delivery, sign-out cleanup, invalid-token handling, and deletion cleanup.
+- [ ] Verify exact-build signed-in deletion, physical Apple reauthentication/revocation, Google/provider handling, all active stores, shared read-only history, report/block records, email systems, object storage, and backup expiry.
+- [ ] Verify the public policy and privacy-request URLs work signed out on iPhone and iPad without a broken layout, redirect loop, CAPTCHA failure, stale copy, or unresolved schedule label.
 
-- [ ] Identify Supabase, Expo push, the WeddingWin.ca directory/hosting platform, Apple, Google, email delivery, payment, captcha, CDN, analytics and advertising providers actually used in production.
-- [ ] For each, state what it receives, why, where it processes data, retention/contract controls, and a link to its privacy information where appropriate.
-- [ ] Describe the participating vendor as a recipient only of a selected potential winner's disclosed contact/verification data after named-vendor opt-in. State whether the vendor acts independently, jointly, or only on Wedding Win’s instructions. **LEGAL CONFIRMATION**
-- [ ] Restrict vendor use contractually and operationally to administration of the named draw and prize fulfilment. The initial release must not treat entry as vendor-marketing consent; any later marketing option must be separate, optional, withdrawable, and reflected in the rules, policy, App Privacy answers, vendor agreement, and deployed UI.
-- [ ] Include Apple’s required assurance that third parties receiving user data provide the same or equivalent protection promised by Wedding Win.
-- [ ] State whether data is sold or shared for cross-context behavioral advertising under applicable law. **LEGAL CONFIRMATION**
+## Final consistency review
 
-## Retention, deletion, and choices
+- [ ] Compare each App Store Privacy data type, purpose, linked/tracking choice, and privacy URL against the completed policy.
+- [ ] Compare the policy against the signed binary privacy report and production network log.
+- [ ] Compare deletion wording in About, policy, support scripts, backend operations, and reviewer notes. It must say related conversations close while shared history may remain read-only for the other participant under the approved retention schedule.
+- [ ] Compare QR/draw wording across entry UI, official rules, privacy notice, vendor agreement, email templates, App Review notes, and operations. Entry must remain separate from scanning and must not become marketing consent.
+- [ ] Confirm the completed policy is versioned, dated, archived, and linked from the submitted app before review.
 
-- [ ] Publish actual retention periods or clear criteria for accounts/profiles, authentication mappings, session logs, messages/retained media, reports/blocks, push tokens, QR scans, raffle entries/draws, support requests, web analytics and backups. No retention periods are currently established by this draft.
-- [ ] Explain in-app deletion accurately: a signed-in user chooses About → Delete Account, reviews the permanent-deletion warning, and confirms in the native app. Apple-linked accounts may require Sign in with Apple reauthentication/revocation. A public privacy-request/deletion page remains a supplemental route for people who cannot sign in.
-- [ ] Distinguish account deactivation from deletion. Apple requires account deletion, not merely disabling login.
-- [ ] State exactly which systems and account-owned records are deleted: WeddingWin.ca member/profile/listing and owned content; Supabase auth/profile and Apple mapping; the deleting member's pending chat outbox/cache data; push tokens; QR scan data; raffle entries/settings/draw data where permitted; and backups on expiry.
-- [ ] Disclose the shared-conversation effect accurately. The deployed design closes app/website conversation aliases, blocks new sends involving the deleted member, and preserves shared message history plus report/block evidence as read-only for the surviving participant; a fresh two-participant email-account test passed. Owner/legal must set a finite retention duration or objective criterion, any longer legal/safety holds, and the eventual deletion/de-identification outcome; make the confirmation warning, policy, operations, and exact TestFlight/physical test agree.
-- [ ] Explain exceptions that must be retained for fraud, legal, accounting, contest integrity, safety reports, or dispute records, with category and duration.
-- [ ] Revoke Sign in with Apple tokens/authorization when applicable and describe the effect of disconnecting Google.
-- [ ] Explain that data already disclosed to a participating vendor cannot be “unshared,” but users can request deletion from Wedding Win and, where applicable, the vendor. Do not imply that draw entry creates marketing consent; if a separate future marketing consent exists, explain how to withdraw it.
-- [ ] Replace or legally review “This opt-in is final.” It should not imply users waive statutory privacy rights. A safer concept is: entry cannot be withdrawn after the draw deadline where contest law permits, but privacy and marketing rights remain available.
-- [ ] Explain how to access, correct, export, object, withdraw consent, disable notifications, and complain. Provide expected response and verification steps.
-- [ ] Make the privacy-choices/deletion page publicly accessible without first needing a working login, while requiring identity verification before data changes.
-
-## Children, geography, and legal basis
-
-- [ ] State the minimum account age and the age-of-majority rule for raffle entry. Add an age gate if the official rules require one. **OWNER/LEGAL CONFIRMATION**
-- [ ] Confirm the app is not directed to children and describe deletion of inadvertently collected child data.
-- [ ] Address Canadian requirements, including PIPEDA and applicable provincial law, and any other storefront territories selected. **LEGAL CONFIRMATION**
-- [ ] State international processing/transfers accurately; the current policy references U.S. and other-country servers.
-- [ ] For consent, contract, legal obligation, or legitimate-interest bases, map the basis to the actual processing and territory. **LEGAL CONFIRMATION**
-
-## Security and incident handling
-
-- [ ] Describe transport encryption, access control/RLS/service-role access, iOS SecureStore, least-privilege administration, logging, backups and vendor controls without claiming absolute security.
-- [ ] Explain whether historical chat images remain stored as encoded image data in Supabase/WeddingWin systems even though native image sending is disabled in this release.
-- [ ] Publish an incident-response contact and any legally required breach-notification process.
-
-## Final consistency check
-
-- [ ] Compare the revised policy against App Store Connect App Privacy answers line by line.
-- [ ] Compare it against the final Xcode privacy report/privacy manifests and the actual production website network log.
-- [ ] Reverify the implemented WebView host/navigation, bridge-origin, tracking-script, and cookie controls on the exact tagged/TestFlight build; source allowlists and cookie flags are not deployment or network-behavior evidence.
-- [ ] Verify production push configuration and behavior: Expo project ID, App ID capability, APNs credential, token registration, generic payload content, sign-out/deletion cleanup, and foreground/background/terminated delivery on a physical iPhone.
-- [ ] Verify the policy and privacy-choices URLs render without authentication, CAPTCHA failure, broken layout, or placeholder language on iPhone and iPad.
-- [ ] Obtain owner approval and qualified legal review before publishing. This checklist is technical preparation, not legal advice.
+No publication or deployment is performed by this checklist.

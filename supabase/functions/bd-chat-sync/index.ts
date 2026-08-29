@@ -71,6 +71,7 @@ import {
   filterMessagesAtOrBeforeReport,
   matchingParticipantIdentity,
 } from "../_shared/chat_moderation.ts";
+import { recipientCanReceiveChat } from "../_shared/chat_membership.ts";
 
 const CHAT_REPORTED_NOTICE = CHAT_MEMBER_BLOCKED_NOTICE;
 const CHAT_PERMISSION_ENDPOINTS = [
@@ -224,9 +225,8 @@ async function assertTargetCanReceive(user: BdRow | undefined, currentUser: BdRo
   ) {
     throw new ChatPolicyError("This private reviewer account can only message its paired reviewer account.");
   }
-  if (targetIsPrivateReviewer) return;
-  const plan = await chatPlanForUser(user!);
-  if (!enabledPlanFlag(plan.receive_messages)) {
+  const plan = targetIsPrivateReviewer ? undefined : await chatPlanForUser(user!);
+  if (!recipientCanReceiveChat(plan, targetIsPrivateReviewer)) {
     throw new ChatPolicyError("This member is not accepting private messages.");
   }
 }

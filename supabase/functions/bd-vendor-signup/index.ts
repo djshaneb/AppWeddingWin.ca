@@ -1,4 +1,5 @@
 import { ensureStableBdIdentity } from "../_shared/bd_identity.ts";
+import { normalizeContactEmail } from "../_shared/contact_email.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -54,17 +55,6 @@ function cleanPlainText(value: unknown, maxLength: number) {
     throw new Error("Details cannot contain HTML.");
   }
   return text.slice(0, maxLength);
-}
-
-function cleanEmail(value: unknown) {
-  const email = cleanPlainText(value, 254).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error("Enter a valid email address.");
-  }
-  if (email.endsWith("@privaterelay.appleid.com")) {
-    throw new Error("Please use your regular email address.");
-  }
-  return email;
 }
 
 function cleanPassword(value: unknown) {
@@ -186,7 +176,7 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json();
-    const email = cleanEmail(body.email);
+    const email = normalizeContactEmail(body.email);
     const password = cleanPassword(body.password);
     const firstName = cleanPlainText(body.first_name, 80) || "WeddingWin Vendor";
     const acceptedAt = cleanPlainText(body.accepted_at, 40);

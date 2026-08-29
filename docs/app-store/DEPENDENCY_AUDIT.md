@@ -16,8 +16,9 @@ Audited: 2026-08-28 against the npm production dependency tree (`npm audit --omi
 - Pinned patched transitive versions for `brace-expansion` (`5.0.9`) and `postcss` (`8.5.26`) through npm `overrides`.
 - Pinned vulnerable transitive `uuid` releases below `11.1.1` to `11.1.1`, removing the remaining moderate build-tool advisory family.
 - Regenerated `package-lock.json` without changing package managers. This repository remains npm-based.
+- Added a clean-checkout release gate pinned to Node `24.20.0`, npm `11.19.0`, and Deno `2.9.5`. The guarded production audit invokes the active npm CLI portably and fails when the reviewed advisory baseline expands.
 
-The local checks report dependencies up to date, `expo-doctor` passes 18/18 checks, typecheck and lint pass, and the complete shared Deno regression suite passes **60/60**. The tested source is recorded by local tag `v1.0.0-rc.2`; repeat the checks from a clean tag checkout before any push or TestFlight claim.
+The tagged release-candidate checks reported dependencies up to date, `expo-doctor` passing 18/18 checks, typecheck and lint passing, and the then-current shared Deno regression suite passing **60/60**. The current untagged working tree expands that suite to **71/71** with Apple private-relay, transactional chat-email, and current/legacy chat-membership coverage and also passes typecheck and lint. Repeat the complete dependency and test set from a new immutable tag checkout before any push or TestFlight claim.
 
 ## Before and after
 

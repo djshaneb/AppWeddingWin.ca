@@ -3,11 +3,23 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": "^20.19.4 || ^22.13.0 || ^24.3.0"
+  },
   "scripts": {
     "dev": "EXPO_NO_TELEMETRY=1 expo start",
     "build:web": "expo export --platform web",
-    "lint": "expo lint",
-    "typecheck": "tsc --noEmit"
+    "lint": "expo lint --no-cache",
+    "typecheck": "tsc --noEmit",
+    "expo:check": "expo install --check",
+    "doctor": "expo-doctor .",
+    "test": "deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts",
+    "test:edge": "deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts",
+    "audit:production": "node scripts/check-production-audit.mjs",
+    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -62,6 +74,11 @@
     "@types/react": "~19.1.10",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~10.0.0",
+    "expo-doctor": "1.20.4",
     "typescript": "~5.9.2"
+  },
+  "allowScripts": {
+    "fsevents@2.3.3": true,
+    "unrs-resolver@1.11.1": true
   }
 }

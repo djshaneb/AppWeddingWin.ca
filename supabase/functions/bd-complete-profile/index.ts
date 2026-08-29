@@ -15,6 +15,7 @@ import {
   AuthEmailSyncError,
   preflightLinkedAuthEmail,
 } from "../_shared/auth_email_sync.ts";
+import { normalizeContactEmail } from "../_shared/contact_email.ts";
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const APP_EMAIL_CHANGE_SECRET = (Deno.env.get("APP_EMAIL_CHANGE_SECRET") || "").trim();
 
@@ -43,22 +44,6 @@ function cleanPlainText(value: unknown, maxLength: number) {
     throw new Error("Profile details cannot contain HTML.");
   }
   return text.slice(0, maxLength);
-}
-
-function isApplePrivateRelayEmail(email: string) {
-  return email.trim().toLowerCase().endsWith("@privaterelay.appleid.com");
-}
-
-function cleanRealEmail(value: unknown) {
-  const email = cleanPlainText(value, 254).toLowerCase();
-  if (!email) return "";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error("Enter a valid email address.");
-  }
-  if (isApplePrivateRelayEmail(email)) {
-    throw new Error("Please enter your regular email address, not an Apple private relay email.");
-  }
-  return email;
 }
 
 function cleanWeddingDate(value: unknown) {
@@ -201,10 +186,7 @@ Deno.serve(async (req) => {
 
     const profile = (body.profile || {}) as ProfileInput;
     const existingEmail = String(user?.email || session.email || "").trim().toLowerCase();
-    const nextEmail = cleanRealEmail(profile.email || existingEmail);
-    if (isApplePrivateRelayEmail(existingEmail) && !nextEmail) {
-      return jsonResponse({ error: "Please enter your regular email address." }, 400);
-    }
+    const nextEmail = normalizeContactEmail(profile.email || existingEmail, { allowEmpty: true });
 
     // Resolve the linked GoTrue identity and reject ownership conflicts before
     // changing any provider-side profile fields or sending a confirmation.

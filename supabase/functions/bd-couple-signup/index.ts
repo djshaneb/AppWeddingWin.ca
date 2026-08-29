@@ -7,6 +7,7 @@ import {
   fetchFullBdUserById,
   sanitizeBdUser,
 } from "../_shared/apple_auth.ts";
+import { normalizeContactEmail } from "../_shared/contact_email.ts";
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 // /checkout/10 is the public website signup route. BD's user API needs the real
@@ -31,17 +32,6 @@ function cleanPlainText(value: unknown, maxLength: number) {
     throw new Error("Details cannot contain HTML.");
   }
   return text.slice(0, maxLength);
-}
-
-function cleanEmail(value: unknown) {
-  const email = cleanPlainText(value, 254).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error("Enter a valid email address.");
-  }
-  if (email.endsWith("@privaterelay.appleid.com")) {
-    throw new Error("Please use your regular email address.");
-  }
-  return email;
 }
 
 function cleanPassword(value: unknown) {
@@ -75,7 +65,7 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json();
-    const email = cleanEmail(body.email);
+    const email = normalizeContactEmail(body.email);
     const password = cleanPassword(body.password);
     const firstName = cleanPlainText(body.first_name, 80) || "WeddingWin Couple";
     const phone = cleanPlainText(body.phone, 40);

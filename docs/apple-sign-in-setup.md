@@ -28,6 +28,38 @@ Create/configure these in Apple Developer:
    - Save the Team ID
    - Save the `.p8` private key contents
 
+## Private Email Relay Delivery
+
+WeddingWin accepts the Apple-provided email address as the member's contact
+address, including addresses ending in `@privaterelay.appleid.com`. App access
+must never depend on replacing that address with a personal email. Vendor-contact,
+account, and other app email should be sent to the relay address Apple supplied.
+
+Before enabling production Sign in with Apple:
+
+1. In Apple Developer → Certificates, Identifiers & Profiles → Services, choose
+   **Sign in with Apple for Email Communication** and register every outbound
+   email domain, subdomain, or individual sender used by WeddingWin and its
+   email providers.
+2. Make each registered domain pass SPF validation. Configure DKIM as well;
+   Apple recommends both, and DKIM is required when an email provider's domain
+   is used as the envelope sender.
+3. Verify the envelope sender, `From` domain, DKIM domain, bounce handling, and
+   every transactional/vendor-contact sender. Unregistered sources can bounce
+   instead of reaching the Apple relay address.
+4. Route required vendor-contact email through a registered WeddingWin-controlled
+   sender or mail provider. A participating vendor's unregistered domain cannot
+   be assumed to reach the relay; use in-app messaging or a WeddingWin mail
+   relay rather than requiring the user to disclose a personal address.
+5. On the physical TestFlight build, create a disposable account with **Hide My
+   Email**, confirm app access without entering a personal address, and prove
+   delivery of each required email category through the relay.
+6. If a user disables Apple's forwarding, explain how to re-enable it or choose
+   another contact address, but do not block app access or demand a personal
+   email.
+
+Apple setup reference: [Configure private email relay service](https://developer.apple.com/help/account/capabilities/configure-private-email-relay-service)
+
 ## Supabase Apple Secrets
 
 Set these as Supabase Edge Function secrets. The functions also still support

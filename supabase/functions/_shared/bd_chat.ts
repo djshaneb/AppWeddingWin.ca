@@ -975,6 +975,7 @@ export async function bdSendMessage(threadToken: string, content: string, owner:
       message_owner: owner,
       message_content: `${textHtml}${imageHtml}`,
       created_at: createdAt,
+      send_email_notifications: "1",
     }),
   });
   if (!result.response.ok || result.body.status !== "success") {

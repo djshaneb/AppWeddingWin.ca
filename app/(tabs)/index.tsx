@@ -853,7 +853,6 @@ function needsContactProfile(member: NativeMember | null): boolean {
   if (!member?.email) return false;
   const firstName = String(member.first_name || '').trim();
   return (
-    isApplePrivateRelayEmail(member.email) ||
     !firstName ||
     firstName.toLowerCase() === 'weddingwin couple' ||
     !normalizeWeddingDate(member.wedding_date)
@@ -915,9 +914,9 @@ function isApplePrivateRelayEmail(email?: string): boolean {
   return String(email || '').trim().toLowerCase().endsWith('@privaterelay.appleid.com');
 }
 
-function isValidRealEmail(email: string): boolean {
+function isValidEmail(email: string): boolean {
   const clean = email.trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean) && !isApplePrivateRelayEmail(clean);
+  return clean.length <= 254 && !/[<>\s]/.test(clean) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean);
 }
 
 function formatWeddingDate(date: Date): string {
@@ -1981,9 +1980,7 @@ function NativeHome({
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [wizardStep, setWizardStep] = useState<1 | 2>(1);
   const [profileFirstName, setProfileFirstName] = useState(member?.first_name || '');
-  const [profileEmail, setProfileEmail] = useState(
-    isApplePrivateRelayEmail(member?.email) ? '' : member?.email || ''
-  );
+  const [profileEmail, setProfileEmail] = useState(member?.email || '');
   const [profileWeddingDate, setProfileWeddingDate] = useState(
     normalizeWeddingDate(member?.wedding_date)
   );
@@ -2014,7 +2011,7 @@ function NativeHome({
 
   useEffect(() => {
     setProfileFirstName(member?.first_name || '');
-    setProfileEmail(isApplePrivateRelayEmail(member?.email) ? '' : member?.email || '');
+    setProfileEmail(member?.email || '');
     setProfileWeddingDate(normalizeWeddingDate(member?.wedding_date));
   }, [
     member?.email,
@@ -2104,10 +2101,10 @@ function NativeHome({
       return;
     }
 
-    if (!isValidRealEmail(cleanEmail)) {
+    if (!isValidEmail(cleanEmail)) {
       Alert.alert(
-        'Use your real email',
-        'Please enter your regular email address for website login and vendor alerts.'
+        'Enter a valid email',
+        'Use an email address that can receive website login, vendor-contact, and app messages.'
       );
       return;
     }
@@ -2137,7 +2134,7 @@ function NativeHome({
         member?.company ||
         member?.email;
   const shouldCompleteProfile = memberIsCouple && needsContactProfile(member);
-  const mustReplaceRelayEmail = isApplePrivateRelayEmail(member?.email);
+  const usesApplePrivateRelayEmail = isApplePrivateRelayEmail(member?.email);
   const isVendorRole = role === 'vendor';
   const showCoupleMenu = !!member && memberIsCouple;
   const showVendorMenu = !!member && !memberIsCouple;
@@ -2495,10 +2492,10 @@ function NativeHome({
       return;
     }
 
-    if (!isValidRealEmail(profileEmail)) {
+    if (!isValidEmail(profileEmail)) {
       Alert.alert(
-        'Use your real email',
-        'Please enter your regular email address. Apple private relay emails cannot be used for WeddingWin vendor alerts or website account access.'
+        'Enter a valid email',
+        'Use an email address that can receive website login, vendor-contact, and app messages.'
       );
       return;
     }
@@ -2675,6 +2672,11 @@ function NativeHome({
                   numberOfLines={1}>
                   {displayName}
                 </Text>
+                {usesApplePrivateRelayEmail ? (
+                  <Text style={styles.profileHint} accessibilityRole="text">
+                    Apple forwards WeddingWin and vendor-contact emails through this private address. Keep Apple email forwarding enabled to receive them.
+                  </Text>
+                ) : null}
                 {shouldCompleteProfile ? (
                   <>
                     <View style={styles.profileInputShell}>
@@ -2691,32 +2693,12 @@ function NativeHome({
                     </View>
                     <View style={styles.profileInputShell}>
                       <Mail size={20} color="#7D7D80" strokeWidth={1.7} />
-                      {mustReplaceRelayEmail ? (
-                        <TextInput
-                          value={profileEmail}
-                          onChangeText={setProfileEmail}
-                          placeholder="Your real email address"
-                          placeholderTextColor="#A8A8AD"
-                          keyboardType="email-address"
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          textContentType="emailAddress"
-                          accessibilityLabel="Real email address"
-                          style={styles.textInput}
-                        />
-                      ) : (
-                        <Text
-                          style={styles.readOnlyInput}
-                          numberOfLines={1}>
-                          {member.email}
-                        </Text>
-                      )}
-                    </View>
-                    {mustReplaceRelayEmail ? (
-                      <Text style={styles.profileHint}>
-                        Apple hid your email. Add your regular email so vendor alerts and website login work.
+                      <Text
+                        style={styles.readOnlyInput}
+                        numberOfLines={1}>
+                        {member.email}
                       </Text>
-                    ) : null}
+                    </View>
                     <TouchableOpacity
                       style={styles.profileInputShell}
                       activeOpacity={0.82}
@@ -2764,16 +2746,14 @@ function NativeHome({
                         <Text style={styles.secondaryActionText}>Save & Open Dashboard</Text>
                       )}
                     </TouchableOpacity>
-                    {!mustReplaceRelayEmail ? (
-                      <TouchableOpacity
-                        style={styles.signOutButton}
-                        activeOpacity={0.82}
-                        onPress={onOpenDashboard}
-                        accessibilityRole="button"
-                        accessibilityLabel="Skip profile for now and open dashboard">
-                        <Text style={styles.signOutText}>Skip for now</Text>
-                      </TouchableOpacity>
-                    ) : null}
+                    <TouchableOpacity
+                      style={styles.signOutButton}
+                      activeOpacity={0.82}
+                      onPress={onOpenDashboard}
+                      accessibilityRole="button"
+                      accessibilityLabel="Skip profile for now and open dashboard">
+                      <Text style={styles.signOutText}>Skip for now</Text>
+                    </TouchableOpacity>
                   </>
                 ) : showCoupleMenu ? (
                   <>

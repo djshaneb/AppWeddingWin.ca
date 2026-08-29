@@ -1,6 +1,6 @@
 # App Store metadata and compliance checklist
 
-Status: **DRAFT — no metadata has been submitted.**
+Status: **CODE-OWNED CHECKLIST FINAL — owner/App Store Connect decisions and release evidence remain open.**
 
 ## Proposed product-page metadata
 
@@ -9,7 +9,7 @@ Status: **DRAFT — no metadata has been submitted.**
 | App name | `WeddingWin` | Confirm trademark/name availability in App Store Connect. |
 | Subtitle | `Wedding planning, connected` | 27 characters; owner approval required. |
 | Bundle ID | `ca.weddingwin.app` | Already declared in Expo config; register the exact explicit App ID in Apple Developer. |
-| SKU | `<INTERNAL_SKU, e.g. WW-IOS-001>` | Owner sets; not customer-visible and cannot be changed later. |
+| SKU | **Owner decision required** | Set once in App Store Connect; it is not customer-visible and cannot be changed later. Record the chosen value in the private release ticket, not as a repository placeholder. |
 | Primary language | English (Canada) | Confirm storefront/localization plan. |
 | Primary category | Lifestyle | Owner confirmation. |
 | Secondary category | Business | Owner confirmation; appropriate to the vendor path. |
@@ -18,8 +18,8 @@ Status: **DRAFT — no metadata has been submitted.**
 | Support URL | `https://www.weddingwin.ca/about/contact` | Page is public, but add visible support email, phone and legal address as required for the chosen territories. |
 | Marketing URL | `https://www.weddingwin.ca/` | Optional; confirm final branding/content. |
 | Privacy URL | `https://www.weddingwin.ca/about/privacy` | Revise per `PRIVACY_POLICY_AMENDMENTS.md` before submission. |
-| Privacy Choices URL | `<PUBLIC PRIVACY CHOICES URL>` | Current source exposes About → Delete Account for signed-in users, and a fresh disposable email account passed the working-tree iPhone Simulator/live-backend path. Physical Apple revocation, provider/backups, exact uploaded-build verification, and the public supplemental route remain Pending `DEV-10`. Use `https://www.weddingwin.ca/account/deleteaccount` here only after logged-out/mobile/access testing. |
-| Copyright | `2026 Wedding Win Inc.` | Confirm legal rights-holder name. |
+| Privacy Choices URL | **Owner publication required** | Publish a public mobile request page that works without login. The current `/account/deleteaccount` route redirects signed-out users to login and is not ready for this field. Signed-in deletion remains About → Delete Account; physical Apple/provider/backup/exact-build verification remains Pending `DEV-10`. |
+| Copyright | **Owner/legal decision required** | Enter the confirmed rights-holder name and year; do not infer the legal entity from branding or source strings. |
 | Price | Free | Confirm business model and paid vendor membership handling. |
 | Availability | Canada initially | Owner/legal confirmation; raffle rules and privacy law must cover every selected territory. |
 
@@ -86,7 +86,7 @@ Complete Apple’s current questionnaire from the final build; do not manually g
 | Gambling | No only if legal confirms no consideration, wagering, purchasable entry, or real-money gaming. | Apple’s definitions and local contest law must be applied to the final rules. |
 | Simulated Gambling | No | No casino/wager simulation found. |
 | Loot Boxes | No | None found. |
-| Advertising | **OWNER CONFIRMATION** | The public website policy says ads/ad networks may be used. Inspect actual in-app WebView pages. |
+| Advertising | **OWNER CONFIRMATION** | The live site currently requests Meta Pixel. Suppress it server-side for the `WeddingWinApp/1.0` user agent and verify absence on exact TestFlight, or disclose the advertising/tracking behavior and implement required consent/ATT before transmission. |
 | Parental Controls | No | None found. |
 | Age Assurance | No unless an age gate/verification is added for draws. | Official rules must define eligibility. |
 | Profanity, sexual content, violence, drugs, weapons, medical/wellness | None in developer-provided content, subject to final content audit | User messages can be abusive; moderation remains required regardless of rating. |
@@ -103,9 +103,9 @@ Apple Guideline 5.3.1 says sweepstakes and contests must be sponsored by the app
 
 ### Recommended model
 
-Use a **Wedding Win Inc.-sponsored and administered promotion framework**:
+Use a **developer-sponsored and administered promotion framework only after the legal developer identity is confirmed**:
 
-1. Wedding Win Inc., the app developer, is the legal sponsor/administrator of every draw offered through the iOS app.
+1. The exact legal entity enrolled as the App Store developer is the sponsor/administrator of every draw offered through the iOS app. Owner/legal must confirm that identity; source strings and the brand name are not sufficient.
 2. The named participating vendor is the prize supplier and fulfilment partner—not the sole sponsor—and signs a vendor promotion addendum before enabling entries.
 3. Wedding Win controls entry mechanics, consent, eligibility, random selection, records, complaint handling, privacy requirements and rule publication.
 4. Each draw has a master official-rules document plus a draw-specific schedule containing vendor, prize and approximate retail value, event, territory, age, opening/closing/draw dates, no-purchase method, odds statement, selection/notification, skill-testing question if legally required, fulfilment, publicity/privacy, disputes, sponsor address and Apple disclaimer.
@@ -116,7 +116,7 @@ Use a **Wedding Win Inc.-sponsored and administered promotion framework**:
 
 For the initial release, adopt a **no-marketing raffle posture**: draw entry is consent only to administer the named draw and fulfil the prize. Do not include a vendor-marketing checkbox in the same required consent, do not enrol entrants in campaigns, and do not describe exports as lead-generation data. If a separate optional marketing choice is introduced later, it requires its own unticked consent, withdrawal path, policy/official-rules text, App Privacy purpose, vendor controls, and legal review.
 
-If Wedding Win Inc. will not be the sponsor/administrator, the safer release choice is to remove vendor-draw entry/management from the iOS experience (including embedded app web pages) until Apple and legal counsel approve another structure. Relabeling a vendor-run chance draw does not solve Guideline 5.3.1.
+If the confirmed App Store developer entity will not be the sponsor/administrator, remove vendor-draw entry/management from the iOS experience (including embedded app web pages) until Apple and legal counsel approve another structure. Relabeling a vendor-run chance draw does not solve Guideline 5.3.1.
 
 Required checks:
 
@@ -137,18 +137,20 @@ Reference: [App Review Guidelines 5.3](https://developer.apple.com/app-store/rev
 - [ ] App content rights: confirm Wedding Win owns/licenses every logo, stock image, vendor image, profile asset, sound, screenshot and website content shown in-app.
 - [ ] Advertising identifier: answer No if the final binary/site does not use IDFA; otherwise implement ATT and accurate privacy answers.
 - [ ] In-app purchases: source has no StoreKit flow. **OWNER CONFIRMATION:** determine whether paid vendor membership, upgrades, or digital services can be bought/managed in the in-app WebView. Resolve Guideline 3.1 requirements before submission.
-- [ ] Sign in with Apple capability is enabled on the App ID and distribution profile; the one-time website app-login exchange is deployed; and the production backend rejects Expo Go's shared Apple audience unless an explicitly temporary development environment opts in.
+- [ ] Sign in with Apple capability is enabled on the App ID and distribution profile; the one-time website app-login exchange is deployed; Hide My Email never triggers a personal-email access gate; every outbound account/vendor-contact sender is registered for Apple Private Email Relay with verified SPF/DKIM and physical delivery evidence; and the production backend rejects Expo Go's shared Apple audience unless an explicitly temporary development environment opts in.
 - [ ] The Google system-browser flow's PKCE/one-time native exchange and browser-bound OAuth-attempt migration/functions are deployed together; controlled missing/mismatched-cookie and replay tests pass; production server credentials/redirect allowlist are approved; and real first/returning/cancel/error paths pass on TestFlight without member/session credentials in callback URLs or logs.
 - [ ] Push Notifications capability/APNs key is enabled on the App ID and distribution profile; the deployed centralized sweep worker, ticket/receipt tracking, durable bounded retry/`Retry-After`, and finite receipt-expiry controls pass on a physical TestFlight device. Confirm token lifecycle and ambiguous-network/no-duplicate behavior rather than inferring device delivery from backend tests.
-- [ ] `extra.eas.projectId` and `submit.production.ios.ascAppId` are configured for the chosen EAS build/submit route. The unused blank `extra.googleOAuth.iosClientId` has been removed; verify the server-held Google credentials and redirect allowlist on TestFlight rather than reintroducing it.
+- [x] `extra.eas.projectId` links current source to `@blair.shane/weddingwin-app`.
+- [ ] Add `submit.production.ios.ascAppId` from the owner-controlled App Store record, record the auto-incremented build number, and verify the linked project in the signed TestFlight binary. The unused blank `extra.googleOAuth.iosClientId` has been removed; verify the server-held Google credentials and redirect allowlist rather than reintroducing it.
+- [ ] Inspect the generated archive and merged dependency manifests. Current source declares required reasons for UserDefaults, file timestamps, system boot time, and disk space, but only Apple's signed-build validation can confirm the final privacy manifest is complete and accepted.
 - [ ] Apple/Expo owner authentication and distribution credentials are available through secure systems. No signed App Store archive/TestFlight build exists in the current preparation record.
 - [ ] Privacy policy, terms, vendor-draw rules, support and account-deletion URLs are final, HTTPS, mobile-friendly and available without broken auth/CAPTCHA.
 - [ ] Content moderation meets Guideline 1.2: filtering, report, app-side member block, timely response and published contact information. The same-sync website-close flush is deployed and controlled tests pass; document that an external website entry point may still create a fresh thread before sync, or implement and verify website-side prevention before claiming a website-wide user block.
 - [ ] Account deletion meets Guideline 5.1.1(v); under `DEV-10`, prove account-owned data deletion plus conversation closure/blocking and recipient-visible read-only shared history. Obtain owner/legal approval for the finite retention duration/criterion, exceptions, and published wording.
 - [ ] Data collection and deletion match App Privacy answers and the public policy.
 - [ ] App review primary/additional credentials and sample QR are prepared. Service-only, expiring chat access is deployed for the exact private vendor `38970` ↔ couple `38971` pair without publishing the vendor. The controlled app→website and supported active-couple website→private-vendor-app text round trip passed; inactive-vendor website sending is correctly blocked. Exact-build account/privacy checks and the TestFlight repeat remain before final reviewer instructions are submitted.
-- [x] Prepare two clean primary 6.9-inch iPhone 17 Pro Max marketing PNGs at `1320×2868`: couple menu and About. Both have been visually checked for credentials/prompts.
-- [ ] Select the final iPad set from the clean `2064×2752` candidate and any additional truthful scenes, then upload iPhone/iPad screenshots and inspect App Store Connect previews. Keep the nine `1206×2622` 6.3-inch files classified as QA evidence unless individually approved for marketing use. App preview is optional.
+- [ ] Finalize the iPhone set. Two `1320×2868` opaque RGB PNGs are dimensionally eligible candidates, but they use the fictional `App Review` fixture and are not processed-TestFlight captures; recheck every visible string and recapture if necessary. The nine `1206×2622` files remain QA evidence and include explicit do-not-upload states listed in `SCREENSHOT_SHOT_LIST.md`.
+- [ ] Replace the current `2064×2752` iPad capture. Although its dimensions are accepted, it shows a narrow phone-like layout and a partial gray overlay/spinner artifact. Complete full iPad testing, capture an actual final iPad set, then inspect iPhone/iPad previews in App Store Connect. App preview video is optional.
 - [ ] Availability, price, tax category, release method and countries/regions are selected.
 - [ ] If distributed in the EU, complete Digital Services Act trader-status/contact requirements.
 - [ ] Select manual release for version 1.0.0 so production can be released after final approval checks.

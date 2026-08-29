@@ -1,223 +1,197 @@
-# WeddingWin privacy policy — replacement draft
+# WeddingWin privacy policy publication candidate
 
-Status: **OWNER/LEGAL WORKING DRAFT — NOT PUBLICATION COPY.**
+Status: **CODE-OWNED COPY FINAL — NOT PUBLISHABLE UNTIL EVERY REQUIRED CELL IN THE FOUR SCHEDULES IS COMPLETED AND APPROVED.**
 
-This is a concrete replacement for the generic policy currently published at `https://www.weddingwin.ca/about/privacy`. It is based on the audited iOS source and backend schema/functions, but the repository cannot establish every production vendor, deployment, script, contract, retention interval, or legal conclusion. Unbracketed present-tense text is proposed policy language based on source-observed behavior; it is not evidence that the behavior has been deployed or live-tested. Bracketed text deliberately prevents unsupported claims from being published.
+The prose below reflects the audited iOS release behavior. Unknown legal-entity, territory, age, tracking, provider, payment, international-processing, and retention facts are intentionally isolated in four schedules. Do not guess them, delete the warning labels, or publish competing tracking variants. Owner/legal must replace each required cell with one verified statement, then remove this status paragraph.
 
-## Unresolved owner/legal input inventory
+## Publication schedule 1 — identity, scope, and choices
 
-Do not publish this draft until every row has a named owner, decision, source of truth, and approval date in the private release ticket. No retention period, address, provider, legal role, or tracking conclusion should be inferred from the repository.
-
-| Decision area | Still required |
+| Required fact | Publication value |
 | --- | --- |
-| Policy identity and contacts | Effective/updated dates; exact controller/legal entity; legal mailing address; privacy/security email; public privacy-request URL; optional privacy phone; support URL/email. |
-| Production data/provider inventory | Exact WeddingWin.ca, Supabase, Expo/APNs, email, payment, CDN, captcha, analytics, advertising, support, logging, backup, and other providers; fields, purposes, countries, contracts, and actual production configuration. |
-| Tracking/advertising | Final TestFlight/WebView network and cookie audit; choose one tracking section; identify any partner/data/purpose/consent/ATT path or substantiate a no-tracking answer. WebView hardening alone does not decide this. |
-| Payments and membership | Whether WeddingWin receives payment/card/bank data; processor; retained transaction fields; billing/tax/fraud/entitlement purposes; in-app-purchase implications. |
-| Raffle legal model | Sponsor/administrator identity; vendor recipient/controller role; vendor agreement; official rules; territory, age, no-purchase method, dates, skill question, fulfilment, Apple disclaimer, marketing prohibition, withdrawal/deletion treatment, and required record retention. |
-| Retention and deletion | Validated period or objective criterion for every category and backup; deletion/anonymization scope; other-participant message history; safety/legal holds; contest/tax records; provider/caches/email effects; Apple revocation and Google disconnect behavior. |
-| Privacy rights/legal basis | Applicable Canadian/provincial and other-territory rights, legal bases, verification, response/appeal timing, regulator links, and complaint process. |
-| Security and incidents | Production access/RLS/service-role controls, admin access, logs, backups, vendor controls, incident process, and security contact. |
-| International processing | Actual processing/storage countries and any required transfer/Québec disclosures or safeguards. |
-| Children and eligibility | Minimum account age, draw eligibility/age gate, and treatment of inadvertently collected child data. |
-| Release verification | Final deployed backend revision; physical/TestFlight Apple/Google login, push, printed QR, deletion; app↔website report/block; WebView host/cookie behavior; public policy/privacy-choice rendering. |
+| Effective date and last updated date | **OWNER/LEGAL REQUIRED** |
+| Legal controller/developer name | **OWNER/LEGAL REQUIRED — confirm the App Store Connect entity, website operator, and draw documents use the same correct identity** |
+| Legal mailing address | **OWNER/LEGAL REQUIRED** |
+| Privacy email | **OWNER REQUIRED — must be monitored** |
+| Public privacy-request URL | **OWNER REQUIRED — must work without login on mobile; `/account/deleteaccount` currently redirects signed-out users to login** |
+| Support email/URL | **OWNER REQUIRED — `info@weddingwin.ca` and the current support page are candidates, not an invented legal designation** |
+| Minimum account age and child-data response | **OWNER/LEGAL REQUIRED** |
+| App/storefront territories and governing privacy regimes | **OWNER/LEGAL REQUIRED** |
+| Payment/purchase behavior reachable in the submitted app | **OWNER REQUIRED — identify the processor and whether WeddingWin receives payment or purchase data** |
+| QR Bingo draw sponsor/administrator, vendor role, territories, age, and official-rules version | **OWNER/LEGAL REQUIRED — must match App Store developer identity, deployed consent, vendor agreement, and live rules** |
+
+## Publication schedule 2 — tracking, analytics, and additional recipients
+
+Replace the next cell with exactly one verified, owner/legal-approved present-tense statement after an exact-build production network/cookie audit. If tracking occurs, name every affected data type, partner, purpose, consent/ATT control, and withdrawal/opt-out method. If it does not occur, confirm the statement covers embedded WeddingWin.ca pages and subresources, not only native dependencies.
+
+| Required fact | Publication value |
+| --- | --- |
+| Tracking, sale/share, analytics, and advertising practice | **OWNER/LEGAL REQUIRED — the live site currently requests Meta Pixel from `connect.facebook.net` (pixel ID `1947515779077331`). Preferred v1 path is server-side suppression for the `WeddingWinApp/1.0` user-agent tag plus exact-TestFlight network proof. Otherwise publish the tracking data types, Meta/other partners, purposes, consent/ATT control, and opt-out method.** |
+| Email delivery provider, data, region, and role | **OWNER REQUIRED** |
+| Payment provider, data, region, and role | **OWNER REQUIRED or “not reachable/collected in the submitted app” after verification** |
+| CDN, captcha, embedded media, analytics, advertising, support, and logging providers | **OWNER REQUIRED — list each production recipient or state the verified absence of that category** |
+| Processing/storage countries and transfer safeguards | **OWNER/LEGAL REQUIRED** |
+| Selected-prize-vendor privacy role and request handoff | **LEGAL REQUIRED — independent, joint, or processor role must match the vendor agreement and operations** |
+
+## Publication schedule 3 — retention and deletion
+
+Each value must be a finite duration or an objective criterion that production operations and backup handling enforce. Identify any narrower legal, safety, fraud, tax, contest, or dispute exception and the eventual deletion or de-identification outcome.
+
+| Data category | Approved retention period or criterion |
+| --- | --- |
+| Account, profile/listing, and authentication mappings | **OWNER/LEGAL REQUIRED** |
+| Session tokens, cookies, and one-time login attempts/exchanges | **OWNER/SECURITY REQUIRED** |
+| Private messages, retained historical media, and delivery records | **OWNER/LEGAL REQUIRED — include surviving participant's read-only shared history after one account is deleted** |
+| Reports, blocks, moderation, fraud, and security records | **OWNER/LEGAL REQUIRED** |
+| Push tokens, tickets, receipts, retries, and errors | **OWNER/SECURITY REQUIRED** |
+| QR scan/progress records | **OWNER/LEGAL REQUIRED** |
+| Draw entries, consent evidence, potential-winner, fulfilment, and audit/tax records | **OWNER/LEGAL REQUIRED** |
+| Support requests | **OWNER/LEGAL REQUIRED** |
+| Web/API, analytics, and diagnostic logs | **OWNER/SECURITY REQUIRED for each production log system** |
+| Payment, billing, and tax records | **OWNER/LEGAL REQUIRED or verified not applicable** |
+| Backups and legal holds | **OWNER/SECURITY/LEGAL REQUIRED — include backup expiry and hold-release handling** |
+
+## Publication schedule 4 — provider and feature verification
+
+| Release fact | Required sign-off |
+| --- | --- |
+| Camera frames stay on device; only decoded vendor ID is transmitted | **RELEASE OWNER — exact TestFlight/physical QR pass** |
+| Native chat image upload remains disabled; historical/profile media inventory is complete | **RELEASE OWNER** |
+| Generic push contains no message text; token lifecycle works on physical TestFlight | **RELEASE OWNER** |
+| Signed-in deletion and physical Apple revocation match this policy | **RELEASE OWNER** |
+| WebView scripts, cookies, redirects, embeds, and recipients match schedule 2 | **RELEASE OWNER** |
+| Draw UI, rules, vendor terms, email, and operations enforce selected-potential-winner-only sharing and no marketing | **OWNER/LEGAL/OPERATIONS** |
 
 ---
 
-## Privacy Policy
+# WeddingWin Privacy Policy
 
-**Effective date:** [OWNER: YYYY-MM-DD]
+The effective date, controller, contact information, territories, minimum age, and other release-specific facts are stated in the publication schedules above. In this policy, “WeddingWin,” “we,” “us,” and “our” mean the controller identified there.
 
-**Last updated:** [OWNER: YYYY-MM-DD]
+## 1. Scope
 
-WeddingWin is operated by **[LEGAL: confirm whether the contracting entity is Wedding Win Inc.; insert full legal name]** (“WeddingWin,” “we,” “us,” or “our”). This policy explains how we collect, use, disclose, retain, and protect personal information when you use:
+This policy applies to the WeddingWin iOS app, WeddingWin.ca pages displayed in the app, related account and API services, private messaging, QR Bingo, vendor prize draws, notifications, and support interactions. It explains what information we process, why we use it, who receives it, how long we keep it, and the choices available to you.
 
-- the WeddingWin iOS app;
-- WeddingWin.ca pages displayed in the app or in a browser;
-- private messaging between the app and WeddingWin.ca;
-- QR Bingo and vendor prize draws; and
-- related accounts, support, notifications, and services.
+## 2. Information we process
 
-**Privacy contact:** [OWNER: privacy email]
+### Account, profile, and authentication information
 
-**Mailing address:** [OWNER: complete legal mailing address]
+We process information used to create and operate a couple or vendor account, such as name, email address, phone number, company or display name, role or membership plan, wedding date, city, province or state, country, postal code, profile/listing content, and profile or listing images. The fields available depend on the account type and feature used.
 
-If a feature presents a more specific notice or consent, that notice applies in addition to this policy.
+If you sign in with Apple or Google, we receive the identity information the provider makes available under your settings. This can include your name, email address or Apple private-relay address, profile image, and a stable provider identifier. We use it to authenticate you and link the provider identity to your WeddingWin account.
 
-### 1. Information we collect
+The app and our services also process WeddingWin member identifiers, Supabase profile identifiers, session tokens or cookies, consent time and policy version, and short-lived login-attempt or exchange records. The iOS app protects current session information using secure device storage.
 
-The exact information depends on whether you use WeddingWin as a couple, vendor, or visitor.
+### Private messages and safety information
 
-| Category | Examples | How we receive it | Why we use it |
-| --- | --- | --- | --- |
-| Account and contact information | Name, email address, phone number, company name, account role or membership plan | You provide it; WeddingWin.ca membership records; Apple or Google sign-in | Create and secure accounts, authenticate users, provide the appropriate couple or vendor experience, communicate about the service, and support users |
-| Profile and listing information | Profile photo, vendor logo/images, vendor listing content, city, province/state, country, postal/ZIP code | You or an authorized account administrator provides it | Publish or display the profile/listing as selected by the account owner, support vendor discovery, and personalize account features |
-| Wedding-planning information | Wedding date and other planning details entered in a profile or draw entry | A couple provides it | Provide planning features, determine event or draw eligibility where applicable, and contact or share with a selected vendor only as described at entry |
-| Authentication and identifiers | WeddingWin member ID, Supabase user/profile ID, Sign in with Apple subject identifier, session token/cookie, thread/message IDs, vendor/event IDs | Generated by WeddingWin or received from Apple, Google, WeddingWin.ca, or Supabase | Maintain sessions, link records across app and website, prevent unauthorized access, synchronize features, and diagnose account problems |
-| Private messages and retained media | Participants, message text, timestamps, delivery/read state, delivery errors, reports, conversation block/closure records, and any historical message media | Users send messages or reports in the app or website | Deliver and synchronize private messaging, show unread status, enforce app-side blocks, investigate reports, and maintain service integrity. Native image sending is disabled in this release. |
-| Push-notification information | Expo push token, device platform, linked member ID, enabled status, unread count, and notification timestamps | Generated when a user permits notifications | Register the device and send service notifications such as a generic alert that a new private message is available |
-| QR Bingo information | Decoded vendor ID, event/vendor identifiers, scan status, completion/progress, and timestamps | A couple scans a participating vendor QR code | Validate event participation and show QR Bingo progress |
-| Vendor prize-draw information | Vendor/prize description, entrant member ID, name, email, phone, wedding date, selected vendor, consent wording/version/time, winner/draw records, and delivery status | Vendor creates a prize; couple separately chooses to enter | Administer the draw, enforce entry rules, select and notify a winner, share the disclosed contact fields with the selected vendor as stated at entry, keep draw-integrity records, and handle disputes |
-| Website and app-WebView information | IP address, user agent/browser and language, access time, session cookies, local/DOM storage, referring address, pages or links used, searches, server/API requests, and error/security logs | Automatically from the device, browser, embedded WeddingWin.ca pages, and service providers | Deliver and secure the website/app experience, retain sessions, process requests, troubleshoot errors, prevent abuse, and [OWNER: add analytics/advertising purposes only if confirmed by the production inventory] |
-| Support information | Contact-form or email content, attachments, account identifiers, and troubleshooting details | You provide it to support | Respond to requests, resolve issues, and document support outcomes |
-| Payment and membership information | [OWNER: identify membership or transaction records retained by WeddingWin and whether any card/bank data reaches WeddingWin] | [OWNER: identify processor and source] | [OWNER: describe billing, tax, fraud, and account-entitlement purposes] |
+When you use private messaging, we process message text, participants, thread and message identifiers, timestamps, read and delivery state, and delivery errors. Conversations synchronize between the iOS app and WeddingWin.ca so participants can see the same text history in either client.
 
-We do not receive the live camera image used to scan a QR code in the audited iOS flow. The device decodes the code, and the matched vendor identifier is sent to WeddingWin. Native chat image selection and upload are disabled in this release. Profile/listing images and any historical message media must still be covered by the final inventory and retention schedule.
+Native chat image selection and upload are disabled in this release. Profile/listing images and historical message media that were previously stored may still be processed according to the retention schedule.
 
-**Production verification required:** The release owner must confirm those camera/photo statements remain true in the submitted build and that no reachable WeddingWin.ca page uploads additional media.
+If you report or block a conversation, we process the reporter, participants, reason and moderation state needed to close or review the conversation and protect users. Reporting closes the current conversation and suppresses the reported member in the app. A conversation created through an external website entry point can exist until synchronization discovers and closes it; this is not a promise of preventive website-wide blocking.
 
-### 2. Sign in with Apple and Google
+### QR Bingo and prize draws
 
-If you sign in through Apple or Google, we receive the identity information that provider makes available under your settings, which may include your name, email address, profile image, and a stable account identifier. We use it to authenticate you and link the provider identity to your WeddingWin account. Apple may provide a private relay email address if you choose to hide your email.
+The app uses the camera on your device to decode a participating vendor's QR code. Camera frames are not uploaded in the audited release. We receive the decoded vendor identifier with the signed-in account and retain vendor, event, scan time, duplicate state, and completion/progress information.
 
-Apple and Google process information under their own terms and privacy policies. [OWNER: add direct links to the provider policies used in production and identify any additional Google scopes before publication.]
+Scanning a code does not enter you in a prize draw. If you separately choose to enter a named vendor draw after reviewing its notice and official rules, we process your member ID, name, email, phone number, wedding date, vendor and event identifiers, consent wording/version/time, entry state, and potential-winner, verification, and fulfilment records.
 
-### 3. Private messages, reports, and blocks
+The in-app release does not give a vendor an entrant contact list. Only if an entrant is selected as a potential winner may the disclosed name, email, phone number, wedding date, entry/consent time, and necessary verification information be provided to the named vendor, solely to verify eligibility and fulfil the prize. Draw entry is not consent to newsletters, lead generation, behavioural advertising, or other vendor marketing.
 
-The current source is designed to synchronize private messaging across the iOS app and WeddingWin.ca. Message text, participants, timestamps, read/delivery state, identifiers, and any retained historical message media may be stored in the WeddingWin.ca directory system and/or WeddingWin’s Supabase environment so that the same conversation is available in both places. Native image sending is disabled in this release. **[RELEASE OWNER: verify the final deployed storage/synchronization paths and provider access before publishing this as present-tense production behavior.]**
+The sponsor/administrator, vendor role, eligibility, no-purchase method, dates, territory, skill-testing requirement where applicable, prize, odds, verification, and Apple non-involvement statement are governed by the official rules identified in publication schedule 1.
 
-Messages are intended for the participants, but authorized WeddingWin personnel and service providers may access them when reasonably necessary to deliver the service, investigate abuse or security incidents, respond to a report, comply with law, or protect users and WeddingWin. Access must be limited to personnel with an operational need.
+### Push notifications
 
-The deployed moderation path records the reporter, conversation, participants, report time, and moderation status; it closes the current website conversation and blocks/suppresses the reported member in the app. A fresh thread may still be created through an external Brilliant Directories website entry point until synchronization discovers and closes it. **[RELEASE BLOCKER: record final app↔website evidence and either publish this narrower behavior accurately or implement and verify a website-side creation block before claiming preventive member-level blocking.]**
+If you enable notifications, we process an Expo push token, device platform, WeddingWin member linkage, enabled state, unread/notification time, delivery ticket and receipt state, retry state, and delivery errors. Expo and Apple Push Notification service receive the routing information and a generic new-message alert. The audited payload does not contain private message text.
 
-Do not use WeddingWin messages for emergencies or send highly sensitive information that is not needed for wedding planning.
+You can change notification permission in iOS Settings. Signing out attempts to unregister the current device token. Account deletion removes or disables account-associated tokens from active systems, subject to the retention and backup schedule.
 
-### 4. Push notifications
+### Embedded website, device, and log information
 
-The deployed backend stores an Expo push token linked to the WeddingWin member ID/device platform and uses a centralized worker to send a generic new-message payload through Expo and Apple Push Notification service. Durable bounded retry, `Retry-After`, ticket/receipt reconciliation, finite missing-receipt expiry, and invalid-token disablement are deployed. **[RELEASE BLOCKER: no production physical-device delivery pass is recorded. Verify the final payload templates, token lifecycle, providers, ambiguous-network behavior, and foreground/background/terminated delivery before publishing this as complete end-to-end production behavior.]**
+Some WeddingWin.ca features open inside an embedded browser. The audited iOS configuration uses private/incognito WebView storage, restricts top-frame navigation, and disables third-party cookies. First-party session cookies or local storage may still be used during a session, and HTTPS embedded content can contact the recipients identified in publication schedule 2. Any analytics, advertising, or tracking requests—and the control that prevents or obtains consent for them—must be stated accurately in that schedule.
 
-You can change notification permission in iOS Settings. Signing out attempts to unregister the current token; account deletion must remove or disable all server-side tokens associated with the account.
+When the app requests our websites or APIs, the services receive operational data such as IP address, user agent or device/browser information, requested page or endpoint, referrer where supplied, date/time, session or account identifiers, response state, and security or error information. The final analytics, advertising, embedded-provider, and tracking practices are stated in publication schedule 2.
 
-**[RELEASE BLOCKER: link the production Expo project, enable the App ID push capability, provision APNs credentials, and verify token registration/cleanup plus foreground, background, and terminated delivery on a physical iPhone before publication.]**
+### Support and payment information
 
-### 5. QR Bingo
+If you contact support, we process the contact details, message, attachments, and account or technical information you choose to provide so we can respond and maintain the service.
 
-The current source is designed to let a signed-in couple scan a URL/QR code assigned to a participating vendor, validate the vendor identifier, and store scan/progress information with the couple’s account. A QR scan is designed not to enter the couple into a vendor prize draw by itself; draw entry requires the separate consent described below. **[RELEASE OWNER: verify the deployed roster, storage, duplicate/invalid handling, and separation from draw entry before publishing this as present-tense behavior.]**
+The submitted app's verified payment and purchase behavior, including any outside processor and whether WeddingWin receives card or purchase data, is stated in publication schedule 1. An outside processor also handles information under its own privacy policy.
 
-### 6. Vendor prize draws and disclosure to vendors
+## 3. Why we use information
 
-A participating vendor may supply a prize and configure draw information. When a couple chooses to enter a specific vendor’s draw, the entry screen must identify that vendor, the disclosed fields, the purpose, and the applicable official rules. For the initial release, draw entry does not include vendor-marketing consent.
+We use information to:
 
-The deployed release posture keeps the entrant list under WeddingWin control and discloses **name, email address, phone number, wedding date, and entry/consent time only for a selected potential winner** to the applicable vendor, solely for eligibility verification and prize fulfilment after named-vendor consent. Entry must not be treated as consent to newsletters, lead nurturing, advertising, or other vendor marketing. Reviewer-fixture email is suppressed, and production draw email is fail-closed until a verified fulfilment configuration is explicitly enabled. **[LEGAL/RELEASE OWNER: confirm that the deployed UI, access controls, email path, vendor agreement, and actual operations enforce these limits before publishing them as present-tense behavior.]**
+- create, authenticate, secure, and support accounts;
+- provide vendor discovery, profiles/listings, wedding-planning tools, and personalized account content;
+- synchronize and deliver private messages and generic notifications;
+- prevent abuse, investigate reports, enforce blocks, and protect the service;
+- record QR Bingo progress and administer a draw a user separately chooses to enter;
+- verify a potential winner and fulfil a prize under the official rules;
+- diagnose errors, maintain reliability, prevent fraud, and comply with law; and
+- respond to support and privacy requests.
 
-**[LEGAL: confirm the recipient relationship.]** State whether each vendor is an independent controller/business, a joint controller, or a processor acting only on WeddingWin’s instructions. The vendor agreement should require privacy and security protections at least equivalent to those promised here, prohibit unauthorized reuse, set a deletion schedule, and provide a way to honor privacy requests.
+Any analytics, advertising, marketing, tracking, or sale/share use is limited to the verified statement in publication schedule 2. Draw-entry data is not used for vendor marketing in this release.
 
-Once information has been delivered to a vendor, WeddingWin cannot technically recall that copy. The final policy/vendor agreement must explain whether WeddingWin forwards or coordinates valid requests and how users contact the named vendor. A privacy request may not invalidate a completed draw entry or records that law requires WeddingWin to retain. **[LEGAL: determine and verify the exact process and exceptions for each draw territory.]**
+## 4. When we disclose information
 
-The final official rules and entry screen must govern eligibility, deadlines, prize fulfilment, and draw mechanics. [LEGAL: state that Wedding Win Inc. sponsors/administers each iOS-accessible draw and that Apple is not a sponsor only after this operating model and rules are approved.]
+We disclose only the information reasonably needed for the stated purpose:
 
-### 7. Cookies, embedded website pages, analytics, and advertising
-
-The app source displays some WeddingWin.ca pages in an embedded browser. Those pages may use session cookies and local/DOM storage for login, security, and feature operation. The release source restricts top-frame hosts/navigation, routes unrelated top-frame HTTPS out of the WebView, permits HTTPS and `about:blank` embedded subframes needed by page content, blocks insecure/active-content subframes, checks bridge/OAuth origins, blocks the Meta Pixel, and disables third-party cookies. **[RELEASE BLOCKER: inspect and test the exact tagged TestFlight build. Confirm allowed top-frame hosts, embedded third-party content/recipients, redirects, pop-ups, custom schemes, bridge behavior, cookie behavior, login/logout, and actual network recipients before describing the final configuration.]** Server-side requests and records still require disclosure even if the final WebView is incognito and third-party cookies are disabled.
-
-**Choose exactly one version after a production network/cookie audit; delete the other before publication:**
-
-- **No tracking/advertising version:** WeddingWin does not use information collected from this app to track users across apps or websites owned by other companies, sell personal information, or share it for cross-context behavioural advertising. [OWNER/LEGAL: publish only if the live script, cookie, CDN, captcha, email, and advertising inventory supports every part of this statement.]
-- **Tracking/advertising version:** WeddingWin and the following partners use [OWNER/LEGAL: exact data types] for [OWNER/LEGAL: exact advertising, attribution, or cross-site measurement purposes]: [OWNER/LEGAL: each partner and direct policy link]. We request any consent required by iOS and applicable law before enabling it, and explain how to withdraw consent here: [OWNER/LEGAL: withdrawal link]. [OWNER/LEGAL: complete and align App Store privacy answers and ATT implementation.]
-
-Proposed release restriction: private message contents and retained historical chat media must not be used for advertising. **[OWNER: confirm contractually and operationally before converting this to a present-tense policy statement.]**
-
-### 8. When we disclose information
-
-We disclose personal information only as described in this policy and the notice shown when it is collected:
-
-| Recipient | Information | Purpose |
-| --- | --- | --- |
-| WeddingWin.ca directory/hosting platform | Account, profile/listing, session, messaging, QR, draw, and web-request data as required by each feature | Provide the website, membership, vendor directory, messaging, event, and draw functions |
-| Supabase | Account/profile links, Apple identifier mapping, chat/messages/retained media, reports/blocks, push registration, QR/draw records, API/security logs | Authentication, database/storage, synchronization, backend functions, security, and deletion workflows |
-| Expo and Apple Push Notification service | Device push token and notification payload | Deliver notifications that a user has enabled |
-| Apple and Google | Authentication request and related identifiers; app/account interaction governed by the provider | Provide federated sign-in and platform services |
-| Selected prize vendor | Selected potential winner's name, email, phone, wedding date, consent/entry time, and verification information | Verify eligibility and fulfil the named prize; no entrant-list access or marketing use in the initial release [LEGAL/OWNER: verify contract and operations] |
-| [OWNER: email delivery provider] | Recipient email and message/transaction metadata | Deliver account, draw, or support email |
-| [OWNER: payment provider] | [OWNER: exact fields] | Process vendor membership/payment where applicable |
-| [OWNER: CDN, captcha, analytics, advertising, support, logging, and other providers] | [OWNER: exact fields] | [OWNER: exact purposes] |
-| Authorities, courts, advisers, or transaction counterparties | Information reasonably necessary for the request or event | Comply with law, protect rights/safety, establish or defend claims, prevent fraud, or complete a corporate transaction subject to appropriate safeguards |
-
-Proposed contract statement: service providers process information only for authorized purposes and use appropriate privacy and security protections. **[OWNER/LEGAL: publish this only after confirming the contracts actually impose those obligations.]**
-
-### 9. Retention
-
-The final policy must state, and production operations must enforce, a validated retention period or objective criterion for each category, followed by deletion or de-identification subject to specifically disclosed backups and legal obligations. No such periods are established by this draft; the release owner must replace every bracket below before publication.
-
-| Category | Publication-ready retention statement required |
+| Recipient | Information and purpose |
 | --- | --- |
-| Account/profile/listing and authentication mapping | [OWNER/LEGAL: while the account is active, then delete within X days of a verified request, except specified records retained for Y] |
-| Session tokens/cookies | [OWNER/SECURITY: until expiry, logout/revocation, or X days, whichever occurs first] |
-| Private message text/retained media and delivery records | [OWNER/LEGAL: while both accounts/threads are active plus X; after one account is deleted, retain the surviving participant's read-only shared history for Y or until an objective criterion, then delete/de-identify unless a disclosed legal/safety hold applies] |
-| Reports, blocks, and safety/security records | [OWNER/LEGAL: X years or defined case-closure criterion; explain any longer safety/fraud hold] |
-| Push tokens and notification metadata | [OWNER: until logout, token invalidation, account deletion, or X days without activity; notification logs X days] |
-| QR Bingo scan/progress | [OWNER: event end plus X days/months] |
-| Prize entries, consent evidence, draw and winner records | [LEGAL/TAX: X years after draw/fulfilment, based on contest, tax, limitation, and audit requirements] |
-| Support requests | [OWNER/LEGAL: X months/years after closure] |
-| Web/API analytics, security, and error logs | [OWNER/SECURITY: separate exact period for each log system] |
-| Billing/tax records | [LEGAL/ACCOUNTING: statutory period and jurisdiction] |
-| Backups | [OWNER/SECURITY: rolling X-day backup cycle; isolate after deletion and remove on expiry unless a legal hold applies] |
+| WeddingWin.ca and its directory/hosting platform | Account, profile/listing, session, messaging, QR, draw, and web-request data needed to provide website and membership features |
+| Supabase | Account/profile links, authentication mappings, messages and retained media, reports/blocks, push registration, QR/draw records, backend functions, security, and deletion workflows |
+| Expo and Apple Push Notification service | Push token, routing/platform information, generic notification payload, and delivery state |
+| Apple and Google | Authentication requests and related provider identifiers; each provider also processes information under its own policy |
+| Selected prize vendor | Only a selected potential winner's disclosed contact, consent, and verification information for eligibility verification and prize fulfilment; no entrant list and no marketing use in this release |
+| Support, email, payment, CDN, captcha, embedded-media, analytics, advertising, and logging providers | Only as identified, with data and purpose, in publication schedules 1 and 2 |
+| Authorities, courts, professional advisers, or transaction counterparties | Information reasonably necessary to comply with law, protect rights or safety, prevent fraud, establish or defend claims, or complete a lawful business transaction with appropriate safeguards |
 
-Legal holds, fraud/security investigations, accounting/tax duties, contest integrity, or unresolved claims may require limited information to be retained longer. The final policy must identify the affected categories and the legal/operational criterion; it should not use this exception to retain all account data indefinitely.
+The selected vendor's legal privacy role, downstream request process, and contractual restrictions are stated in publication schedule 2. Information already delivered to a vendor cannot be technically recalled from the vendor's systems, but we will explain how to direct or coordinate a valid request.
 
-### 10. Account deletion and privacy choices
+## 5. Retention
 
-The current iOS source and deployed backend expose **About → Delete Account**, a permanent-deletion warning, and native confirmation. The backend verifies Apple token signature, audience, and subject, and may request Sign in with Apple confirmation/revocation for an Apple-linked account. A person who cannot sign in must be able to request deletion or exercise another privacy right at **[OWNER: public privacy-request URL and privacy email]**. The public route supplements the in-app deletion flow; it does not replace it. **[RELEASE BLOCKER: no physical-device destructive cross-system/Apple-revocation pass is recorded. Do not change these observations into a completed-deletion claim until DEV-10 evidence exists.]**
+We retain each category only for the period or objective criterion in publication schedule 3, then delete or de-identify it unless a narrower legal, safety, fraud, tax, contest-integrity, accounting, or dispute obligation requires longer retention. Any hold is limited to the information and period reasonably needed and is released when the reason ends.
 
-The deployed deletion design permanently removes the WeddingWin login/profile or vendor listing and account-owned app data, including the deleting member's pending chat work/cache data, push tokens, and QR/draw data where permitted. It closes and blocks related app/website conversations while preserving shared messages and moderation evidence as read-only history for the surviving participant. Deactivation alone does not satisfy this commitment. A fresh two-participant email-account test passed the active database/site behavior. **[RELEASE BLOCKER: owner/legal must approve a finite retention duration or objective criterion, any legal/safety exceptions, and eventual deletion/de-identification; then repeat against the exact TestFlight build and verify every WeddingWin.ca/Supabase store, object storage, email system, provider mapping, cache, physical Apple-linked account, and backup before publishing present-tense claims.]**
+Shared messages and moderation evidence can remain as read-only history for the surviving participant after the other participant deletes an account. The schedule states the finite duration or criterion, exceptions, backup expiry, and eventual deletion or de-identification for that history.
 
-The final policy must state:
+## 6. Account deletion and privacy choices
 
-- that deletion closes/blocks the conversation but preserves the surviving participant's read-only shared history, including the exact duration/criterion and eventual deletion/de-identification;
-- how display names or required transaction/draw records are anonymized;
-- how Sign in with Apple authorization/token revocation is handled and how Google is disconnected;
-- which records remain under a legal hold and for how long;
-- when active systems and backups complete deletion; and
-- how a user requests deletion from a vendor that already received a draw entry.
+A signed-in iOS user can choose **About → Delete Account**, review the warning, and confirm. An Apple-linked account may be asked to reauthenticate so WeddingWin can validate and revoke the Apple authorization. A person who cannot sign in can use the public privacy-request URL in publication schedule 1; identity verification may be required before we change account data.
 
-Subject to applicable law, users may request access, correction, deletion, or a copy of their information; withdraw consent where processing depends on consent; object to or restrict certain uses; disable notifications; opt out of marketing; and complain to the relevant privacy regulator. [LEGAL: adapt the rights, appeal process, verification method, response times, and regulator links to Canada/provinces and every selected App Store territory.]
+The deletion process removes the WeddingWin login, profile or vendor listing, provider mapping, push tokens, QR/draw records, pending account-owned chat work/cache, and other account-owned app data from active systems where permitted. It closes related conversations and blocks new sends. It does not erase the other participant's copy of shared messages; that history and necessary moderation evidence can remain read-only under the published retention schedule. Limited contest, safety, fraud, accounting, legal-hold, and backup records may remain only as the schedules explain.
 
-### 11. Security
+Subject to applicable law, you may request access, correction, deletion, or a copy of your information; withdraw consent where processing depends on consent; object to or restrict certain uses; opt out of marketing or tracking where applicable; disable notifications; and complain to the relevant privacy regulator. The controller may need to verify identity and may explain a lawful exception. A privacy request does not create marketing consent and does not waive statutory rights merely because a draw deadline has passed.
 
-The source includes safeguards such as encrypted transport, server-side authorization, and protected on-device credential storage. Proposed final policy language must describe only the administrative, technical, and physical controls actually operated in production and must not promise absolute security. [OWNER/SECURITY: verify production row-level policies, administrator access, service-role handling, logging, backups, incident response, and vendor controls before publishing specific examples.]
+## 7. Security
 
-If you believe your account or information is at risk, contact [OWNER: security/privacy email].
+We use safeguards appropriate to the nature of the information, including encrypted transport, authenticated server requests, access controls, protected device credential storage, and controls intended to limit administrative/service access. No system is perfectly secure. Contact the privacy address in publication schedule 1 if you believe your account or information is at risk.
 
-### 12. International processing
+## 8. International processing
 
-WeddingWin and its providers may process information outside the province or country where a user lives, including **[OWNER: list actual processing/storage countries for WeddingWin.ca, Supabase, Expo, email, payments, support, analytics, and backups]**. Foreign courts, law-enforcement, or regulatory authorities may be able to access information under local law. [LEGAL: add applicable transfer mechanisms and Québec/other provincial disclosures if relevant.]
+WeddingWin and the providers identified in publication schedule 2 may process information outside the province or country where you live. The schedule states the actual processing/storage regions and applicable transfer safeguards. Information can be subject to the laws and lawful access requests of those places.
 
-### 13. Children and draw eligibility
+## 9. Children
 
-The final policy and product must define whether WeddingWin is directed to children and the minimum account age: **[LEGAL: minimum app/account age]**. [OWNER/LEGAL: confirm the enforced signup/eligibility behavior, response to inadvertently collected child data, and privacy contact before publishing child-directedness or deletion claims.] Contact: [OWNER: privacy email].
+WeddingWin is not directed to children below the minimum account age stated in publication schedule 1. The same schedule states how to contact us about information provided by a child. Prize-draw age and residency requirements are stated in the applicable official rules and can be different from the minimum account age.
 
-Prize-draw eligibility, including minimum age and residency, is stated in the applicable official rules. [LEGAL: confirm age-of-majority requirements and whether an age gate is necessary for each territory.]
+## 10. Changes to this policy
 
-### 14. Changes to this policy
+We may update this policy to reflect product, legal, or operational changes. We will post the revised policy with a new last-updated date and provide additional notice or obtain consent when law requires it.
 
-We may update this policy to reflect product, legal, or operational changes. We will post the revised policy with a new “Last updated” date and provide additional notice or obtain consent when required by law. Material changes do not apply retroactively in a way that reduces rights without any consent required by law.
+## 11. Contact
 
-### 15. Contact us
-
-For privacy questions or requests, contact:
-
-**[OWNER/LEGAL: exact legal entity name]**
-[OWNER/LEGAL: legal mailing address]
-[OWNER: privacy email]
-[OWNER: public privacy-request URL]
-[OWNER: privacy phone, if offered]
-
-For ordinary app support, use [OWNER: support URL/email].
+The legal controller, mailing address, privacy email, public privacy-request URL, and support contact are listed in publication schedule 1.
 
 ---
 
-## Publication gate
+## Final publication gate
 
-Do not paste this draft onto the live site until all of the following are true:
+- [ ] Every **OWNER/LEGAL/SECURITY/RELEASE REQUIRED** cell is replaced with verified public wording; this status/gate material is removed or converted into the completed public schedules.
+- [ ] Exact TestFlight/network evidence matches the tracking, provider, payment, camera, media, push, WebView, and deletion statements.
+- [ ] Retention periods have operational deletion/de-identification and backup controls behind them.
+- [ ] App Store Privacy answers match this policy and the signed binary privacy report.
+- [ ] Draw consent, official rules, vendor agreement, entry/export/email controls, and operations match the selected-potential-winner-only, fulfilment-only, no-marketing statements.
+- [ ] The policy and public privacy-request URL render without login, broken layout, placeholder text, or consent conflicts on iPhone and iPad.
+- [ ] Qualified privacy and promotions counsel approves the final text for every launch territory.
 
-- every bracketed item is resolved and both unused tracking variants are removed;
-- the actual production script/cookie/provider inventory matches the policy and App Store privacy answers;
-- deletion, report/block, raffle sharing, push payloads, and camera/photo behavior are re-tested in the final release backend/build;
-- retention intervals have operational deletion jobs or documented manual controls behind them;
-- provider contracts and vendor draw agreements support the sharing/security statements;
-- official draw rules and the policy use the same sponsor, data recipient, purpose, withdrawal, and retention language;
-- draw entry, absence of entrant-list exports, selected-potential-winner disclosure, suppressed email, vendor terms, and actual operations are limited to verification/prize fulfilment and do not treat entry as marketing consent;
-- a qualified privacy/contest lawyer has reviewed the final text for every launch territory; and
-- the public Privacy Policy and Privacy Choices URLs work without login on iPhone and iPad.
-
-This draft is product/privacy preparation, not legal advice.
+This publication candidate is product/privacy preparation, not legal advice.
