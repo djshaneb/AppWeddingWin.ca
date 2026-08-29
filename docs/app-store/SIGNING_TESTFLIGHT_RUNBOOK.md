@@ -1,21 +1,21 @@
 # Signing and TestFlight runbook
 
-Status: **APPLE/EAS CREDENTIALS CONFIGURED — production build, upload, and physical TestFlight evidence remain open.**
+Status: **PRODUCTION BUILD/UPLOAD VALIDATED — physical TestFlight and submission gates remain open.**
 
-The repository is an Expo managed app with no committed `ios/` directory. `app.json` links `@blair.shane/weddingwin-app` through `extra.eas.projectId`, and the submit profile is linked to the exact `WeddingWin Canada` App Store Connect record for `ca.weddingwin.app`. The fresh current-source local Release build completed in **38.2 seconds** and launched on an iPhone 17 Pro Max Simulator, iOS 26.5; its generated Info.plist was inspected and contains only the native QR-camera usage description, with no photo-library, microphone, or background-mode declaration. Reviewer login/bridge/dashboard, visibly embedded Vimeo playback without a Safari escape, the controlled private reviewer-pair text round trip, QR/deletion-confirmation, and icon checks passed in the recorded local flow. A fresh two-account deletion-preservation test passed against the live backend, and reviewer login/menu passed on a 13-inch iPad Pro (M5) Simulator. Simulator signing is not App Store distribution signing, so the processed TestFlight build still requires a complete physical pass.
+The repository is an Expo managed app with no committed `ios/` directory. `app.json` links `@blair.shane/weddingwin-app` through `extra.eas.projectId`, and the submit profile is linked to the exact `WeddingWin Canada` App Store Connect record for `ca.weddingwin.app`. The fresh current-source local Release build completed in **38.2 seconds** and launched on an iPhone 17 Pro Max Simulator, iOS 26.5; its generated Info.plist was inspected and contains only the native QR-camera usage description, with no photo-library, microphone, or background-mode declaration. Reviewer login/bridge/dashboard, visibly embedded Vimeo playback without a Safari escape, the controlled private reviewer-pair text round trip, QR/deletion-confirmation, and icon checks passed in the recorded local flow. A fresh two-account deletion-preservation test passed against the live backend, and reviewer login/menu passed on a 13-inch iPad Pro (M5) Simulator. Production EAS build `1.0.0 (2)` also succeeded, passed signed-IPA inspection, uploaded, and was processed by Apple as `Validated`/`Ready to Submit`; it still requires the complete physical pass below.
 
 ## Current signing state (2026-08-29)
 
 The current working-tree configuration has:
 
-- app version `1.0.0`, iOS build number `1`, and bundle ID `ca.weddingwin.app`;
+- app version `1.0.0`, iOS build number `2`, and bundle ID `ca.weddingwin.app`;
 - `ITSAppUsesNonExemptEncryption: false`, iPad support, Sign in with Apple, the QR-camera purpose string, no native photo-library purpose string, and the production icon in `app.json`;
-- no `UIBackgroundModes: remote-notification` declaration; the generated local Release Info.plist was verified to contain no background mode, photo-library purpose string, or microphone purpose string, and the final signed archive must preserve that posture;
+- no `UIBackgroundModes: remote-notification` declaration; both the generated local Release and signed IPA were verified to contain no background mode, photo-library purpose string, or microphone purpose string;
 - local app-version sourcing and production `autoIncrement: true` in `eas.json`;
 - organization-owned EAS project linkage for `@blair.shane/weddingwin-app` through `extra.eas.projectId`, plus the verified numeric `submit.production.ios.ascAppId` for the exact `ca.weddingwin.app` record. The former blank `extra.googleOAuth.iosClientId` field has been removed. Google login uses the system browser and server-backed start/callback functions, so verify those production credentials and redirects rather than adding a client ID that the app does not read;
-- source-level required-reason privacy-manifest declarations for UserDefaults, file timestamps, system boot time, and disk space. These declarations still require generated archive inspection together with every dependency manifest and Apple's upload validation.
+- required-reason privacy-manifest declarations for UserDefaults, file timestamps, system boot time, and disk space. The signed IPA contains the packaged declarations and Apple accepted the upload without a privacy-manifest validation error.
 
-The updated Apple agreement is accepted. Push Notifications and Sign in with Apple are enabled on the explicit App ID. EAS holds a matching Apple Distribution certificate, active App Store profile, App Store Connect API key, and dedicated team-scoped APNs key configured for sandbox and production. The decoded profile contains the exact application identifier, production APNs, Sign in with Apple, and the matching distribution certificate. No production archive, IPA, processed App Store build, or TestFlight install is recorded yet, so release evidence remains **blocked on the production build and exact physical-device pass**. Browser-bound OAuth/PKCE/replay controls are deployed and backend-tested, but real Google login is still pending on the final TestFlight build and approved production provider configuration; it does not depend on the unused blank `iosClientId` field. The exact live migration/function inventory is in `SUPABASE_DEPLOYMENT_PROVENANCE.md`. Store credentials in Apple/Expo/EAS/server secure systems or the team password manager; never add them to the repository.
+The updated Apple agreement is accepted. Push Notifications and Sign in with Apple are enabled on the explicit App ID. EAS holds a matching Apple Distribution certificate, active App Store profile, App Store Connect API key, and dedicated team-scoped APNs key configured for sandbox and production. The decoded profile and signed IPA contain the exact application identifier, production APNs, Sign in with Apple, and the matching distribution certificate. Production build `1.0.0 (2)` is processed in TestFlight, assigned to the manual `WeddingWin Internal QA` group, and the account-holder tester is invited. No physical TestFlight install or App Review submission is recorded, so release evidence remains **blocked on the exact physical-device pass and the nontechnical submission gates**. Browser-bound OAuth/PKCE/replay controls are deployed and backend-tested, but real Google login is still pending on the final TestFlight build and approved production provider configuration; it does not depend on the unused blank `iosClientId` field. The exact live migration/function inventory is in `SUPABASE_DEPLOYMENT_PROVENANCE.md`. Store credentials in Apple/Expo/EAS/server secure systems or the team password manager; never add them to the repository.
 
 ## Recommended choice: EAS Build + EAS Submit
 
@@ -29,9 +29,9 @@ Choose local Xcode instead when the owner requires all signing/build operations 
 - [x] Accept every current agreement in Apple Developer and App Store Connect.
 - [x] Confirm the Account Holder/Admin can create identifiers, certificates, APNs keys and App Store Connect apps.
 - [ ] Decide who owns the Expo organization/project; avoid linking production to an individual contractor account.
-- [x] Finalized and reviewed the complete source and created local release commit/tag `v1.0.0-rc.2`. Record it in the private release ticket before any separate push; no corresponding signed/TestFlight build is currently recorded.
+- [x] Pushed the production-build source through commit `f7f4c90`; EAS built that source with the recorded build-number increment to `2`. The final build-state evidence commit is tagged and pushed as `v1.0.0-rc.3` after its verification gate passes; the older `v1.0.0-rc.2` tag remains unmoved.
 - [ ] Use a password manager. Do not put an Apple password, app-specific password, `.p8` key, certificate, provisioning profile, reviewer password, Supabase service key or Expo token in Git.
-- [ ] With explicit approval for the sensitive paste, rotate `APP_EMAIL_CHANGE_SECRET` atomically across live Supabase and Brilliant Directories widget `329`; Supabase currently lacks the replacement while widget `329` retains the prior hardcoded value. Never record either value in the repository or release ticket.
+- [ ] Complete the coordinated `APP_EMAIL_CHANGE_SECRET` rotation across Supabase and the website during one explicitly approved sensitive-value update. Keep the exact live location/state and both values only in the private security ticket; never record a secret value in Git or submission material.
 
 ## Phase 1 — Apple identifiers and app record
 
@@ -91,15 +91,15 @@ After the App Store record exists, add `submit.production.ios.ascAppId` with the
 
 Before building:
 
-- [ ] Confirm `ios.buildNumber` is currently `1`, that App Store Connect has not used it, and that production `autoIncrement` will produce the intended submitted number. Record the actual generated number after the build; do not assume it from source.
+- [x] Record the actual generated iOS build number `2` in `app.json` and the release evidence. App Store Connect accepted it as `1.0.0 (2)`.
 - [ ] Obtain owner/legal approval for the current `ios.infoPlist.ITSAppUsesNonExemptEncryption: false` classification and answer App Store Connect consistently.
 - [x] Link the organization-owned `extra.eas.projectId` in source.
-- [ ] Verify the signed TestFlight binary contains that exact project link and can obtain the production Expo push token.
+- [ ] The signed binary contains the exact Expo project link. A physical TestFlight install must still prove production push-token registration.
 - [x] Add `submit.production.ios.ascAppId` after the App Store Connect app record exists.
 - [ ] Confirm the Google OAuth start/callback functions use the approved production provider credentials and redirect allowlist. Do not reintroduce an unused `extra.googleOAuth.iosClientId`. Do not claim Google login works until the exact TestFlight build passes on a physical iPhone.
-- [ ] Confirm the final `ios.entitlements` contains production APNs and Sign in with Apple through generated signing, not a development-only entitlement.
-- [ ] Confirm the icon, QR-camera purpose string, absence of a native photo-library permission declaration while image sending is disabled, URL scheme, bundle ID, version and iPad support.
-- [ ] Inspect the generated Info.plist and confirm it does not reintroduce `UIBackgroundModes: remote-notification`; visible foreground/background/terminated notification behavior must still pass on hardware.
+- [x] The signed IPA entitlements contain production APNs and Sign in with Apple, with `get-task-allow` absent/false.
+- [x] The signed IPA preserves the opaque icon, QR-camera purpose string, no native photo-library permission declaration, URL scheme, exact bundle ID, version/build, and iPad support.
+- [x] The signed IPA Info.plist contains no `UIBackgroundModes`, photo-library purpose, or microphone purpose declaration. Visible foreground/background/terminated notification behavior must still pass on hardware.
 - [x] Deploy current `bd-complete-profile`, `bd-couple-signup`, `bd-vendor-signup`, and `bd-chat-sync` together. Recorded live versions are 18, 12, 9, and 39 respectively; all retained JWT verification and rejected unauthenticated probes with `401`. The 71/71 source regressions pass and a fresh v39 app↔website text round trip passed. Relay delivery and the silent-empty-thread path still need exact TestFlight/physical confirmation.
 - [ ] Resolve live Meta Pixel traffic before declaring tracking=No: preferably suppress it server-side for the `WeddingWinApp/1.0` user agent and prove absence in an exact-TestFlight network capture; otherwise implement required consent/ATT and accurate tracking disclosure before transmission.
 - [ ] Store production environment variables/secrets in EAS project secrets, never in app-bundled `extra` if secret.
@@ -141,14 +141,21 @@ Record:
 - Xcode and iOS SDK version used by EAS.
 - Distribution certificate/profile identifiers and expiry dates, not private key material.
 
+Recorded production evidence:
+
+- EAS build: `ed4826b7-3fcb-43c8-93cf-480cd7057739` (`https://expo.dev/accounts/blair.shane/projects/weddingwin-app/builds/ed4826b7-3fcb-43c8-93cf-480cd7057739`).
+- Build source commit: `f7f4c90`; app version/build: `1.0.0 (2)`.
+- Downloaded IPA SHA-256: `5f93f2422e07b4dbd337d55296d909d011c3b572edba00c72c9c465c592025be`.
+- EAS submission: `13173e9a-e78d-491f-ae70-84375f03924f`; Apple binary state `Validated`, version state `Ready to Submit`.
+
 Build acceptance checks:
 
-- [ ] Build status succeeded and artifact is an App Store `.ipa`, not a Simulator or ad-hoc build.
-- [ ] Bundle identifier is `ca.weddingwin.app`.
-- [ ] Version/build match the release record and build number is unused.
-- [ ] App icon has no alpha issue.
-- [ ] The generated archive contains the configured UserDefaults, file-timestamp, system-boot-time, and disk-space required-reason entries plus dependency manifests; signatures and Apple's required-reason checks produce no warning/rejection.
-- [ ] Distribution entitlements contain production APNs and Sign in with Apple.
+- [x] Build status succeeded and artifact is an App Store `.ipa`, not a Simulator or ad-hoc build.
+- [x] Bundle identifier is `ca.weddingwin.app`.
+- [x] Version/build match the release record as `1.0.0 (2)` and Apple accepted the build number.
+- [x] Signed iPhone and iPad app icons are opaque and visually match the production icon.
+- [x] The signed IPA contains the configured UserDefaults, file-timestamp, system-boot-time, and disk-space required-reason entries; its signature verifies and Apple reported no required-reason/signature rejection.
+- [x] Distribution entitlements contain production APNs and Sign in with Apple.
 - [ ] No Expo dev client/menu, localhost/tunnel URL, debug configuration or test secret is present.
 
 ## Phase 4 — upload to TestFlight
@@ -163,10 +170,10 @@ Alternatively, `npx testflight` can initialize, sign, build and submit interacti
 
 In App Store Connect:
 
-- [ ] Wait for processing and resolve every warning/error.
-- [ ] Answer export-compliance questions consistently with the binary and Info.plist.
-- [ ] Add Beta App Description, Feedback Email, Contact Information and “What to Test.”
-- [ ] Add the build to an internal testing group. Internal testers must be App Store Connect users.
+- [x] Processing completed with binary state `Validated` and version state `Ready to Submit`; no unresolved upload warning/error is recorded.
+- [x] App Store Connect shows encryption `No`, matching `ITSAppUsesNonExemptEncryption: false`; owner/legal approval of the classification remains separate.
+- [ ] Add/verify Beta App Description, Feedback Email, and Contact Information. “What to Test” is saved for build 2.
+- [x] Build 2 is assigned to the manual `WeddingWin Internal QA` group and the existing account-holder tester is invited. Automatic distribution is off.
 - [ ] If using external testers, create an external group and submit the first build for TestFlight Beta App Review.
 
 Apple currently allows up to 100 internal App Store Connect testers and 10,000 external testers; the first external build may require review.

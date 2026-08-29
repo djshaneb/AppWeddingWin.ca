@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "icon": "./assets/images/app-icon.png",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "supportsTablet": true,
       "usesAppleSignIn": true,
       "bundleIdentifier": "ca.weddingwin.app",

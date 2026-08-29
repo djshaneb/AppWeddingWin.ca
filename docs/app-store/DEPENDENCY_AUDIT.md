@@ -1,8 +1,8 @@
 # Dependency audit triage
 
-Status: **WORKING-TREE REMEDIATION RECORDED — repeat on the immutable release tag**
+Status: **PRODUCTION BUILD BASELINE RECORDED — final immutable-tag verification required**
 
-Audited: 2026-08-28 against the npm production dependency tree (`npm audit --omit=dev`) recorded by local release-candidate tag `v1.0.0-rc.2`. No source has been pushed or used for a signed/TestFlight build.
+Audited: 2026-08-28 through 2026-08-29 against the npm production dependency tree (`npm audit --omit=dev`). The hardened source is pushed and was used for signed/TestFlight build `1.0.0 (2)`; the resulting build-number/evidence state is recorded by `v1.0.0-rc.3` after the final verification below.
 
 ## Changes applied
 
@@ -18,7 +18,7 @@ Audited: 2026-08-28 against the npm production dependency tree (`npm audit --omi
 - Regenerated `package-lock.json` without changing package managers. This repository remains npm-based.
 - Added a clean-checkout release gate pinned to Node `24.20.0`, npm `11.19.0`, and Deno `2.9.5`. The guarded production audit invokes the active npm CLI portably and fails when the reviewed advisory baseline expands.
 
-The tagged release-candidate checks reported dependencies up to date, `expo-doctor` passing 18/18 checks, typecheck and lint passing, and the then-current shared Deno regression suite passing **60/60**. The current untagged working tree expands that suite to **71/71** with Apple private-relay, transactional chat-email, and current/legacy chat-membership coverage and also passes typecheck and lint. Repeat the complete dependency and test set from a new immutable tag checkout before any push or TestFlight claim.
+The earlier release-candidate checks reported dependencies up to date, `expo-doctor` passing 18/18 checks, typecheck and lint passing, and the then-current shared Deno regression suite passing **60/60**. The production-build state expands that suite to **71/71** with Apple private-relay, transactional chat-email, and current/legacy chat-membership coverage; dependency alignment, Expo Doctor, typecheck, lint, and the guarded audit pass again before the `v1.0.0-rc.3` tag is pushed. Repeat the complete set from a clean immutable-tag checkout before a later production submission.
 
 ## Before and after
 

@@ -88,7 +88,7 @@ Do not select Health, Fitness, Contacts, Precise Location, Coarse Location, Audi
 ## Final App Store Connect gate
 
 - [x] Current source declares required-reason API entries for UserDefaults, file timestamps, system boot time, and disk space.
-- [ ] Inspect the generated signed archive, merged dependency privacy manifests, and Apple's validation result. Required-reason declarations do not replace the App Privacy data-collection answers above.
+- [x] Signed build `1.0.0 (2)` contains the packaged required-reason privacy manifest for UserDefaults, file timestamps, system boot time, and disk space; the signature verifies and Apple processed the upload without a privacy-manifest validation error. This does not replace the App Privacy data-collection answers above.
 - [ ] Production network/cookie/provider inventory completed against the exact TestFlight build, including proof that Meta Pixel is server-side suppressed for `WeddingWinApp/1.0` or a complete tracking/ATT disclosure path.
 - [ ] Tracking answer and every purpose approved; App Privacy answers match any ATT/consent implementation.
 - [ ] Public policy and public privacy-request URL published and tested signed out.
