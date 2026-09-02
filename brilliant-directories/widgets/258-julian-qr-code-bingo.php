@@ -2,18 +2,301 @@
 // QR Bingo Scanner for Brilliant Directories
 // This code checks if user is logged in and has proper subscription
 
+if (!function_exists('ww_qr_bingo_runtime_config')) {
+    function ww_qr_bingo_is_positive_json_integer($value) {
+        return is_int($value) && $value > 0;
+    }
+    function ww_qr_bingo_is_event_key($value) {
+        return is_string($value)
+            && preg_match('/^[a-z0-9][a-z0-9-]{0,79}$/D', $value) === 1;
+    }
+    function ww_qr_bingo_is_weddingwin_https_url($value) {
+        if (!is_string($value) || strlen($value) < 12 || strlen($value) > 500) { return false; }
+        if (!filter_var($value, FILTER_VALIDATE_URL)) { return false; }
+        $parts = parse_url($value);
+        if (!is_array($parts)) { return false; }
+        $scheme = isset($parts['scheme']) ? strtolower((string)$parts['scheme']) : '';
+        $host = isset($parts['host']) ? strtolower(rtrim((string)$parts['host'], '.')) : '';
+        $port = isset($parts['port']) ? (int)$parts['port'] : 443;
+        return $scheme === 'https'
+            && ($host === 'weddingwin.ca' || $host === 'www.weddingwin.ca')
+            && $port === 443
+            && !isset($parts['user'])
+            && !isset($parts['pass'])
+            && !isset($parts['fragment']);
+    }
+    function ww_qr_bingo_is_rfc3339_timestamp($value) {
+        if (!is_string($value) || strlen($value) > 40) { return false; }
+        $matches = array();
+        if (preg_match(
+            '/^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.]([0-9]{1,6}))?(Z|[+-]([0-9]{2}):([0-9]{2}))$/D',
+            $value,
+            $matches
+        ) !== 1) {
+            return false;
+        }
+        $offsetHour = isset($matches[9]) && $matches[9] !== '' ? (int)$matches[9] : 0;
+        $offsetMinute = isset($matches[10]) && $matches[10] !== '' ? (int)$matches[10] : 0;
+        return checkdate((int)$matches[2], (int)$matches[3], (int)$matches[1])
+            && (int)$matches[4] <= 23
+            && (int)$matches[5] <= 59
+            && (int)$matches[6] <= 59
+            && $offsetHour <= 14
+            && $offsetMinute <= 59
+            && ($offsetHour !== 14 || $offsetMinute === 0)
+            && strtotime($value) !== false;
+    }
+    function ww_qr_bingo_runtime_config() {
+        $url = 'https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-admin?action=public_config';
+        $body = '';
+        $status = 0;
+        if (function_exists('curl_init')) {
+            $curl = curl_init($url);
+            curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($curl, CURLOPT_FOLLOWLOCATION, false);
+            curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 3);
+            curl_setopt($curl, CURLOPT_TIMEOUT, 6);
+            curl_setopt($curl, CURLOPT_HTTPHEADER, array('Accept: application/json'));
+            $body = (string)curl_exec($curl);
+            $status = intval(curl_getinfo($curl, CURLINFO_HTTP_CODE));
+            curl_close($curl);
+        }
+        if ($status !== 200 || !$body) { return null; }
+        $decoded = json_decode($body, true);
+        $config = is_array($decoded) && isset($decoded['event_config']) && is_array($decoded['event_config'])
+            ? $decoded['event_config']
+            : null;
+        if (!$config) { return null; }
+        $tagId = isset($config['vendor_tag_id']) ? $config['vendor_tag_id'] : null;
+        $revision = isset($config['revision']) ? $config['revision'] : null;
+        $eventKey = isset($config['event_key']) ? $config['event_key'] : null;
+        $historyTimestamp = isset($config['history_starts_at']) && ww_qr_bingo_is_rfc3339_timestamp($config['history_starts_at'])
+            ? strtotime($config['history_starts_at'])
+            : false;
+        $eventName = isset($config['event_name']) && is_string($config['event_name'])
+            ? trim($config['event_name'])
+            : '';
+        $officialRulesUrl = isset($config['official_rules_url']) ? $config['official_rules_url'] : null;
+        $alternateFreeEntryUrl = isset($config['alternate_free_entry_url']) ? $config['alternate_free_entry_url'] : null;
+        $rulesVersion = isset($config['rules_version']) && is_string($config['rules_version'])
+            ? trim($config['rules_version'])
+            : '';
+        $emailDeliveryMode = isset($config['email_delivery_mode']) && is_string($config['email_delivery_mode'])
+            ? $config['email_delivery_mode']
+            : '';
+        if (!ww_qr_bingo_is_positive_json_integer($tagId)
+            || !ww_qr_bingo_is_positive_json_integer($revision)
+            || !ww_qr_bingo_is_event_key($eventKey)
+            || $historyTimestamp === false
+            || !$eventName
+            || strlen($eventName) > 160
+            || strip_tags($eventName) !== $eventName
+            || !isset($config['scan_enabled'])
+            || !is_bool($config['scan_enabled'])
+            || !isset($config['vendor_draws_enabled'])
+            || !is_bool($config['vendor_draws_enabled'])
+            || !isset($config['send_vendor_email'])
+            || !is_bool($config['send_vendor_email'])
+            || !isset($config['send_couple_email'])
+            || !is_bool($config['send_couple_email'])
+            || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/D', $rulesVersion) !== 1
+            || ($emailDeliveryMode !== 'disabled' && $emailDeliveryMode !== 'production_verified_fulfillment')
+            || !ww_qr_bingo_is_weddingwin_https_url($officialRulesUrl)
+            || !ww_qr_bingo_is_weddingwin_https_url($alternateFreeEntryUrl)) {
+            return null;
+        }
+        $config['event_key'] = $eventKey;
+        $config['vendor_tag_id'] = $tagId;
+        $config['revision'] = $revision;
+        $config['event_name'] = $eventName;
+        $config['rules_version'] = $rulesVersion;
+        $config['history_starts_at_sql'] = date('Y-m-d H:i:s', $historyTimestamp);
+        return $config;
+    }
+}
+
+if (!function_exists('ww_qr_bingo_vendor_draw_request')) {
+    function ww_qr_bingo_vendor_draw_request($action, $payload, $userId, $token) {
+        $publishableKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzemNqb3lhYnd2enN4eGp0a2hzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2OTMxMTYsImV4cCI6MjA5NDI2OTExNn0.QLCEmNcn1WAks0IHkCLmI3iY5K4GnRxZ9Sfy89GYrLo';
+        if (!function_exists('curl_init') || !$userId || !$token) {
+            return array(
+                'status_code' => !$userId || !$token ? 401 : 503,
+                'body' => array('ok' => false, 'error' => !$userId || !$token
+                    ? 'Sign in again before reviewing a vendor draw.'
+                    : 'Vendor draw tools are temporarily unavailable.')
+            );
+        }
+        $requestBody = is_array($payload) ? $payload : array();
+        $requestBody['action'] = (string)$action;
+        $requestBody['native_session'] = array(
+            'user_id' => (string)$userId,
+            'token' => (string)$token
+        );
+        $curl = curl_init('https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-vendor-sync');
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($curl, CURLOPT_FOLLOWLOCATION, false);
+        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 5);
+        curl_setopt($curl, CURLOPT_TIMEOUT, 15);
+        curl_setopt($curl, CURLOPT_POST, true);
+        curl_setopt($curl, CURLOPT_POSTFIELDS, json_encode($requestBody));
+        curl_setopt($curl, CURLOPT_HTTPHEADER, array(
+            'Accept: application/json',
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $publishableKey,
+            'apikey: ' . $publishableKey
+        ));
+        $responseBody = (string)curl_exec($curl);
+        $statusCode = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        curl_close($curl);
+        $decoded = $responseBody ? json_decode($responseBody, true) : null;
+        if (!is_array($decoded)) {
+            return array(
+                'status_code' => $statusCode >= 400 ? $statusCode : 502,
+                'body' => array('ok' => false, 'error' => 'Vendor draw tools returned an unreadable response.')
+            );
+        }
+        return array(
+            'status_code' => $statusCode >= 100 ? $statusCode : 502,
+            'body' => $decoded
+        );
+    }
+}
+
+if (!function_exists('ww_qr_bingo_contact_profile')) {
+    function ww_qr_bingo_contact_profile($user) {
+        $firstName = isset($user['first_name']) ? trim((string)$user['first_name']) : '';
+        $lastName = isset($user['last_name']) ? trim((string)$user['last_name']) : '';
+        $name = trim($firstName . ' ' . $lastName);
+        $normalizedName = strtolower($name);
+        $email = isset($user['email']) ? strtolower(trim((string)$user['email'])) : '';
+        $phone = '';
+        foreach (array('phone_number', 'phone', 'phone2', 'mobile_phone') as $phoneField) {
+            if (isset($user[$phoneField]) && trim((string)$user[$phoneField]) !== '') {
+                $phone = trim((string)$user[$phoneField]);
+                break;
+            }
+        }
+        $phoneDigits = preg_replace('/[^0-9]/', '', $phone);
+        $missing = array();
+        if ($name === '' || $normalizedName === 'weddingwin couple' || $normalizedName === 'couple') {
+            $missing[] = 'name';
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $missing[] = 'email';
+        }
+        if (strlen($phoneDigits) < 7 || strlen($phoneDigits) > 15) {
+            $missing[] = 'phone number';
+        }
+        return array(
+            'complete' => count($missing) === 0,
+            'missing_fields' => $missing,
+            'profile_edit_url' => '/account/contact'
+        );
+    }
+}
+
+if (!function_exists('ww_qr_bingo_fixture_context')) {
+    function ww_qr_bingo_fixture_context($response) {
+        if (!is_array($response)
+            || !isset($response['status_code'])
+            || (int)$response['status_code'] !== 200
+            || !isset($response['body'])
+            || !is_array($response['body'])) {
+            return null;
+        }
+        $body = $response['body'];
+        $appReviewFixture = isset($body['app_review_fixture']) && $body['app_review_fixture'] === true;
+        $emailTestFixture = isset($body['email_test_fixture']) && $body['email_test_fixture'] === true;
+        if (!isset($body['ok']) || $body['ok'] !== true || $appReviewFixture === $emailTestFixture) {
+            return null;
+        }
+        if (!isset($body['vendors']) || !is_array($body['vendors']) || count($body['vendors']) !== 1) {
+            return null;
+        }
+        $vendor = $body['vendors'][0];
+        if (!is_array($vendor)) { return null; }
+        $vendorId = isset($vendor['id']) && is_string($vendor['id']) ? trim($vendor['id']) : '';
+        $vendorUserId = isset($vendor['user_id']) && is_string($vendor['user_id']) ? trim($vendor['user_id']) : '';
+        $vendorName = isset($vendor['name']) && is_string($vendor['name']) ? trim($vendor['name']) : '';
+        if (!$vendorId
+            || strlen($vendorId) > 20
+            || preg_match('/^[1-9][0-9]{0,19}$/D', $vendorId) !== 1
+            || !hash_equals($vendorId, $vendorUserId)
+            || !$vendorName
+            || strlen($vendorName) > 160
+            || strip_tags($vendorName) !== $vendorName
+            || preg_match('/[[:cntrl:]]/u', $vendorName) !== 0) {
+            return null;
+        }
+        if (!isset($body['scanned']) || !is_array($body['scanned']) || count($body['scanned']) > 1) {
+            return null;
+        }
+        $scanned = array();
+        foreach ($body['scanned'] as $scannedVendorId) {
+            if (!is_string($scannedVendorId) || !hash_equals($vendorId, $scannedVendorId)) {
+                return null;
+            }
+            // Do not use the numeric vendor ID as a PHP array key: PHP coerces
+            // numeric-string keys to integers, which breaks strict JS Set
+            // comparisons against the string IDs in VENDORS.
+            $scanned[] = $scannedVendorId;
+        }
+        $scannedCount = count($scanned);
+        if (!isset($body['total_count'])
+            || !is_int($body['total_count'])
+            || $body['total_count'] !== 1
+            || !isset($body['scanned_count'])
+            || !is_int($body['scanned_count'])
+            || $body['scanned_count'] !== $scannedCount
+            || !isset($body['completed'])
+            || !is_bool($body['completed'])
+            || $body['completed'] !== ($scannedCount === 1)) {
+            return null;
+        }
+        return array(
+            'app_review_fixture' => $appReviewFixture,
+            'email_test_fixture' => $emailTestFixture,
+            'vendor' => array(
+                'id' => $vendorId,
+                'user_id' => $vendorUserId,
+                'name' => $vendorName
+            ),
+            'scanned' => $scanned,
+            'completed' => $body['completed']
+        );
+    }
+}
+
 // Check if user is logged in
 if (user::isUserLogged($_COOKIE)) {
     $loggedInUser = getUser($_COOKIE['userid'], $w);
     $userId = $loggedInUser['user_id'];
 
-    // October 18, 2026 Niagara Wedding Show vendors.
-    $eventTagId = 30;
-    // Visits before this cutoff belong to earlier 2026 shows. vendor_visits has
-    // no event key, so scan_date is the event boundary for October history.
-    $eventHistoryStartsAt = '2026-08-01 00:00:00';
+    // The website and native app consume this same published, versioned event
+    // configuration. Fail closed rather than silently reverting to an old tag.
+    $eventConfig = ww_qr_bingo_runtime_config();
+    if (!$eventConfig) {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            http_response_code(503);
+            header('Content-Type: application/json; charset=UTF-8');
+            echo json_encode(array('status' => 'error', 'message' => 'QR Bingo configuration is temporarily unavailable.'));
+            exit();
+        }
+        echo '<div class="alert alert-warning" role="alert">QR Bingo is temporarily unavailable while its event settings are refreshed.</div>';
+        return;
+    }
+    $eventTagId = intval($eventConfig['vendor_tag_id']);
+    $eventHistoryStartsAt = $eventConfig['history_starts_at_sql'];
+    $eventName = $eventConfig['event_name'];
+    $eventConfigRevision = intval($eventConfig['revision']);
+    $officialRulesUrl = $eventConfig['official_rules_url'];
+    $participationNoticeVersion = (string)$eventConfig['rules_version'] . '|2026-09-01-vendor-marketing';
+    $rulesNoticeStorageKey = 'wwQrRulesNotice:' . hash(
+        'sha256',
+        'couple|' . (string)$userId . '|' . $eventConfig['event_key'] . '|' . $participationNoticeVersion
+    );
     // Immutable mapping from the original active tag-27 roster order. Accept
-    // legacy codes only for vendors that also belong to the tag-30 event.
+    // legacy codes only for vendors in the current published event tag.
     $legacyNws25ByBdUserId = [
         '16849' => '002',
         '27768' => '009',
@@ -28,17 +311,234 @@ if (user::isUserLogged($_COOKIE)) {
         '38519' => '066'
     ];
     $isCoupleScannerMember = ($loggedInUser['subscription_id'] == 4 || $loggedInUser['subscription_id'] == 18);
+    $qrContactProfile = ww_qr_bingo_contact_profile($loggedInUser);
+    $qrContactComplete = !empty($qrContactProfile['complete']);
+    $qrContactMissingLabel = implode(', ', $qrContactProfile['missing_fields']);
 
     // Scan history is restricted to couple memberships. Vendor draw lookup uses
     // the BD API/tag fallback and does not depend on this presentation page.
     if ($isCoupleScannerMember) {
+        // Fixture couples are detected only through the authenticated shared
+        // Edge contract. A normal account receives both fixture flags as false
+        // and therefore stays on the existing active-tag production path.
+        $fixtureProbeResponse = ww_qr_bingo_vendor_draw_request(
+            'fixture_context',
+            array(),
+            isset($loggedInUser['user_id']) ? (string)$loggedInUser['user_id'] : '',
+            isset($_COOKIE['token']) ? (string)$_COOKIE['token'] : ''
+        );
+        $fixtureContext = ww_qr_bingo_fixture_context($fixtureProbeResponse);
 
         // Handle AJAX requests for scanning vendors
         if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Content-Type: application/json');
 
+            $expectedEventKey = isset($_POST['expected_event_key']) && is_string($_POST['expected_event_key'])
+                ? $_POST['expected_event_key']
+                : '';
+            $expectedRevision = isset($_POST['expected_config_revision']) && is_string($_POST['expected_config_revision'])
+                ? $_POST['expected_config_revision']
+                : '';
+            if (!hash_equals((string)$eventConfig['event_key'], $expectedEventKey)
+                || !preg_match('/^[1-9][0-9]{0,17}$/D', $expectedRevision)
+                || (int)$expectedRevision !== $eventConfigRevision) {
+                http_response_code(409);
+                echo json_encode(array(
+                    'status' => 'error',
+                    'code' => 'stale_event_config',
+                    'message' => 'QR Bingo settings changed. Reload before continuing.',
+                    'event_config' => array(
+                        'event_key' => $eventConfig['event_key'],
+                        'revision' => $eventConfigRevision
+                    )
+                ));
+                exit();
+            }
+
+            if (in_array($_POST['action'], array('scan_vendor', 'raffle_offer', 'raffle_opt_in'), true)
+                && !$qrContactComplete) {
+                http_response_code(422);
+                echo json_encode(array(
+                    'ok' => false,
+                    'status' => 'error',
+                    'code' => 'profile_incomplete',
+                    'message' => 'Complete your ' . $qrContactMissingLabel . ' before continuing with QR Bingo.',
+                    'missing_profile_fields' => $qrContactProfile['missing_fields'],
+                    'profile_edit_url' => $qrContactProfile['profile_edit_url']
+                ));
+                exit();
+            }
+
+            if ($_POST['action'] === 'raffle_offer' || $_POST['action'] === 'raffle_opt_in') {
+                if (empty($eventConfig['vendor_draws_enabled'])) {
+                    http_response_code(503);
+                    echo json_encode(array('ok' => false, 'error' => 'Optional vendor draws are temporarily unavailable.'));
+                    exit();
+                }
+                $drawVendorId = isset($_POST['vendor_id']) && is_string($_POST['vendor_id'])
+                    ? trim($_POST['vendor_id'])
+                    : '';
+                if (!$drawVendorId || strlen($drawVendorId) > 20 || preg_match('/^[0-9]+$/D', $drawVendorId) !== 1) {
+                    http_response_code(400);
+                    echo json_encode(array('ok' => false, 'error' => 'Vendor draw not found.'));
+                    exit();
+                }
+                if ($fixtureContext) {
+                    $fixtureVendorId = (string)$fixtureContext['vendor']['id'];
+                    if (!hash_equals($fixtureVendorId, $drawVendorId)) {
+                        http_response_code(404);
+                        echo json_encode(array('ok' => false, 'error' => 'Vendor draw not found.'));
+                        exit();
+                    }
+                } else {
+                    $safeDrawVendorId = mysql_real_escape_string($drawVendorId);
+                    $drawVendorQuery = "
+                        SELECT u.user_id
+                        FROM users_data u
+                        INNER JOIN rel_tags rt ON rt.object_id = u.user_id
+                        WHERE u.user_id = '$safeDrawVendorId'
+                        AND rt.tag_id = '$eventTagId'
+                        AND rt.tag_type_id = 1
+                        AND u.active = 2
+                        LIMIT 1
+                    ";
+                    $drawVendorResult = mysql($w['database'], $drawVendorQuery);
+                    if (!$drawVendorResult || !mysql_fetch_assoc($drawVendorResult)) {
+                        http_response_code(404);
+                        echo json_encode(array('ok' => false, 'error' => 'Vendor draw not found.'));
+                        exit();
+                    }
+                }
+
+                $drawPayload = array('vendor_id' => $drawVendorId);
+                if ($_POST['action'] === 'raffle_opt_in') {
+                    $consentVersion = isset($_POST['consent_version']) && is_string($_POST['consent_version'])
+                        ? trim($_POST['consent_version'])
+                        : '';
+                    if (strlen($consentVersion) > 80 || strip_tags($consentVersion) !== $consentVersion) {
+                        $consentVersion = '';
+                    }
+                    $vendorOfferVersion = isset($_POST['vendor_offer_version']) && is_string($_POST['vendor_offer_version'])
+                        ? trim($_POST['vendor_offer_version'])
+                        : '';
+                    if (!ww_qr_bingo_is_rfc3339_timestamp($vendorOfferVersion)) {
+                        http_response_code(400);
+                        echo json_encode(array(
+                            'ok' => false,
+                            'code' => 'invalid_vendor_offer_version',
+                            'error' => 'Reload the current vendor offer before entering.'
+                        ));
+                        exit();
+                    }
+                    $participantResponsibilityDisclosure = isset($_POST['participant_responsibility_disclosure'])
+                        && is_string($_POST['participant_responsibility_disclosure'])
+                        ? $_POST['participant_responsibility_disclosure']
+                        : '';
+                    $participantDisclosureControlMatch = preg_match(
+                        '/[[:cntrl:]]/u',
+                        $participantResponsibilityDisclosure
+                    );
+                    if ($participantResponsibilityDisclosure === ''
+                        || strlen($participantResponsibilityDisclosure) > 2000
+                        || trim($participantResponsibilityDisclosure) !== $participantResponsibilityDisclosure
+                        || strpos($participantResponsibilityDisclosure, '<') !== false
+                        || strpos($participantResponsibilityDisclosure, '>') !== false
+                        || $participantDisclosureControlMatch !== 0) {
+                        http_response_code(400);
+                        echo json_encode(array(
+                            'ok' => false,
+                            'code' => 'invalid_participant_responsibility_disclosure',
+                            'error' => 'Reload the current vendor offer before entering.'
+                        ));
+                        exit();
+                    }
+                    $drawPayload['rules_viewed'] = isset($_POST['rules_viewed']) && (string)$_POST['rules_viewed'] === '1';
+                    $drawPayload['apple_non_sponsor_acknowledged'] = isset($_POST['apple_non_sponsor_acknowledged']) && (string)$_POST['apple_non_sponsor_acknowledged'] === '1';
+                    $drawPayload['consent_version'] = $consentVersion;
+                    $drawPayload['vendor_offer_version'] = $vendorOfferVersion;
+                    $drawPayload['age_of_majority_attested'] = isset($_POST['age_of_majority_attested']) && (string)$_POST['age_of_majority_attested'] === '1';
+                    $drawPayload['residency_attested'] = isset($_POST['residency_attested']) && (string)$_POST['residency_attested'] === '1';
+                    $drawPayload['exclusions_attested'] = isset($_POST['exclusions_attested']) && (string)$_POST['exclusions_attested'] === '1';
+                    $drawPayload['promotion_responsibility_acknowledged'] = isset($_POST['promotion_responsibility_acknowledged']) && (string)$_POST['promotion_responsibility_acknowledged'] === '1';
+                    $drawPayload['draw_administration_contact_share_acknowledged'] = isset($_POST['draw_administration_contact_share_acknowledged']) && (string)$_POST['draw_administration_contact_share_acknowledged'] === '1';
+                    $drawPayload['vendor_marketing_consent_acknowledged'] = isset($_POST['vendor_marketing_consent_acknowledged']) && (string)$_POST['vendor_marketing_consent_acknowledged'] === '1';
+                    $drawPayload['participant_responsibility_disclosure'] = $participantResponsibilityDisclosure;
+                }
+                $drawResponse = ww_qr_bingo_vendor_draw_request(
+                    $_POST['action'],
+                    $drawPayload,
+                    isset($loggedInUser['user_id']) ? (string)$loggedInUser['user_id'] : '',
+                    isset($_COOKIE['token']) ? (string)$_COOKIE['token'] : ''
+                );
+                http_response_code((int)$drawResponse['status_code']);
+                echo json_encode($drawResponse['body']);
+                exit();
+            }
+
             if ($_POST['action'] === 'scan_vendor') {
-                $vendorId = $_POST['vendor_id'];
+                if (empty($eventConfig['scan_enabled'])) {
+                    http_response_code(503);
+                    echo json_encode(array('status' => 'error', 'message' => 'QR Bingo scanning is temporarily disabled.'));
+                    exit();
+                }
+                $submittedNoticeVersion = isset($_POST['participation_notice_version']) && is_string($_POST['participation_notice_version'])
+                    ? trim($_POST['participation_notice_version'])
+                    : '';
+                if (!hash_equals($participationNoticeVersion, $submittedNoticeVersion)) {
+                    http_response_code(428);
+                    echo json_encode(array(
+                        'status' => 'error',
+                        'code' => 'participation_notice_required',
+                        'message' => 'Read and accept the current QR Bingo participation notice before scanning.'
+                    ));
+                    exit();
+                }
+                $vendorId = isset($_POST['vendor_id']) && is_string($_POST['vendor_id'])
+                    ? trim($_POST['vendor_id'])
+                    : '';
+                if ($fixtureContext) {
+                    $fixtureVendorId = (string)$fixtureContext['vendor']['id'];
+                    if (!$vendorId || !hash_equals($fixtureVendorId, $vendorId)) {
+                        http_response_code(400);
+                        echo json_encode(array('status' => 'error', 'message' => 'Invalid vendor ID'));
+                        exit();
+                    }
+                    $fixtureScanResponse = ww_qr_bingo_vendor_draw_request(
+                        'scan',
+                        array(
+                            'vendor_id' => $fixtureVendorId,
+                            'participation_notice_version' => $participationNoticeVersion
+                        ),
+                        isset($loggedInUser['user_id']) ? (string)$loggedInUser['user_id'] : '',
+                        isset($_COOKIE['token']) ? (string)$_COOKIE['token'] : ''
+                    );
+                    $freshFixtureContext = ww_qr_bingo_fixture_context($fixtureScanResponse);
+                    if (!$freshFixtureContext
+                        || !hash_equals($fixtureVendorId, (string)$freshFixtureContext['vendor']['id'])
+                        || !in_array($fixtureVendorId, $freshFixtureContext['scanned'], true)) {
+                        http_response_code(
+                            isset($fixtureScanResponse['status_code']) && (int)$fixtureScanResponse['status_code'] >= 400
+                                ? (int)$fixtureScanResponse['status_code']
+                                : 502
+                        );
+                        $fixtureScanBody = isset($fixtureScanResponse['body']) && is_array($fixtureScanResponse['body'])
+                            ? $fixtureScanResponse['body']
+                            : array();
+                        echo json_encode(array(
+                            'status' => 'error',
+                            'message' => isset($fixtureScanBody['error']) && is_string($fixtureScanBody['error'])
+                                ? $fixtureScanBody['error']
+                                : 'Fixture scan could not be saved.'
+                        ));
+                        exit();
+                    }
+                    echo json_encode(array(
+                        'status' => 'success',
+                        'scanned_count' => count($freshFixtureContext['scanned']),
+                        'completed' => $freshFixtureContext['completed']
+                    ));
+                    exit();
+                }
                 $vendorId = mysql_real_escape_string($vendorId);
 
                 // Stable QR identifiers are Brilliant Directories user IDs.
@@ -112,6 +612,13 @@ if (user::isUserLogged($_COOKIE)) {
             }
 
             if ($_POST['action'] === 'get_scanned') {
+                if ($fixtureContext) {
+                    echo json_encode(array(
+                        'status' => 'success',
+                        'scanned' => $fixtureContext['scanned']
+                    ));
+                    exit();
+                }
                 // Return only current-event vendor visits, keyed by stable BD user ID.
                 $scannedQuery = "
                     SELECT DISTINCT vv.vendor_id
@@ -138,49 +645,56 @@ if (user::isUserLogged($_COOKIE)) {
                 exit();
             }
 
-            if ($_POST['action'] === 'reset_progress') {
-                // Reset only this event; preserve visits from prior shows.
-                $query = "
-                    DELETE vv
-                    FROM vendor_visits vv
-                    INNER JOIN rel_tags rt ON rt.object_id = vv.vendor_id
-                    WHERE vv.user_id = '$userId'
-                    AND rt.tag_id = '$eventTagId'
-                    AND rt.tag_type_id = 1
-                    AND vv.scan_date >= '$eventHistoryStartsAt'
-                ";
-                mysql($w['database'], $query);
-
-                $updateQuery = "UPDATE users_data SET bingo_completed = 0, bingo_completion_date = NULL
-                              WHERE user_id = '$userId'
-                              AND bingo_completion_date >= '$eventHistoryStartsAt'";
-                mysql($w['database'], $updateQuery);
-
-                echo json_encode(['status' => 'success']);
-                exit();
-            }
+            http_response_code(400);
+            echo json_encode(array('status' => 'error', 'message' => 'Unsupported QR Bingo action.'));
+            exit();
         }
 
         // Get current-event progress using stable BD vendor IDs.
-        $scannedVendors = [];
-        $scannedQuery = "
-            SELECT DISTINCT vv.vendor_id
-            FROM vendor_visits vv
-            INNER JOIN rel_tags rt ON rt.object_id = vv.vendor_id
-            INNER JOIN users_data u ON u.user_id = vv.vendor_id
-            WHERE vv.user_id = '$userId'
-            AND rt.tag_id = '$eventTagId'
-            AND rt.tag_type_id = 1
-            AND u.active = 2
-            AND vv.scan_date >= '$eventHistoryStartsAt'
-            ORDER BY vv.vendor_id ASC
-        ";
-        $scannedResult = mysql($w['database'], $scannedQuery);
+        $scannedVendors = array();
+        if ($fixtureContext) {
+            $scannedVendors = $fixtureContext['scanned'];
+        } else {
+            $scannedQuery = "
+                SELECT DISTINCT vv.vendor_id
+                FROM vendor_visits vv
+                INNER JOIN rel_tags rt ON rt.object_id = vv.vendor_id
+                INNER JOIN users_data u ON u.user_id = vv.vendor_id
+                WHERE vv.user_id = '$userId'
+                AND rt.tag_id = '$eventTagId'
+                AND rt.tag_type_id = 1
+                AND u.active = 2
+                AND vv.scan_date >= '$eventHistoryStartsAt'
+                ORDER BY vv.vendor_id ASC
+            ";
+            $scannedResult = mysql($w['database'], $scannedQuery);
 
-        if ($scannedResult) {
-            while ($row = mysql_fetch_assoc($scannedResult)) {
-                $scannedVendors[] = (string)$row['vendor_id'];
+            if ($scannedResult) {
+                while ($row = mysql_fetch_assoc($scannedResult)) {
+                    $scannedVendors[] = (string)$row['vendor_id'];
+                }
             }
+        }
+
+        // The isolated reviewer/email fixture has one private vendor supplied by
+        // the authenticated Edge response. Production totals remain sourced from
+        // the current active Brilliant Directories tag roster.
+        if ($fixtureContext) {
+            $totalVendorCount = 1;
+        } else {
+            $totalCountQuery = "
+                SELECT COUNT(DISTINCT u.user_id) as total_vendors
+                FROM users_data u
+                INNER JOIN rel_tags rt ON rt.object_id = u.user_id
+                WHERE rt.tag_id = '$eventTagId'
+                AND rt.tag_type_id = 1
+                AND u.active = 2
+            ";
+            $totalCountResult = mysql($w['database'], $totalCountQuery);
+            $totalCountRow = $totalCountResult ? mysql_fetch_assoc($totalCountResult) : array();
+            $totalVendorCount = isset($totalCountRow['total_vendors'])
+                ? max(0, intval($totalCountRow['total_vendors']))
+                : 0;
         }
 
 ?>
@@ -189,7 +703,7 @@ if (user::isUserLogged($_COOKIE)) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Niagara Wedding Show — QR Bingo</title>
+  <title><?php echo htmlspecialchars($eventName, ENT_QUOTES, 'UTF-8'); ?> — QR Bingo</title>
   <style>
     :root{
       --rose:#ff6f91; /* WeddingWin pink */
@@ -540,6 +1054,13 @@ if (user::isUserLogged($_COOKIE)) {
     .tile .check{ position:absolute; right:8px; top:8px; width:18px; height:18px; border-radius:50%; background:#e5ffe9; color:var(--success);
       display:none; align-items:center; justify-content:center; font-size:12px; }
     .tile.scanned .check{ display:flex; }
+    .tile .vendor-draw-review{
+      margin-top:9px; padding:7px 9px; border:1px solid #aa565d; border-radius:9px;
+      background:#fff; color:#8f4148; font-size:12px; line-height:1.2; font-weight:700;
+      cursor:pointer;
+    }
+    .tile .vendor-draw-review:hover,
+    .tile .vendor-draw-review:focus-visible{ background:#fff4f5; outline:2px solid #8f4148; outline-offset:2px; }
 
     .done{
       display:none; position:sticky; bottom:0; background: #fff; border-top:1px solid var(--stone);
@@ -615,6 +1136,46 @@ if (user::isUserLogged($_COOKIE)) {
       0%{ transform:translateY(0) scale(0); opacity:1; }
       100%{ transform:translateY(-40px) scale(1); opacity:0; }
     }
+    .vendor-draw-modal[hidden]{ display:none; }
+    .qr-rules-notice[hidden]{ display:none; }
+    .qr-rules-notice{
+      background:#fff7f6; border:1px solid #efd8d5; border-radius:10px;
+      color:#4f4b50; font-size:13px; line-height:1.45; margin-bottom:14px;
+      padding:10px 12px;
+    }
+    .qr-rules-notice-row{ align-items:flex-start; display:flex; gap:9px; }
+    .qr-rules-notice input{ flex:0 0 auto; height:18px; margin:1px 0 0; width:18px; }
+    .qr-rules-notice label{ cursor:pointer; margin:0; }
+    .qr-rules-notice strong{ color:#3f393f; display:block; }
+    .qr-rules-notice a{ color:#aa565d; font-weight:800; }
+    .qr-rules-notice-apple{ color:#6b646b; font-size:11px; margin:7px 0 0 27px; }
+    .qr-contact-gate{ background:#fff; border:2px solid #efd8d5; border-radius:16px; box-shadow:0 10px 30px rgba(91,50,54,.08); margin:18px 0; padding:22px; text-align:center; }
+    .qr-contact-gate h2{ color:#3f393f; font-size:24px; margin:0 0 9px; }
+    .qr-contact-gate p{ color:#625b62; font-size:15px; line-height:1.55; margin:7px auto; max-width:620px; }
+    .qr-contact-gate a{ background:#aa565d; border-radius:10px; color:#fff; display:inline-block; font-weight:800; margin-top:12px; min-height:44px; padding:12px 18px; text-decoration:none; }
+    .vendor-draw-modal{ align-items:flex-start; background:rgba(20,20,24,.68); display:flex; inset:0; justify-content:center; overflow-y:auto; padding:24px 14px; position:fixed; z-index:10020; }
+    .vendor-draw-dialog{ background:#fff; border-radius:16px; box-shadow:0 24px 70px rgba(0,0,0,.28); color:#292929; max-width:620px; padding:22px; width:100%; }
+    .vendor-draw-eyebrow{ color:#aa565d; font-size:12px; font-weight:800; letter-spacing:.06em; margin:0 0 6px; text-transform:uppercase; }
+    .vendor-draw-dialog h2{ font-size:26px; line-height:1.2; margin:0 0 4px; }
+    .vendor-draw-vendor{ color:#666168; font-weight:700; margin:0 0 14px; }
+    .vendor-draw-copy{ color:#4f4b50; font-size:14px; line-height:1.55; margin:10px 0; white-space:pre-line; }
+    .vendor-draw-terms{ background:#fff7f6; border:1px solid #efd8d5; border-radius:10px; margin:14px 0; padding:13px; }
+    .vendor-draw-terms a{ color:#aa565d; display:inline-block; font-weight:800; margin:3px 12px 3px 0; }
+    .vendor-draw-check{ align-items:flex-start; display:flex; font-size:13px; gap:9px; line-height:1.45; margin:12px 0; }
+    .vendor-draw-check input{ flex:0 0 auto; height:19px; margin:1px 0 0; width:19px; }
+    .vendor-draw-actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+    .vendor-draw-actions button{ border:0; border-radius:9px; cursor:pointer; font-weight:800; min-height:44px; padding:10px 16px; }
+    .vendor-draw-actions button:disabled{ cursor:not-allowed; opacity:.5; }
+    .vendor-draw-decline{ background:#f0eded; color:#292929; }
+    .vendor-draw-enter{ background:#aa565d; color:#fff; }
+    .vendor-draw-status{ color:#666168; font-size:13px; line-height:1.45; margin:12px 0 0; }
+    .vendor-draw-status.is-error{ color:#8a2424; }
+    @media (max-width:540px){
+      .vendor-draw-modal{ padding:12px; }
+      .vendor-draw-dialog{ padding:18px 16px; }
+      .vendor-draw-actions{ align-items:stretch; flex-direction:column-reverse; }
+      .vendor-draw-actions button{ width:100%; }
+    }
   </style>
 </head>
 <body>
@@ -622,19 +1183,48 @@ if (user::isUserLogged($_COOKIE)) {
     <div class="brand">
       <div class="mark" aria-hidden="true"></div>
       <div>
-        <h1>Niagara Wedding Show — QR Bingo</h1>
-        <div class="sub">Visit every vendor booth. Scan each QR. Fill your card. 🎉</div>
+        <h1><?php echo htmlspecialchars($eventName, ENT_QUOTES, 'UTF-8'); ?> — QR Bingo</h1>
+	        <div class="sub">Visit each participating vendor booth. Scan its QR to record your visit. 🎉</div>
       </div>
     </div>
   </header>
 
 	  <div class="wrap">
 
-	    <section aria-label="QR Bingo promotion notice" style="background:#fff7f6;border:1px solid #efd8d5;border-radius:12px;padding:14px 16px;margin-bottom:16px;">
-	      <strong>Official rules apply to any prize entry.</strong>
-	      <p style="margin:8px 0;">Scanning fills your QR Bingo card; it does not silently accept promotion rules or enter a prize draw. No purchase is necessary. A promotion must remain closed unless its entry screen provides a working alternate free entry route that requires no purchase, show attendance, or QR scan. If a promotion is open, Wedding Win Inc. will show that route plus the configured prize, approximate retail value in Canadian dollars, sponsor/prize provider, eligible region, entry close and draw time, odds basis, skill-testing-question condition, and official rules before you may choose to enter.</p>
-	      <p style="margin:8px 0;"><a href="/qr-bingo-vendor-draw-rules" target="_blank" rel="noopener">View QR Bingo official rules</a></p>
-	      <p style="margin:8px 0 0;">Apple Inc. is not a sponsor of and is not involved in any QR Bingo promotion, its administration, winner selection, or prize fulfillment.</p>
+    <?php if (empty($eventConfig['scan_enabled'])) { ?>
+      <div class="alert alert-warning" role="status" style="margin-bottom:16px;">
+        QR Bingo scanning is temporarily disabled by the event administrator. Your saved progress is unchanged.
+      </div>
+    <?php } ?>
+
+    <?php if (!$qrContactComplete) { ?>
+      <section class="qr-contact-gate" role="alert" aria-labelledby="qrContactGateTitle">
+        <h2 id="qrContactGateTitle">Complete your contact details</h2>
+        <p>Before scanning, add your <?php echo htmlspecialchars($qrContactMissingLabel, ENT_QUOTES, 'UTF-8'); ?>. This keeps every booth visit connected to a usable couple profile.</p>
+        <p>If you enter a vendor draw, that named vendor receives these contact details for the draw and may use them to send wedding-related offers and promotions. You may unsubscribe from vendor marketing at any time.</p>
+        <a href="/account/contact">Complete Contact Details</a>
+      </section>
+    <?php } ?>
+
+    <div id="qrScannerExperience"<?php echo $qrContactComplete ? '' : ' hidden'; ?>>
+
+	    <section
+	      class="qr-rules-notice"
+	      id="qrRulesNotice"
+	      aria-label="QR Bingo terms acknowledgement"
+	      data-storage-key="<?php echo htmlspecialchars($rulesNoticeStorageKey, ENT_QUOTES, 'UTF-8'); ?>"
+	    >
+	      <div class="qr-rules-notice-row">
+	        <input id="qrRulesNoticeAcknowledged" type="checkbox">
+	        <label for="qrRulesNoticeAcknowledged">
+	          <strong>I agree to the QR Bingo Terms.</strong>
+	        </label>
+	      </div>
+	      <p class="qr-rules-notice-apple">
+	        <a href="/about/terms" target="_blank" rel="noopener">Read QR Bingo Terms</a>
+	        &nbsp;·&nbsp;
+	        <a href="/about/privacy" target="_blank" rel="noopener">View Privacy Policy</a>
+	      </p>
 	    </section>
 
 	    <section class="controls" aria-label="Scanner controls">
@@ -693,23 +1283,10 @@ if (user::isUserLogged($_COOKIE)) {
         </div>
       </div>
 
-      <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="<?php
-      // Get total vendor count for progress bar
-      $totalCountQuery = "
-          SELECT COUNT(DISTINCT u.user_id) as total_vendors
-          FROM users_data u
-          INNER JOIN rel_tags rt ON rt.object_id = u.user_id
-          WHERE rt.tag_id = '$eventTagId'
-          AND rt.tag_type_id = 1
-          AND u.active = 2
-      ";
-      $totalCountResult = mysql($w['database'], $totalCountQuery);
-      $totalCountRow = mysql_fetch_assoc($totalCountResult);
-      echo $totalCountRow['total_vendors'];
-      ?>" aria-valuenow="0" aria-label="Completion progress">
+      <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="<?php echo $totalVendorCount; ?>" aria-valuenow="0" aria-label="Completion progress">
         <div class="progress" id="progress"></div>
       </div>
-      <div class="progress-meta"><span id="progressText">0 / <?php echo $totalCountRow['total_vendors']; ?> scanned</span><span id="lastScan" class="note"></span></div>
+      <div class="progress-meta"><span id="progressText">0 / <?php echo $totalVendorCount; ?> scanned</span><span id="lastScan" class="note"></span></div>
     </section>
 
     <section>
@@ -718,9 +1295,10 @@ if (user::isUserLogged($_COOKIE)) {
 
     <section class="done" id="doneBar" aria-live="polite">
       <div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
-	        <div><strong>All vendors scanned!</strong> Your QR Bingo card is complete. If a grand-prize promotion is open, review its official rules and confirm entry separately in the WeddingWin app.</div>
+	        <div><strong>All participating booths visited!</strong> Your QR Bingo card is complete. Any vendor prize entry remains separate and optional.</div>
       </div>
     </section>
+    </div>
 
     <div class="footer">© 2025 Wedding Win Inc.</div>
   </div>
@@ -742,73 +1320,136 @@ if (user::isUserLogged($_COOKIE)) {
     </div>
   </div>
 
+  <div class="vendor-draw-modal" id="vendorDrawModal" hidden>
+    <section class="vendor-draw-dialog" id="vendorDrawDialog" role="dialog" aria-modal="true" aria-labelledby="vendorDrawTitle" aria-describedby="vendorDrawDescription vendorDrawPrivacy vendorDrawStatus" tabindex="-1">
+      <p class="vendor-draw-eyebrow">Optional vendor draw</p>
+      <h2 id="vendorDrawTitle">Vendor prize</h2>
+      <p class="vendor-draw-vendor" id="vendorDrawVendor"></p>
+      <p class="vendor-draw-copy" id="vendorDrawDescription"></p>
+      <p class="vendor-draw-copy" id="vendorDrawDisclosure"></p>
+      <p class="vendor-draw-copy" id="vendorDrawPrivacy"></p>
+      <p class="vendor-draw-copy" id="vendorDrawRoles"></p>
+      <p class="vendor-draw-copy" id="vendorDrawApple"></p>
+      <div class="vendor-draw-terms">
+        <a id="vendorDrawRules" href="#" target="_blank" rel="noopener">View draw rules</a>
+        <a id="vendorDrawFreeEntry" href="#" target="_blank" rel="noopener" hidden>Alternate free entry method</a>
+        <p class="vendor-draw-status" id="vendorDrawRulesStatus">Open the current rules before choosing to enter.</p>
+      </div>
+      <label class="vendor-draw-check">
+        <input id="vendorDrawAge" type="checkbox">
+        <span>I have reached the age of majority.</span>
+      </label>
+      <label class="vendor-draw-check">
+        <input id="vendorDrawResidency" type="checkbox">
+        <span>I reside in the eligible region shown above.</span>
+      </label>
+      <label class="vendor-draw-check">
+        <input id="vendorDrawExclusions" type="checkbox">
+        <span>I am not Wedding Win Inc., the named vendor or prize provider, an employee of either, or a member of an excluded employee's immediate household under the Official Rules.</span>
+      </label>
+      <label class="vendor-draw-check">
+        <input id="vendorDrawResponsibility" type="checkbox">
+        <span id="vendorDrawResponsibilityText">Loading the exact participant responsibility agreement…</span>
+      </label>
+      <p class="vendor-draw-status" id="vendorDrawStatus" role="status" aria-live="polite">Prize entry is separate and optional. One valid entry is allowed per eligible couple per vendor draw, regardless of method. Declining does not change your saved booth visit.</p>
+      <div class="vendor-draw-actions">
+        <button class="vendor-draw-decline" id="vendorDrawDecline" type="button">No Thanks</button>
+        <button class="vendor-draw-enter" id="vendorDrawEnter" type="button" disabled>Accept Rules &amp; Enter</button>
+      </div>
+    </section>
+  </div>
+
   <!-- Vendor Data -->
   <script>
+    const EVENT_CONFIG = <?php echo json_encode(array(
+      'event_key' => isset($eventConfig['event_key']) ? (string)$eventConfig['event_key'] : '',
+      'revision' => $eventConfigRevision,
+      'event_name' => $eventName,
+      'vendor_tag_id' => $eventTagId,
+      'scan_enabled' => !empty($eventConfig['scan_enabled']),
+      'vendor_draws_enabled' => !empty($eventConfig['vendor_draws_enabled'])
+    ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
+    const CONTACT_PROFILE_COMPLETE = <?php echo $qrContactComplete ? 'true' : 'false'; ?>;
+    const PARTICIPATION_NOTICE_VERSION = <?php echo json_encode($participationNoticeVersion, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const VENDORS = <?php
-    // Retrieve active vendors for the October 18, 2026 show.
+    // Retrieve the exact private fixture roster only when the authenticated Edge
+    // response passed the strict fixture validator. Every other account uses the
+    // unchanged active-vendor/tag roster below.
     $targetTagId = $eventTagId;
     $vendors = [];
 
-    // Query each tagged user exactly once. A vendor can have multiple matching
-    // rel_tags/users_photo rows, so aggregate photos and group by the stable BD
-    // user ID instead of allowing the joins to duplicate VENDORS entries.
-    $vendorQuery = "
-        SELECT
-            u.user_id,
-            u.company,
-            TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) as name,
-            COALESCE(u.company, TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as display_name,
-            u.filename,
-            COALESCE(
-                MAX(CASE WHEN up.type = 'cover_photo' THEN up.file END),
-                MAX(CASE WHEN up.type = 'logo' THEN up.file END)
-            ) as photo_file,
-            CASE
-                WHEN MAX(CASE WHEN up.type = 'cover_photo' THEN up.file END) IS NOT NULL THEN 'cover_photo'
-                WHEN MAX(CASE WHEN up.type = 'logo' THEN up.file END) IS NOT NULL THEN 'logo'
-                ELSE NULL
-            END as photo_type
-        FROM users_data u
-        INNER JOIN rel_tags rt ON rt.object_id = u.user_id
-        LEFT JOIN users_photo up ON up.user_id = u.user_id AND up.type IN ('cover_photo', 'logo')
-        WHERE rt.tag_id = '$targetTagId'
-        AND rt.tag_type_id = 1
-        AND u.active = 2
-        GROUP BY u.user_id, u.company, u.first_name, u.last_name, u.filename
-        ORDER BY u.user_id ASC
-    ";
+    if ($fixtureContext) {
+        $fixtureVendor = $fixtureContext['vendor'];
+        $vendors[] = array(
+            'id' => (string)$fixtureVendor['id'],
+            'name' => (string)$fixtureVendor['name'],
+            'cover_photo' => '',
+            'full_filename' => '',
+            'user_id' => (string)$fixtureVendor['user_id'],
+            'legacy_id' => ''
+        );
+    } else {
+        // Query each tagged user exactly once. A vendor can have multiple matching
+        // rel_tags/users_photo rows, so aggregate photos and group by the stable BD
+        // user ID instead of allowing the joins to duplicate VENDORS entries.
+        $vendorQuery = "
+            SELECT
+                u.user_id,
+                u.company,
+                TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) as name,
+                COALESCE(u.company, TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as display_name,
+                u.filename,
+                COALESCE(
+                    MAX(CASE WHEN up.type = 'cover_photo' THEN up.file END),
+                    MAX(CASE WHEN up.type = 'logo' THEN up.file END)
+                ) as photo_file,
+                CASE
+                    WHEN MAX(CASE WHEN up.type = 'cover_photo' THEN up.file END) IS NOT NULL THEN 'cover_photo'
+                    WHEN MAX(CASE WHEN up.type = 'logo' THEN up.file END) IS NOT NULL THEN 'logo'
+                    ELSE NULL
+                END as photo_type
+            FROM users_data u
+            INNER JOIN rel_tags rt ON rt.object_id = u.user_id
+            LEFT JOIN users_photo up ON up.user_id = u.user_id AND up.type IN ('cover_photo', 'logo')
+            WHERE rt.tag_id = '$targetTagId'
+            AND rt.tag_type_id = 1
+            AND u.active = 2
+            GROUP BY u.user_id, u.company, u.first_name, u.last_name, u.filename
+            ORDER BY u.user_id ASC
+        ";
 
-    $result = mysql($w['database'], $vendorQuery);
-    if ($result) {
-        while ($row = mysql_fetch_assoc($result)) {
-            // Use company name if available, otherwise use concatenated first/last name
-            $vendorName = !empty(trim($row['company'])) ? trim($row['company']) : trim($row['display_name']);
+        $result = mysql($w['database'], $vendorQuery);
+        if ($result) {
+            while ($row = mysql_fetch_assoc($result)) {
+                // Use company name if available, otherwise use concatenated first/last name
+                $vendorName = !empty(trim($row['company'])) ? trim($row['company']) : trim($row['display_name']);
 
-            // Generate full URL for the vendor
-            $baseUrl = "https://www.weddingwin.ca/";
-            $fullUrl = $baseUrl . $row['filename'];
+                // Generate full URL for the vendor
+                $baseUrl = "https://www.weddingwin.ca/";
+                $fullUrl = $baseUrl . $row['filename'];
 
-            // Construct photo URL based on photo type
-            $coverPhoto = "";
-            $userId = $row['user_id'];
-            if (!empty($row['photo_file']) && !empty($row['photo_type'])) {
-                if ($row['photo_type'] === 'cover_photo') {
-                    $coverPhoto = "https://www.weddingwin.ca/covers/profile/" . $row['photo_file'];
-                } elseif ($row['photo_type'] === 'logo') {
-                    $coverPhoto = "https://www.weddingwin.ca/logos/profile/" . $row['photo_file'];
+                // Construct photo URL based on photo type
+                $coverPhoto = "";
+                $vendorUserId = $row['user_id'];
+                if (!empty($row['photo_file']) && !empty($row['photo_type'])) {
+                    if ($row['photo_type'] === 'cover_photo') {
+                        $coverPhoto = "https://www.weddingwin.ca/covers/profile/" . $row['photo_file'];
+                    } elseif ($row['photo_type'] === 'logo') {
+                        $coverPhoto = "https://www.weddingwin.ca/logos/profile/" . $row['photo_file'];
+                    }
                 }
-            }
 
-            $vendors[] = [
-                "id" => (string)$userId,
-                "name" => $vendorName,
-                "cover_photo" => $coverPhoto,
-                "full_filename" => $fullUrl,
-                "user_id" => (string)$userId,
-                "legacy_id" => isset($legacyNws25ByBdUserId[(string)$userId])
-                    ? $legacyNws25ByBdUserId[(string)$userId]
-                    : ""
-            ];
+                $vendors[] = [
+                    "id" => (string)$vendorUserId,
+                    "name" => $vendorName,
+                    "cover_photo" => $coverPhoto,
+                    "full_filename" => $fullUrl,
+                    "user_id" => (string)$vendorUserId,
+                    "legacy_id" => isset($legacyNws25ByBdUserId[(string)$vendorUserId])
+                        ? $legacyNws25ByBdUserId[(string)$vendorUserId]
+                        : ""
+                ];
+            }
         }
     }
 
@@ -839,6 +1480,48 @@ if (user::isUserLogged($_COOKIE)) {
     let stream = null;
     let decoding = false;
     let lastDecoded = '';
+    let currentVendorDrawOffer = null;
+    let currentVendorDrawVendor = null;
+    let vendorDrawRulesViewedVersion = '';
+    let vendorDrawReturnFocus = null;
+    let qrRulesNoticeAccepted = false;
+    let appInitialized = false;
+
+    const qrRulesNotice = document.getElementById('qrRulesNotice');
+    const qrRulesNoticeAcknowledged = document.getElementById('qrRulesNoticeAcknowledged');
+
+    function initializeRulesNotice() {
+      if (!qrRulesNotice || !qrRulesNoticeAcknowledged) return;
+      const storageKey = qrRulesNotice.dataset.storageKey || '';
+      let alreadyAcknowledged = false;
+      if (storageKey) {
+        try {
+          alreadyAcknowledged = window.localStorage.getItem(storageKey) === '1';
+        } catch (error) {
+          alreadyAcknowledged = false;
+        }
+      }
+      if (alreadyAcknowledged) {
+        qrRulesNoticeAccepted = true;
+        qrRulesNotice.hidden = true;
+        return;
+      }
+      qrRulesNoticeAcknowledged.addEventListener('change', () => {
+        if (!qrRulesNoticeAcknowledged.checked) return;
+        qrRulesNoticeAccepted = true;
+        if (storageKey) {
+          try {
+            window.localStorage.setItem(storageKey, '1');
+          } catch (error) {
+            // The notice still dismisses for this page when storage is unavailable.
+          }
+        }
+        qrRulesNotice.hidden = true;
+        initApp();
+      });
+    }
+
+    initializeRulesNotice();
 
     // --- Server Communication ---
     async function saveVendorScan(vendorId) {
@@ -848,7 +1531,7 @@ if (user::isUserLogged($_COOKIE)) {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: `action=scan_vendor&vendor_id=${encodeURIComponent(vendorId)}`
+          body: `action=scan_vendor&vendor_id=${encodeURIComponent(vendorId)}&participation_notice_version=${encodeURIComponent(PARTICIPATION_NOTICE_VERSION)}&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`
         });
 
         const data = await response.json();
@@ -873,7 +1556,7 @@ if (user::isUserLogged($_COOKIE)) {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: 'action=get_scanned'
+          body: `action=get_scanned&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`
         });
 
         const data = await response.json();
@@ -893,6 +1576,332 @@ if (user::isUserLogged($_COOKIE)) {
     const lastScanEl = document.getElementById('lastScan');
     const doneBar = document.getElementById('doneBar');
     const successOverlay = document.getElementById('successOverlay');
+    const vendorDrawModal = document.getElementById('vendorDrawModal');
+    const vendorDrawDialog = document.getElementById('vendorDrawDialog');
+    const vendorDrawTitle = document.getElementById('vendorDrawTitle');
+    const vendorDrawVendor = document.getElementById('vendorDrawVendor');
+    const vendorDrawDescription = document.getElementById('vendorDrawDescription');
+    const vendorDrawDisclosure = document.getElementById('vendorDrawDisclosure');
+    const vendorDrawPrivacy = document.getElementById('vendorDrawPrivacy');
+    const vendorDrawRoles = document.getElementById('vendorDrawRoles');
+    const vendorDrawApple = document.getElementById('vendorDrawApple');
+    const vendorDrawRules = document.getElementById('vendorDrawRules');
+    const vendorDrawFreeEntry = document.getElementById('vendorDrawFreeEntry');
+    const vendorDrawRulesStatus = document.getElementById('vendorDrawRulesStatus');
+    const vendorDrawAge = document.getElementById('vendorDrawAge');
+    const vendorDrawResidency = document.getElementById('vendorDrawResidency');
+    const vendorDrawExclusions = document.getElementById('vendorDrawExclusions');
+    const vendorDrawResponsibility = document.getElementById('vendorDrawResponsibility');
+    const vendorDrawResponsibilityText = document.getElementById('vendorDrawResponsibilityText');
+    const vendorDrawStatus = document.getElementById('vendorDrawStatus');
+    const vendorDrawDecline = document.getElementById('vendorDrawDecline');
+    const vendorDrawEnter = document.getElementById('vendorDrawEnter');
+
+    function cleanPromotionText(value) {
+      return String(value == null ? '' : value).trim();
+    }
+
+    function trustedWeddingWinPromotionUrl(value) {
+      try {
+        const url = new URL(cleanPromotionText(value));
+        const host = url.hostname.toLowerCase().replace(/^www[.]/, '');
+        if (url.protocol !== 'https:' || host !== 'weddingwin.ca') return '';
+        if ((url.port && url.port !== '443') || url.username || url.password) return '';
+        return url.toString();
+      } catch (error) {
+        return '';
+      }
+    }
+
+    function formatPromotionDate(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return cleanPromotionText(value) || 'See the current rules';
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Toronto',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      }).format(date);
+    }
+
+    function trustedVendorOfferVersion(value) {
+      const text = cleanPromotionText(value);
+      const match = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.]([0-9]{1,6}))?(Z|[+-]([0-9]{2}):([0-9]{2}))$/.exec(text);
+      if (!match) return '';
+      const offsetHour = match[9] ? Number(match[9]) : 0;
+      const offsetMinute = match[10] ? Number(match[10]) : 0;
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const calendar = new Date(0);
+      calendar.setUTCFullYear(year, month - 1, day);
+      calendar.setUTCHours(0, 0, 0, 0);
+      if (year < 1 || calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) return '';
+      if (Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6]) > 59) return '';
+      if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) return '';
+      return Number.isFinite(Date.parse(text)) ? text : '';
+    }
+
+    async function requestVendorDraw(action, extra) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 15000);
+      try {
+        const form = new URLSearchParams({
+          action,
+          expected_event_key: EVENT_CONFIG.event_key,
+          expected_config_revision: String(EVENT_CONFIG.revision)
+        });
+        Object.entries(extra || {}).forEach(([key, value]) => {
+          form.set(key, typeof value === 'boolean' ? (value ? '1' : '0') : cleanPromotionText(value));
+        });
+        const response = await fetch('', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: form.toString(),
+          credentials: 'same-origin',
+          signal: controller.signal
+        });
+        const responseText = await response.text();
+        let data = {};
+        try {
+          data = responseText ? JSON.parse(responseText) : {};
+        } catch (error) {
+          throw new Error('Vendor draw tools returned an unreadable response.');
+        }
+        if (!response.ok || data.ok === false) {
+          const failure = new Error(cleanPromotionText(data.detail || data.error || data.message) || 'Vendor draw tools are unavailable.');
+          failure.code = cleanPromotionText(data.code);
+          failure.httpStatus = response.status;
+          throw failure;
+        }
+        return data;
+      } catch (error) {
+        if (error && error.name === 'AbortError') {
+          throw new Error('Vendor draw tools timed out. Your booth visit remains saved.');
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    }
+
+    function resetVendorDrawAcknowledgements() {
+      vendorDrawRulesViewedVersion = '';
+      vendorDrawAge.checked = false;
+      vendorDrawResidency.checked = false;
+      vendorDrawExclusions.checked = false;
+      vendorDrawResponsibility.checked = false;
+    }
+
+    function vendorDrawEntryReady() {
+      const version = cleanPromotionText(currentVendorDrawOffer && currentVendorDrawOffer.consent_version);
+      const offerVersion = trustedVendorOfferVersion(currentVendorDrawOffer && currentVendorDrawOffer.vendor_offer_version);
+      const participantDisclosure = cleanPromotionText(currentVendorDrawOffer && currentVendorDrawOffer.participant_responsibility_disclosure);
+      return Boolean(
+        version &&
+        offerVersion &&
+        participantDisclosure &&
+        vendorDrawRulesViewedVersion === version &&
+        vendorDrawAge.checked &&
+        vendorDrawResidency.checked &&
+        vendorDrawExclusions.checked &&
+        vendorDrawResponsibility.checked
+      );
+    }
+
+    function updateVendorDrawEntryButton() {
+      vendorDrawEnter.disabled = !vendorDrawEntryReady();
+    }
+
+    function closeVendorDraw() {
+      const returnFocus = vendorDrawReturnFocus;
+      vendorDrawModal.hidden = true;
+      currentVendorDrawOffer = null;
+      currentVendorDrawVendor = null;
+      vendorDrawReturnFocus = null;
+      resetVendorDrawAcknowledgements();
+      vendorDrawDecline.disabled = false;
+      updateVendorDrawEntryButton();
+      if (returnFocus && returnFocus.isConnected && typeof returnFocus.focus === 'function') {
+        window.setTimeout(() => returnFocus.focus(), 0);
+      }
+    }
+
+    function showVendorDrawOffer(vendor, offer) {
+      const rulesUrl = trustedWeddingWinPromotionUrl(offer && offer.terms_url);
+      const offerVersion = trustedVendorOfferVersion(offer && offer.vendor_offer_version);
+      const participantDisclosure = cleanPromotionText(offer && offer.participant_responsibility_disclosure);
+      const offeredWinnerCount = Number(offer && offer.prize_count);
+      if (
+        !offer ||
+        !rulesUrl ||
+        !offerVersion ||
+        !participantDisclosure ||
+        !Number.isInteger(offeredWinnerCount) ||
+        offeredWinnerCount < 1 ||
+        offeredWinnerCount > 3 ||
+        typeof offer.exclude_previous_winners !== 'boolean'
+      ) return false;
+      currentVendorDrawOffer = Object.assign({}, offer, {
+        vendor_offer_version: offerVersion,
+        prize_count: offeredWinnerCount
+      });
+      currentVendorDrawVendor = vendor;
+      resetVendorDrawAcknowledgements();
+      vendorDrawDecline.disabled = false;
+      vendorDrawTitle.textContent = cleanPromotionText(offer.prize_title) || 'Vendor prize';
+      const namedVendor = cleanPromotionText(offer.vendor_business_name) || cleanPromotionText(offer.vendor_name) || cleanPromotionText(vendor && vendor.name) || 'the named vendor';
+      vendorDrawVendor.textContent = namedVendor;
+      vendorDrawDescription.textContent = cleanPromotionText(offer.prize_description);
+      const value = Number(offer.prize_approx_value_cad);
+      vendorDrawDisclosure.textContent = [
+        `Approximate prize value / maximum savings: $${Number.isFinite(value) ? value.toFixed(2) : '0.00'} CAD`,
+        `Number of winners and prizes: ${offeredWinnerCount}`,
+        offer.exclude_previous_winners
+          ? "Repeat-winner rule: A couple who is confirmed as a winner is excluded only from later selections for this vendor's current prize offer. It does not affect another vendor's draw."
+          : "Repeat-winner rule: A confirmed winner remains eligible for another selection in this vendor's current prize offer.",
+        'Eligibility, dates, odds, admission, entry limits, and the equal alternate free-entry method are explained in the Draw Rules.'
+      ].join(String.fromCharCode(10));
+      vendorDrawPrivacy.textContent = `By entering, I agree that Wedding Win Inc. may share my name, email address, phone number, wedding date, and entry/consent evidence with ${namedVendor}. That vendor may use these details to administer this draw and contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time.`;
+      vendorDrawRoles.textContent = `${namedVendor} is responsible for this draw, winner verification, and prize fulfilment. Wedding Win Inc. provides the technical system.`;
+      vendorDrawResponsibilityText.textContent = `I agree to share my contact information with ${namedVendor} for this draw and its wedding-related marketing, and I accept the current draw rules.`;
+      vendorDrawApple.textContent = cleanPromotionText(offer.apple_non_sponsor_disclaimer) || 'Apple Inc. is not a sponsor of and is not involved in this promotion.';
+      vendorDrawRules.href = rulesUrl;
+      const alternateUrl = trustedWeddingWinPromotionUrl(offer.alternate_free_entry_url);
+      vendorDrawFreeEntry.hidden = !alternateUrl;
+      if (alternateUrl) vendorDrawFreeEntry.href = alternateUrl;
+      else vendorDrawFreeEntry.removeAttribute('href');
+      vendorDrawRulesStatus.textContent = 'Open the current rules before choosing to enter.';
+      vendorDrawStatus.classList.remove('is-error');
+      vendorDrawStatus.textContent = 'Prize entry is separate and optional. One valid entry is allowed per eligible couple per vendor draw, regardless of method. Declining does not change your saved booth visit.';
+      updateVendorDrawEntryButton();
+      vendorDrawModal.hidden = false;
+      vendorDrawRules.focus();
+      return true;
+    }
+
+    async function openVendorDrawOffer(vendor) {
+      if (!EVENT_CONFIG.vendor_draws_enabled || !vendor) return;
+      vendorDrawReturnFocus = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      try {
+        const data = await requestVendorDraw('raffle_offer', { vendor_id: vendor.id });
+        if (!data.raffle_offer || !showVendorDrawOffer(vendor, data.raffle_offer)) {
+          throw new Error('The current vendor offer did not include a valid version. No entry can be submitted.');
+        }
+      } catch (error) {
+        vendorDrawReturnFocus = null;
+        console.error('Optional vendor draw could not be loaded:', error);
+      }
+    }
+
+    async function refreshVendorDrawAfterStale(vendor) {
+      currentVendorDrawOffer = null;
+      currentVendorDrawVendor = vendor;
+      resetVendorDrawAcknowledgements();
+      updateVendorDrawEntryButton();
+      vendorDrawDecline.disabled = false;
+      vendorDrawStatus.classList.add('is-error');
+      vendorDrawStatus.textContent = 'The vendor changed this offer. Loading the current version…';
+      try {
+        const refreshed = await requestVendorDraw('raffle_offer', { vendor_id: vendor.id });
+        if (!refreshed.raffle_offer || !showVendorDrawOffer(vendor, refreshed.raffle_offer)) {
+          throw new Error('The refreshed vendor offer was unavailable or invalid.');
+        }
+        vendorDrawStatus.classList.add('is-error');
+        vendorDrawStatus.textContent = 'The vendor offer changed. Review the current prize disclosure, reopen the Official Rules, and confirm every item again before entering.';
+      } catch (refreshError) {
+        currentVendorDrawOffer = null;
+        resetVendorDrawAcknowledgements();
+        updateVendorDrawEntryButton();
+        vendorDrawStatus.classList.add('is-error');
+        vendorDrawStatus.textContent = refreshError instanceof Error
+          ? refreshError.message + ' No entry was recorded.'
+          : 'The current vendor offer could not be refreshed. No entry was recorded.';
+      }
+    }
+
+    async function enterVendorDraw() {
+      if (!vendorDrawEntryReady() || !currentVendorDrawOffer || !currentVendorDrawVendor) return;
+      vendorDrawEnter.disabled = true;
+      vendorDrawDecline.disabled = true;
+      vendorDrawStatus.classList.remove('is-error');
+      vendorDrawStatus.textContent = 'Recording your optional draw entry…';
+      try {
+        const data = await requestVendorDraw('raffle_opt_in', {
+          vendor_id: currentVendorDrawVendor.id,
+          rules_viewed: true,
+          apple_non_sponsor_acknowledged: true,
+          consent_version: cleanPromotionText(currentVendorDrawOffer.consent_version),
+          vendor_offer_version: trustedVendorOfferVersion(currentVendorDrawOffer.vendor_offer_version),
+          age_of_majority_attested: true,
+          residency_attested: true,
+          exclusions_attested: true,
+          promotion_responsibility_acknowledged: Boolean(vendorDrawResponsibility.checked),
+          draw_administration_contact_share_acknowledged: Boolean(vendorDrawResponsibility.checked),
+          vendor_marketing_consent_acknowledged: Boolean(vendorDrawResponsibility.checked),
+          participant_responsibility_disclosure: cleanPromotionText(currentVendorDrawOffer.participant_responsibility_disclosure)
+        });
+        vendorDrawStatus.textContent = cleanPromotionText(data.message) || 'Your optional vendor draw entry is confirmed.';
+        window.setTimeout(closeVendorDraw, 1600);
+      } catch (error) {
+        if (error && error.httpStatus === 409 && error.code === 'stale_vendor_offer') {
+          await refreshVendorDrawAfterStale(currentVendorDrawVendor);
+          return;
+        }
+        vendorDrawStatus.classList.add('is-error');
+        vendorDrawStatus.textContent = error instanceof Error ? error.message : 'The draw entry could not be recorded.';
+        vendorDrawDecline.disabled = false;
+        updateVendorDrawEntryButton();
+      }
+    }
+
+    vendorDrawRules.addEventListener('click', () => {
+      vendorDrawRulesViewedVersion = cleanPromotionText(currentVendorDrawOffer && currentVendorDrawOffer.consent_version);
+      vendorDrawRulesStatus.textContent = vendorDrawRulesViewedVersion
+        ? `Current rules opened: ${vendorDrawRulesViewedVersion}`
+        : 'The current rules version is unavailable. Do not enter this draw.';
+      updateVendorDrawEntryButton();
+    });
+    [vendorDrawAge, vendorDrawResidency, vendorDrawExclusions, vendorDrawResponsibility].forEach(input => {
+      input.addEventListener('change', updateVendorDrawEntryButton);
+    });
+    vendorDrawDecline.addEventListener('click', closeVendorDraw);
+    vendorDrawEnter.addEventListener('click', enterVendorDraw);
+    vendorDrawModal.addEventListener('click', event => {
+      if (event.target === vendorDrawModal) closeVendorDraw();
+    });
+    document.addEventListener('keydown', event => {
+      if (vendorDrawModal.hidden) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeVendorDraw();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(vendorDrawDialog.querySelectorAll('a[href], button, input, select, textarea, [tabindex]'))
+        .filter(element => !element.disabled && !element.hidden && element.getAttribute('tabindex') !== '-1');
+      if (!focusable.length) {
+        event.preventDefault();
+        vendorDrawDialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !vendorDrawDialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !vendorDrawDialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
 
     function renderGrid() {
       if (!gridEl) {
@@ -933,6 +1942,19 @@ if (user::isUserLogged($_COOKIE)) {
         check.textContent = '✓';
         tile.appendChild(name);
         tile.appendChild(check);
+        if (EVENT_CONFIG.vendor_draws_enabled) {
+          const drawButton = document.createElement('button');
+          drawButton.type = 'button';
+          drawButton.className = 'vendor-draw-review';
+          drawButton.id = `vendor-draw-review-${v.id}`;
+          drawButton.textContent = 'Review optional prize draw';
+          drawButton.hidden = !scanned.has(v.id);
+          drawButton.addEventListener('click', event => {
+            event.stopPropagation();
+            openVendorDrawOffer(v);
+          });
+          tile.appendChild(drawButton);
+        }
         gridEl.appendChild(tile);
       });
       updateProgress();
@@ -952,6 +1974,8 @@ if (user::isUserLogged($_COOKIE)) {
       if (tile) {
         tile.classList.remove('locked');
         tile.classList.add('scanned');
+        const drawButton = document.getElementById(`vendor-draw-review-${id}`);
+        if (drawButton) drawButton.hidden = false;
       }
       updateProgress();
       return true;
@@ -983,6 +2007,8 @@ if (user::isUserLogged($_COOKIE)) {
         if (scanned.has(v.id)) {
           tile?.classList.remove('locked');
           tile?.classList.add('scanned');
+          const drawButton = document.getElementById(`vendor-draw-review-${v.id}`);
+          if (drawButton) drawButton.hidden = false;
         }
       });
       updateProgress();
@@ -1336,6 +2362,15 @@ if (user::isUserLogged($_COOKIE)) {
     }
 
     async function startScanner() {
+      if (!CONTACT_PROFILE_COMPLETE) {
+        window.location.assign('/account/contact');
+        return;
+      }
+      if (!qrRulesNoticeAccepted) {
+        lastScanEl.textContent = 'Read and accept the participation notice before scanning.';
+        qrRulesNoticeAcknowledged.focus();
+        return;
+      }
       if (!navigator.mediaDevices?.getUserMedia) {
         const message = isAndroid() ?
           'Camera access not supported. Please use Chrome or Firefox on Android.' :
@@ -1477,8 +2512,11 @@ if (user::isUserLogged($_COOKIE)) {
           // Success!
           stopBtn.disabled = false;
           startBtn.disabled = true;
+          startBtn.textContent = 'Scanner Running';
           mobileStopBtn.disabled = false;
           mobileStartBtn.disabled = true;
+          mobileStartBtn.title = 'Scanner running';
+          lastScanEl.textContent = 'Scanner ready. Point the camera at a participating vendor QR code.';
           // scanningIndicator.classList.add('active'); // REMOVED - no longer showing indicator
           cameraLoading.classList.remove('show');
 
@@ -1518,6 +2556,10 @@ if (user::isUserLogged($_COOKIE)) {
             }
 
             console.error('🚨 All camera strategies failed. Final error:', err);
+            startBtn.disabled = false;
+            startBtn.textContent = 'Start Scanner';
+            mobileStartBtn.disabled = false;
+            mobileStartBtn.title = 'Start Scanner';
             alert(errorMessage);
           }
         }
@@ -1533,8 +2575,10 @@ if (user::isUserLogged($_COOKIE)) {
       }
       stopBtn.disabled = true;
       startBtn.disabled = false;
+      startBtn.textContent = 'Start Scanner';
       mobileStopBtn.disabled = true;
       mobileStartBtn.disabled = false;
+      mobileStartBtn.title = 'Start Scanner';
       // scanningIndicator.classList.remove('active'); // REMOVED - no longer using indicator
       cameraLoading.classList.remove('show');
     }
@@ -1594,13 +2638,32 @@ if (user::isUserLogged($_COOKIE)) {
       }
     }
 
+    function extractWeddingWinQrVendorToken(value) {
+      try {
+        const url = new URL(String(value || '').trim());
+        const host = url.hostname.toLowerCase().replace(/^www[.]/, '');
+        const path = url.pathname.replace(/[/]+$/, '') || '/';
+        if (url.protocol !== 'https:' || host !== 'weddingwin.ca' || path !== '/qr') return '';
+        if ((url.port && url.port !== '443') || url.username || url.password || url.hash) return '';
+
+        const supportedKeys = ['vendor_id', 'vendor', 'id', 'code', 'qr'];
+        for (const key of supportedKeys) {
+          const token = String(url.searchParams.get(key) || '').trim();
+          if (token && token.length <= 160) return token;
+        }
+      } catch (error) {
+        return '';
+      }
+      return '';
+    }
+
     function normalizeWeddingWinVendorUrl(value) {
       try {
         const url = new URL(String(value || '').trim());
         const host = url.hostname.toLowerCase().replace(/^www[.]/, '');
-        if ((url.protocol !== 'https:' && url.protocol !== 'http:') || host !== 'weddingwin.ca') return '';
+        if (url.protocol !== 'https:' || host !== 'weddingwin.ca') return '';
+        if ((url.port && url.port !== '443') || url.username || url.password || url.hash) return '';
         url.search = '';
-        url.hash = '';
         while (url.pathname.length > 1 && url.pathname.endsWith('/')) {
           url.pathname = url.pathname.slice(0, -1);
         }
@@ -1610,9 +2673,20 @@ if (user::isUserLogged($_COOKIE)) {
       }
     }
 
+    function resetLastDecodedForRetry(value) {
+      // Avoid hammering the server or alerting on every camera frame, while
+      // still allowing the same QR to be presented again after a failed or
+      // unrecognized attempt. A successful saved scan remains suppressed.
+      window.setTimeout(() => {
+        if (lastDecoded === value) lastDecoded = '';
+      }, 1000);
+    }
+
     async function handleDecoded(data) {
       const prefix = 'nws://vendor/';
       const raw = data.trim();
+      const queryVendorToken = extractWeddingWinQrVendorToken(raw);
+      const identityCandidates = queryVendorToken ? [queryVendorToken, raw] : [raw];
       const normalizedUrl = normalizeWeddingWinVendorUrl(raw);
       console.log('🔍 QR Decoded:', raw);
       let matched = null;
@@ -1626,32 +2700,34 @@ if (user::isUserLogged($_COOKIE)) {
       // Legacy printed event codes are compatibility-only. Persist the matched
       // vendor's stable BD user ID, never this old sequence number.
       if (!matched) {
-        const legacyMatch = raw.match(/^NWS25-([0-9]{3})$/i);
-        if (legacyMatch) matched = VENDORS.find(v => v.legacy_id === legacyMatch[1]);
+        for (const candidate of identityCandidates) {
+          const legacyMatch = candidate.match(/^NWS25-([0-9]{3})$/i);
+          if (legacyMatch) {
+            matched = VENDORS.find(v => v.legacy_id === legacyMatch[1]);
+            if (matched) break;
+          }
+        }
       }
 
       // 2) ID formats: nws://vendor/<id> or raw numeric id
       if (!matched) {
-        let id = null;
-        if (raw.toLowerCase().startsWith(prefix)) id = raw.slice(prefix.length).trim();
-        else if (/^[0-9]+$/.test(raw)) id = raw;
-        console.log('🔢 ID parsed:', id);
-        if (id) {
-          // Match the stable Brilliant Directories vendor ID
-          matched = VENDORS.find(v => v.id === id);
+        for (const candidate of identityCandidates) {
+          let id = null;
+          if (candidate.toLowerCase().startsWith(prefix)) id = candidate.slice(prefix.length).trim();
+          else if (/^[0-9]+$/.test(candidate)) id = candidate;
+          console.log('🔢 ID parsed:', id);
+          if (id) {
+            // Match the stable Brilliant Directories vendor ID
+            matched = VENDORS.find(v => v.id === id);
 
-          // Retain the explicit user_id comparison for older payloads
-          if (!matched) {
-            matched = VENDORS.find(v => v.user_id && v.user_id.toString() === id);
+            // Retain the explicit user_id comparison for older payloads
+            if (!matched) {
+              matched = VENDORS.find(v => v.user_id && v.user_id.toString() === id);
+            }
+            if (matched) break;
           }
         }
         console.log('🎯 ID Match:', matched ? `Found ${matched.name}` : 'No ID match');
-      }
-
-      // 3) Try to match by user_id directly (for QR codes that contain user_id)
-      if (!matched && /^[0-9]+$/.test(raw)) {
-        matched = VENDORS.find(v => v.user_id && v.user_id.toString() === raw);
-        console.log('🎯 User ID Match:', matched ? `Found ${matched.name}` : 'No User ID match');
       }
 
       if (matched) {
@@ -1660,10 +2736,16 @@ if (user::isUserLogged($_COOKIE)) {
           lastScanEl.textContent = `Scanned: ${matched.name}`;
           // Show success animation
           showSuccessAnimation();
+          console.log('✅ Successfully marked vendor:', matched.name);
+          await openVendorDrawOffer(matched);
+        } else {
+          lastScanEl.textContent = 'Scan could not be saved. Please try again.';
+          resetLastDecodedForRetry(raw);
+          console.log('❌ Vendor scan was not saved:', matched.name);
         }
-        console.log('✅ Successfully marked vendor:', matched.name);
       } else {
         lastScanEl.textContent = 'Unrecognized QR';
+        resetLastDecodedForRetry(raw);
         console.log('❌ No vendor matched for:', raw);
       }
     }
@@ -1749,6 +2831,23 @@ if (user::isUserLogged($_COOKIE)) {
 
     // Initialize with auto-start functionality
     function initApp() {
+      if (!CONTACT_PROFILE_COMPLETE) return;
+      if (!qrRulesNoticeAccepted) {
+        startBtn.disabled = true;
+        startBtn.textContent = 'Accept Notice First';
+        mobileStartBtn.disabled = true;
+        mobileStartBtn.title = 'Accept participation notice first';
+        cameraLoading.classList.remove('show');
+        lastScanEl.textContent = 'Read and accept the participation notice above to start scanning.';
+        return;
+      }
+      if (appInitialized) return;
+      appInitialized = true;
+      startBtn.disabled = true;
+      startBtn.textContent = 'Starting Scanner...';
+      mobileStartBtn.disabled = true;
+      mobileStartBtn.title = 'Starting scanner';
+      lastScanEl.textContent = 'Participation notice accepted. Starting the scanner...';
       // Android-specific initialization logging
       if (isAndroid()) {
         console.log('📱 Android device detected');
@@ -1765,6 +2864,19 @@ if (user::isUserLogged($_COOKIE)) {
 
       renderGrid();
       hydrateTiles();
+
+      if (!EVENT_CONFIG.scan_enabled) {
+        startBtn.disabled = true;
+        startBtn.textContent = 'Scanner Paused';
+        mobileStartBtn.disabled = true;
+        mobileStartBtn.title = 'Scanner paused';
+        stopBtn.disabled = true;
+        mobileStopBtn.disabled = true;
+        cameraLoading.classList.remove('show');
+        lastScan.textContent = 'Scanning is temporarily disabled.';
+        console.log('QR Bingo scanning disabled by published event configuration.');
+        return;
+      }
 
       // Auto-start camera initialization and scanning
       (async function() {
@@ -1853,18 +2965,18 @@ if (user::isUserLogged($_COOKIE)) {
 
 <?php
     } else {
-        // User doesn't have the required subscription
+        // The scanner is reserved for the free couple account types.
         echo "<div style='padding: 20px; text-align: center;'>";
-        echo "<h2>Premium Feature</h2>";
-        echo "<p>The QR Bingo Scanner is available for premium members only.</p>";
-        echo "<p>Please upgrade your subscription to access this feature.</p>";
+        echo "<h2>Couple Account Required</h2>";
+        echo "<p>The free QR Bingo Scanner is available to signed-in couple accounts during participating events.</p>";
+        echo "<p>Use or create a free couple account to record booth visits.</p>";
         echo "</div>";
     }
 } else {
     // User is not logged in
     echo "<div style='padding: 20px; text-align: center;'>";
     echo "<h2>Please Log In</h2>";
-    echo "<p>You need to be logged in to access the QR Bingo Scanner.</p>";
+    echo "<p>Sign in to a free couple account to access the QR Bingo Scanner.</p>";
     echo "<a href='/login'>Log In</a>";
     echo "</div>";
 }

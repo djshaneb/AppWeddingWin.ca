@@ -4,6 +4,10 @@ import {
   makeAppleClientSecret,
   verifyAppleIdentityToken,
 } from "../_shared/apple_auth.ts";
+import {
+  appleReauthenticationRequired,
+  revokeAppleAuthorization,
+} from "../_shared/apple_revocation.ts";
 import { nativeSessionMatchesCachedBdIdentity } from "../_shared/bd_identity.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -14,6 +18,13 @@ const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
 const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
+
+const appleRevocationDependencies = {
+  getConfig: () => getAppleConfig(admin),
+  makeClientSecret: makeAppleClientSecret,
+  verifyIdentityToken: verifyAppleIdentityToken,
+  fetch,
+};
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -185,48 +196,6 @@ async function findAndLinkProfile(userId: string, trustedEmail: string) {
   return rows[0];
 }
 
-async function revokeAppleAuthorization(authorizationCode: string, expectedAppleSub: string) {
-  const cfg = await getAppleConfig(admin);
-  const clientSecret = await makeAppleClientSecret(cfg, cfg.iosBundleId);
-  const tokenResponse = await fetch("https://appleid.apple.com/auth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      code: authorizationCode,
-      client_id: cfg.iosBundleId,
-      client_secret: clientSecret,
-      grant_type: "authorization_code",
-    }),
-  });
-  const tokenJson = await tokenResponse.json().catch(() => ({})) as {
-    refresh_token?: string;
-    id_token?: string;
-    error?: string;
-  };
-  if (!tokenResponse.ok || !tokenJson.refresh_token || !tokenJson.id_token) {
-    throw new Error(`Apple authorization exchange failed (${tokenJson.error || tokenResponse.status}).`);
-  }
-
-  const claims = await verifyAppleIdentityToken(tokenJson.id_token, [cfg.iosBundleId]);
-  if (claims.sub !== expectedAppleSub) {
-    throw new Error("Apple confirmation did not match the account being deleted.");
-  }
-
-  const revokeResponse = await fetch("https://appleid.apple.com/auth/revoke", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      token: tokenJson.refresh_token,
-      token_type_hint: "refresh_token",
-      client_id: cfg.iosBundleId,
-      client_secret: clientSecret,
-    }),
-  });
-  if (!revokeResponse.ok) {
-    throw new Error(`Apple authorization revocation failed (${revokeResponse.status}).`);
-  }
-}
-
 function authErrorMeansMissing(error: unknown) {
   const value = error as { status?: number; code?: string; message?: string } | null;
   return value?.status === 404 || value?.code === "user_not_found" ||
@@ -287,7 +256,7 @@ Deno.serve(async (req) => {
 
     if (appleSub) {
       const authorizationCode = String(body?.apple_authorization_code || "").trim();
-      if (!authorizationCode) {
+      if (appleReauthenticationRequired(appleSub, authorizationCode)) {
         return jsonResponse({
           ok: false,
           requires_apple_reauthentication: true,
@@ -295,7 +264,12 @@ Deno.serve(async (req) => {
         }, 409);
       }
       diagnosticStage = "revoke_apple_authorization";
-      await revokeAppleAuthorization(authorizationCode, appleSub);
+      await revokeAppleAuthorization({
+        authorizationCode,
+        expectedAppleSub: appleSub,
+        expectedNonce: String(body?.apple_nonce || ""),
+        dependencies: appleRevocationDependencies,
+      });
     }
 
     // Preflight Advanced API access and capture only metadata whose full

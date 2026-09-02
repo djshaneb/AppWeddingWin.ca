@@ -79,7 +79,12 @@
           "faceIDPermission": false
         }
       ],
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "enableBackgroundRemoteNotifications": true
+        }
+      ],
       [
         "expo-camera",
         {

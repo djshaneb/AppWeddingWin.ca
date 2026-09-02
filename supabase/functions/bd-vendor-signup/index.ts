@@ -1,5 +1,6 @@
 import { ensureStableBdIdentity } from "../_shared/bd_identity.ts";
 import { normalizeContactEmail } from "../_shared/contact_email.ts";
+import { requireCurrentPolicyConsent } from "../_shared/policy_consent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -179,11 +180,14 @@ Deno.serve(async (req) => {
     const email = normalizeContactEmail(body.email);
     const password = cleanPassword(body.password);
     const firstName = cleanPlainText(body.first_name, 80) || "WeddingWin Vendor";
-    const acceptedAt = cleanPlainText(body.accepted_at, 40);
-
-    if (body.accepted_terms !== true || body.accepted_privacy !== true || !acceptedAt) {
+    if (body.accepted_terms !== true || body.accepted_privacy !== true) {
       throw new Error("Agreement to the Terms of Use and Privacy Policy is required.");
     }
+    const policyConsent = requireCurrentPolicyConsent({
+      acceptedAt: cleanPlainText(body.accepted_at, 40),
+      termsVersion: cleanPlainText(body.terms_version, 40),
+      privacyVersion: cleanPlainText(body.privacy_version, 40),
+    });
 
     const existing = await fetchBdUserByEmail(email);
     if (existing?.user_id) {
@@ -205,9 +209,9 @@ Deno.serve(async (req) => {
       send_email_notifications: "0",
       signup_terms_accepted: "1",
       signup_privacy_accepted: "1",
-      signup_terms_accepted_at: acceptedAt,
-      signup_terms_version: cleanPlainText(body.terms_version, 40),
-      signup_privacy_version: cleanPlainText(body.privacy_version, 40),
+      signup_terms_accepted_at: policyConsent.acceptedAt,
+      signup_terms_version: policyConsent.termsVersion,
+      signup_privacy_version: policyConsent.privacyVersion,
     });
 
     const created = await callBd("/api/v2/user/create", {

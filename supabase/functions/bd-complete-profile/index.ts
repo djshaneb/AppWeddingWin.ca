@@ -55,6 +55,16 @@ function cleanWeddingDate(value: unknown) {
   return text;
 }
 
+function cleanPhone(value: unknown) {
+  const phone = cleanPlainText(value, 40);
+  if (!phone) return "";
+  const digitCount = phone.replace(/\D/g, "").length;
+  if (digitCount < 7 || digitCount > 15) {
+    throw new Error("Phone number must contain 7 to 15 digits.");
+  }
+  return phone;
+}
+
 function profileUpdateMessage(detail: string) {
   if (/email/i.test(detail) && /already|duplicate|exists|registered/i.test(detail)) {
     return "That email is already connected to a WeddingWin account. Please sign in with that email, or use a different email.";
@@ -197,7 +207,7 @@ Deno.serve(async (req) => {
       country_code: "CA",
       first_name: cleanPlainText(profile.first_name, 80),
       email: nextEmail,
-      phone_number: cleanPlainText(profile.phone, 40),
+      phone_number: cleanPhone(profile.phone),
       wedding_date: cleanWeddingDate(profile.wedding_date),
     });
 

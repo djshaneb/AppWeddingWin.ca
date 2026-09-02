@@ -6,6 +6,7 @@ import {
 } from "../_shared/auth_exchange.ts";
 import { findAuthUserByEmail } from "../_shared/auth_users.ts";
 import { redeemOAuthLoginAttempt } from "../_shared/oauth_attempt.ts";
+import { requireCurrentPolicyConsent } from "../_shared/policy_consent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -271,9 +272,7 @@ async function createBdUserForGoogle(
   subscriptionId = BD_DEFAULT_SUBSCRIPTION_ID,
   consent: SignupConsent = null,
 ): Promise<BdUser | undefined> {
-  if (!consent?.acceptedAt) {
-    throw new Error("Agreement to the Terms of Use and Privacy Policy is required.");
-  }
+  const policyConsent = requireCurrentPolicyConsent(consent);
 
   const { firstName, lastName } = splitName(fullName);
   const passwordBytes = new Uint8Array(24);
@@ -289,9 +288,9 @@ async function createBdUserForGoogle(
     send_email_notifications: "0",
     signup_terms_accepted: "1",
     signup_privacy_accepted: "1",
-    signup_terms_accepted_at: consent.acceptedAt,
-    signup_terms_version: consent.termsVersion || "",
-    signup_privacy_version: consent.privacyVersion || "",
+    signup_terms_accepted_at: policyConsent.acceptedAt,
+    signup_terms_version: policyConsent.termsVersion,
+    signup_privacy_version: policyConsent.privacyVersion,
   });
 
   const created = await callBd("/api/v2/user/create", {

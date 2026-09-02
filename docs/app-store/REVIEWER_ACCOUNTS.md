@@ -13,7 +13,7 @@ WeddingWin has different couple and vendor paths. Use one fictional account for 
 
 ## Prepared isolated fixture
 
-Vendor `38970` and couple `38971` are assigned to `app-review-weddingwin-2026-38970`. Couple `38971` displays the fictional first name `App Review`. The event has isolated fictional prize, scan, entry, and draw state. Reviewer-fixture email is suppressed.
+Vendor `38970` and couple `38971` are assigned to `app-review-weddingwin-2026-38970`. Couple `38971` displays the fictional first name `App Review`; every profile/contact value used in its draw entry must remain fictional. The event has isolated fictional QR scan/progress and optional vendor-draw state. The fixture demonstrates the workflow without a real prize or outbound email and cannot change production-event data. Vendor `38970` must review and accept Official Rules version `2026-09-01-vendor-marketing`, including the named-vendor contact-use and marketing responsibilities, and enable the fixture before the reviewer walkthrough.
 
 Use only `assets/app-store/sample-qr-review-vendor-38970.png`, payload `https://www.weddingwin.ca/qr?vendor_id=38970`. Do not send the legacy `23608` QR to App Review because it points at a production-side vendor.
 
@@ -22,11 +22,11 @@ The vendor is intentionally private/nonpublic. Pair-scoped chat access is servic
 ## Exact-build account gate
 
 - [ ] Both credentials work from a clean install of the processed TestFlight build with no one-time code, CAPTCHA, owner device approval, expired consent, or manual activation step.
-- [ ] Neither account is scheduled for inactivity cleanup, password rotation, membership expiry, or pair-access expiry during review.
+- [ ] Neither account is scheduled for inactivity cleanup, password rotation, account-access expiry, or pair-access expiry during review.
 - [ ] Both profiles contain fictional/test-safe names, email, phone, images, business details, and a future test wedding date; no real person's data appears.
 - [ ] Couple uses the normal couple plan (`18` in the audited backend). Vendor uses the actual release vendor plan selected by the owner from the supported plan set (`17`, `27`, or `28`).
 - [ ] Signed-out private-browser checks show vendor `38970` absent from directory/search, direct public profile browsing, sitemap, featured content, event rosters, search-engine surfaces, and marketing feeds.
-- [ ] Private status does not prevent vendor login, dashboard, text chat, or any draw screen described to Apple.
+- [ ] Private status does not prevent vendor login, dashboard, or text chat described to Apple.
 - [ ] Login and native session creation pass on physical iPhone and iPad for both roles.
 
 ## Controlled messaging state
@@ -40,16 +40,18 @@ The vendor is intentionally private/nonpublic. Pair-scoped chat access is servic
 
 Current evidence: a controlled Simulator/live-backend text round trip passed, including active couple website→private vendor app. The inactive vendor's website send was correctly rejected. Treat this as preparation evidence, not a substitute for the exact physical TestFlight pass.
 
-## QR Bingo and draw state
+## QR Bingo booth-visit and vendor-draw state
 
-- [ ] Reset couple `38971` so vendor `38970` is unscanned and no prior entry/selection affects the walkthrough.
+- [ ] Reset couple `38971` so vendor `38970` is unscanned and has no current optional-draw entry/selection; reset the vendor fixture to a clean, enabled, rules-accepted state.
 - [ ] Printed QR permission allow/deny/re-enable, successful scan, duplicate handling, isolated progress, and wrong/invalid-code behavior pass on a physical iPhone.
-- [ ] A scan does not enter the user in a draw. Separate entry displays the named vendor/prize, fields disclosed, current rules, no-purchase method, and no-marketing purpose before consent.
-- [ ] Only fictional records are present. The vendor cannot access or export an entrant list; only selected-potential-winner information can be disclosed for verification/fulfilment.
-- [ ] Reviewer-fixture email remains suppressed. Production draw email remains fail-closed unless a separately approved fulfilment path has passed controlled-recipient testing.
-- [ ] Owner/legal approvals cover the developer/sponsor identity, vendor role/agreement, prize, rules, territory, age, dates, alternate free entry, skill question where required, and Apple non-involvement language.
+- [ ] The scan records booth-visit progress only and never creates a draw entry automatically. Declining the separate optional offer leaves no entry.
+- [ ] The optional entry requires opening Official Rules version `2026-09-01-vendor-marketing`, all eligibility confirmations, and explicit consent to share the entrant's name, email address, phone number if provided, wedding date if provided, and entry/consent evidence with vendor `38970` for this draw and that vendor's wedding-related offers or promotions. Each eligible couple may receive only one valid entry per named vendor draw regardless of method. General admission is free when obtained in advance while the free allocation remains; VIP admission is paid; and anyone without an advance general ticket must purchase admission at the door. The equal alternate method requires no purchase, ticket, admission, VIP status, attendance, booth visit, or scan; none creates another entry or improves odds. Alternate entry is draw-only and never advances QR Bingo/card progress.
+- [ ] The vendor can view settings and entry count; accept version `2026-09-01-vendor-marketing`; enable/disable the fixture; download the authenticated, exact-vendor/event entrant-administration CSV; and select only one potential winner after entries close/early-review permission applies. Confirm the CSV contains Event, Vendor, Participant Reference, Name, Email, Phone, Wedding Date, Entered At, Entry Method, Rules Version, Entrant Eligibility Attested, Selection Status, and Marketing Consent; every identity/profile value is fictional; Marketing Consent says `Yes - named vendor draw entry and wedding-related marketing`; another vendor cannot obtain it; and a legacy entry is excluded until fresh consent under the current version.
+- [ ] After selection, the UI shows Vendor verification required. Before confirm/disqualify, the vendor independently verifies eligibility, attests that it obtained the entrant declaration/release outside Wedding Win, enters the correct mathematical skill-testing answer, and records a nonblank evidence note stating date, method, and non-sensitive reference. Wedding Win records that vendor attestation only; it does not perform or certify the vendor's eligibility review, declaration/release, or prize-fulfilment work. Fulfilment notices and prize-claim controls remain blocked until verification completes. The isolated fictional App Review fixture suppresses outbound email and awards no prize. In a separate controlled production fixture, verify that a fully verified winner sends through each configured vendor/couple channel and is not unconditionally suppressed.
+- [ ] Public rules identify the named vendor as vendor-promotion sponsor, contest operator, and prize provider solely responsible for lawful terms, eligibility and winner-release decisions, the skill-testing question, prize restrictions, taxes, claims, disputes, and fulfilment; Wedding Win Inc. as app developer, limited platform sponsor of the in-app workflow, and technical administrator that is not the named vendor-promotion sponsor/operator/prize provider and remains responsible for its own technology, privacy, security, administrative conduct, and non-waivable duties; and Apple as not a sponsor or participant.
+- [ ] Owner/legal confirms the narrow Wedding Win platform-sponsor role reflects the actual workflow and satisfies Apple Guideline 5.3.1; it is not used to imply that Wedding Win supplies, guarantees, insures, or fulfils the named vendor's prize.
 
-Current evidence: backend replay for the prepared QR is idempotent. This does not replace printed-camera, exact-build, full draw, or legal verification.
+Current evidence: backend replay for the prepared QR is idempotent. This does not replace printed-camera, exact-build, optional-entry/vendor-draw, rules, selection/verification, or public-disclosure verification.
 
 ## Push and deletion state
 
@@ -63,8 +65,8 @@ Current evidence: disposable email members `38978`/`38979` passed the deployed t
 
 ## Review-window operations
 
-- [ ] Recheck both credentials, membership, pair authorization, isolated event, QR reset, normal chat, and backend availability immediately before submission and daily while in review.
-- [ ] Monitor the Review Contact and `info@weddingwin.ca`; document who can reset messages, scans, entries, report/block state, and disposable accounts without touching production users.
-- [ ] Do not subscribe either account to newsletters or promotional campaigns.
-- [ ] Do not exempt review accounts from authentication, authorization, moderation, privacy, or raffle data-use controls.
+- [ ] Recheck both credentials, account roles, pair authorization, isolated event, QR reset, normal chat, and backend availability immediately before submission and daily while in review.
+- [ ] Monitor the Review Contact and `info@weddingwin.ca`; document who can reset messages, scans, report/block state, and disposable accounts without touching production users.
+- [ ] Do not add either review account to newsletters or any real promotional campaign. A current-version fixture entry necessarily carries consent for vendor `38970` to use the fictional contact data for the draw and its wedding-related marketing; keep that data fictional and verify the consent marker without sending a campaign.
+- [ ] Do not exempt review accounts from authentication, authorization, moderation, privacy, entry-consent, eligibility, draw-limit, winner-verification, or sponsor/rules controls. Only the isolated early-draw and outbound-email-suppression fixture behavior may differ from production.
 - [ ] After review ends, revoke the special pair grant and rotate/remove credentials under the private operational procedure.

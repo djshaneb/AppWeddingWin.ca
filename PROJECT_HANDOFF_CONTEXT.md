@@ -37,7 +37,7 @@ Important BD/live notes:
 
 Purpose:
 - Couples scan vendor QR codes at wedding shows.
-- Scanning all participating vendors makes couples eligible for the WeddingWin grand prize.
+- Scanning participating-vendor codes records physical booth visits and QR Bingo progress only. No WeddingWin grand-prize promotion is currently open; any future promotion requires separate configuration, disclosures, rules, consent, and entry confirmation.
 - Individual vendors can optionally turn on their own booth prize draw.
 - If vendor prize entries are enabled, couples who scan that vendor can opt in with one tap.
 - WeddingWin already has couple contact details; vendors should not need paper forms at the booth.
@@ -88,7 +88,7 @@ Recent app cleanup:
   - Vendor name line at top
   - “Booth draw, no paper slips” info card
   - Scan / Opt in / Entries sync / Pick winner pills
-  - Extra grand-prize paragraph
+  - Obsolete app-only grand-prize paragraph
 - Current app flow now mirrors website:
   - Infographic
   - Prize setup
@@ -215,7 +215,7 @@ Vendor app menu:
 Scanner purpose:
 - App version of `https://www.weddingwin.ca/qr`.
 - Couples scan each vendor QR code at a wedding show.
-- If all vendor QR codes are scanned, they are eligible for the grand prize.
+- Scanning all current-event vendor codes completes the QR Bingo progress card only. It does not create eligibility for or entry in any prize draw.
 
 Event detail used in app card:
 - Saturday, October 18, 2026

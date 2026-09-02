@@ -8,10 +8,10 @@ OUT = ROOT / "assets" / "images" / "qr-bingo" / "vendor-draw-mobile"
 
 SLIDES = [
     ("slide-01-scan-visual.png", "Scan the booth QR", "Couples scan your QR Bingo sign right at your booth.", "Step 1 of 5"),
-    ("slide-02-opt-in-visual.png", "Opt in to this vendor's draw", "After scanning, couples choose Yes or No.", "Step 2 of 5"),
-    ("slide-03-entries-sync-visual.png", "Entries sync for you", "Names and contact details appear automatically in your dashboard.", "Step 3 of 5"),
-    ("slide-04-pick-winner-visual.png", "Pick a winner", "After the show opens for drawing, tap once to select a winner.", "Step 4 of 5"),
-    ("slide-05-follow-up-visual.png", "Follow up after", "WeddingWin sends the emails. You receive the winner details.", "Step 5 of 5"),
+    ("slide-02-opt-in-visual.png", "Couples choose to enter", "Couples can opt in to your draw.", "Step 2 of 5"),
+    ("slide-03-entries-sync-visual.png", "Download your entrant list", "Couples who enter share their contact information. You may use it for the draw and wedding-related marketing.", "Step 3 of 5"),
+    ("slide-04-pick-winner-visual.png", "Select a potential winner", "After entries close, use the random-selection tool. This does not award the prize yet.", "Step 4 of 5"),
+    ("slide-05-follow-up-visual.png", "Confirm and fulfil", "Ensure the couple meets the draw rules. Then send the WeddingWin.ca winner notice and provide the prize.", "Step 5 of 5"),
 ]
 
 W, H = 1088, 1920
@@ -25,6 +25,8 @@ BLUSH = (253, 239, 238)
 
 def font(size, bold=False):
     candidates = [
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Trebuchet MS Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf",
         "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
         "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
     ]

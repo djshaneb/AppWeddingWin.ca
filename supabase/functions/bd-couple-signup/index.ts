@@ -8,6 +8,7 @@ import {
   sanitizeBdUser,
 } from "../_shared/apple_auth.ts";
 import { normalizeContactEmail } from "../_shared/contact_email.ts";
+import { requireCurrentPolicyConsent } from "../_shared/policy_consent.ts";
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 // /checkout/10 is the public website signup route. BD's user API needs the real
@@ -54,6 +55,16 @@ function cleanWeddingDate(value: unknown) {
   return text;
 }
 
+function cleanPhone(value: unknown) {
+  const phone = cleanPlainText(value, 40);
+  if (!phone) return "";
+  const digitCount = phone.replace(/\D/g, "").length;
+  if (digitCount < 7 || digitCount > 15) {
+    throw new Error("Phone number must contain 7 to 15 digits.");
+  }
+  return phone;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -68,13 +79,16 @@ Deno.serve(async (req) => {
     const email = normalizeContactEmail(body.email);
     const password = cleanPassword(body.password);
     const firstName = cleanPlainText(body.first_name, 80) || "WeddingWin Couple";
-    const phone = cleanPlainText(body.phone, 40);
+    const phone = cleanPhone(body.phone);
     const weddingDate = cleanWeddingDate(body.wedding_date);
-    const acceptedAt = cleanPlainText(body.accepted_at, 40);
-
-    if (body.accepted_terms !== true || body.accepted_privacy !== true || !acceptedAt) {
+    if (body.accepted_terms !== true || body.accepted_privacy !== true) {
       throw new Error("Agreement to the Terms of Use and Privacy Policy is required.");
     }
+    const policyConsent = requireCurrentPolicyConsent({
+      acceptedAt: cleanPlainText(body.accepted_at, 40),
+      termsVersion: cleanPlainText(body.terms_version, 40),
+      privacyVersion: cleanPlainText(body.privacy_version, 40),
+    });
 
     if (!firstName) {
       return jsonResponse(
@@ -102,9 +116,9 @@ Deno.serve(async (req) => {
       send_email_notifications: "0",
       signup_terms_accepted: "1",
       signup_privacy_accepted: "1",
-      signup_terms_accepted_at: acceptedAt,
-      signup_terms_version: cleanPlainText(body.terms_version, 40),
-      signup_privacy_version: cleanPlainText(body.privacy_version, 40),
+      signup_terms_accepted_at: policyConsent.acceptedAt,
+      signup_terms_version: policyConsent.termsVersion,
+      signup_privacy_version: policyConsent.privacyVersion,
     });
     if (weddingDate) createBody.set("wedding_date", weddingDate);
     if (phone) createBody.set("phone_number", phone);

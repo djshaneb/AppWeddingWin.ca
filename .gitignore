@@ -8,6 +8,7 @@ web-build/
 expo-env.d.ts
 
 # native
+/ios/
 *.orig.*
 *.jks
 *.p8
@@ -28,6 +29,9 @@ yarn-error.*
 expo-*.png
 weddingwin-expo-*.png
 weddingwin-expo-*.svg
+
+# local QA screenshots, exports, recordings, and test-account fixtures
+artifacts/
 
 # macos
 .DS_Store

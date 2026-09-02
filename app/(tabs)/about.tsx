@@ -14,6 +14,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -81,7 +82,8 @@ async function loadNativeSession() {
 
 async function requestAccountDeletion(
   nativeSession: NativeBridgeSession,
-  appleAuthorizationCode = ''
+  appleAuthorizationCode = '',
+  appleNonce = ''
 ) {
   const response = await fetch(`${APP_BACKEND_URL}/functions/v1/bd-delete-account`, {
     method: 'POST',
@@ -94,6 +96,7 @@ async function requestAccountDeletion(
       confirmation: 'DELETE',
       native_session: nativeSession,
       apple_authorization_code: appleAuthorizationCode,
+      apple_nonce: appleNonce,
     }),
   });
   const result = (await response.json().catch(() => ({}))) as DeleteAccountResponse;
@@ -176,11 +179,24 @@ export default function AboutScreen() {
         if (Platform.OS !== 'ios' || !(await AppleAuthentication.isAvailableAsync())) {
           throw new Error('Sign in with Apple confirmation is unavailable on this device.');
         }
-        const credential = await AppleAuthentication.signInAsync({ requestedScopes: [] });
+        const appleState = Crypto.randomUUID();
+        const appleNonce = Crypto.randomUUID();
+        const credential = await AppleAuthentication.signInAsync({
+          requestedScopes: [],
+          state: appleState,
+          nonce: appleNonce,
+        });
+        if (credential.state !== appleState) {
+          throw new Error('Apple confirmation did not match this deletion request.');
+        }
         if (!credential.authorizationCode) {
           throw new Error('Apple did not return the confirmation needed to revoke access.');
         }
-        deletion = await requestAccountDeletion(session, credential.authorizationCode);
+        deletion = await requestAccountDeletion(
+          session,
+          credential.authorizationCode,
+          appleNonce
+        );
       }
 
       if (!deletion.response.ok || !deletion.result.ok || !deletion.result.deleted) {
@@ -226,7 +242,7 @@ export default function AboutScreen() {
 
     Alert.alert(
       'Permanently delete account?',
-      'This deletes your WeddingWin login, profile or vendor listing, push token, raffle data, and account-only app data. Shared message history may remain visible to the other participant under WeddingWin’s retention policy, but the conversation will be closed and no new messages can be sent. This cannot be undone.',
+      'This deletes your WeddingWin login, profile or vendor listing, push token, QR visit progress, and active account-only app data. Optional draw records are removed or de-identified from active features, subject to legally required contest records, disputes, legal holds, fraud prevention, and normal backup expiry. Shared message history may remain visible to the other participant under WeddingWin’s retention policy, but the conversation will be closed and no new messages can be sent. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -272,10 +288,24 @@ export default function AboutScreen() {
           />
           <View style={styles.divider} />
           <LinkRow
+            icon={<Mail size={20} color={BRAND_COLOR} strokeWidth={2} />}
+            title="Privacy Request"
+            subtitle="Access, correct, or delete your information"
+            url={`${SITE_URL}/privacy-request`}
+          />
+          <View style={styles.divider} />
+          <LinkRow
             icon={<FileText size={20} color={BRAND_COLOR} strokeWidth={2} />}
             title="Terms of Use"
             subtitle="Rules for using WeddingWin"
             url={`${SITE_URL}/about/terms`}
+          />
+          <View style={styles.divider} />
+          <LinkRow
+            icon={<FileText size={20} color={BRAND_COLOR} strokeWidth={2} />}
+            title="Vendor Prize-Draw Official Rules"
+            subtitle="A booth scan records only a visit; entering a vendor draw requires a separate optional opt-in"
+            url={`${SITE_URL}/qr-bingo-vendor-draw-rules`}
           />
         </View>
 

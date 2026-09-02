@@ -27,7 +27,8 @@ All screenshot files are under `assets/app-store/screenshots/`.
 
 - `iphone-03-chat-blocked-list.png` and `iphone-04-chat-blocked-thread.png`: moderation/blocked QA state, not a normal marketing conversation.
 - `iphone-05-qr-url-emulation.png`: visibly contains the removed **Simulate QR scan** QA control and does not represent production.
-- `iphone-06-vendor-menu.png` and `iphone-07-vendor-draw.png`: obvious review/test fixture state; recapture after legal/content approval with a marketing-safe fictional fixture.
+- `iphone-06-vendor-menu.png`: obvious review/test fixture state; recapture with a marketing-safe fictional fixture.
+- `iphone-07-vendor-draw.png`: stale pre-restoration/disabled-state capture. Never upload it; recapture the truthful restored vendor-draw UI from the final build if that feature is shown in marketing.
 - `iphone-08-account-deletion-confirm.png`: stale deletion text says entire conversations, including the other participant's messages, are deleted. Current behavior preserves the surviving participant's read-only shared history under the retention policy.
 - `ipad-01-couple-menu.png`: dimensionally valid but visually not final, as described above.
 - Every `qa-final-release-*` and `qa-website-*` file: internal evidence only.
@@ -43,9 +44,9 @@ Use a short truthful sequence; four to six scenes per class is enough if each ad
 | 1 | Native couple home | Plan your wedding in one place | Show core cards, not login/splash. Use neutral fictional data. |
 | 2 | Vendor search/results | Find wedding vendors across Canada | Use content WeddingWin has marketing rights to show; no CAPTCHA, browser chrome, or loading/error state. |
 | 3 | Native private text chat | Keep conversations together | Normal unreported conversation with fictional names/text; no real contact data, IDs, notification banner, or image-send control. |
-| 4 | QR Bingo progress | Scan booths with QR Bingo | Show truthful post-scan progress, not a blank camera or simulation control. Capture only after printed-camera testing. |
-| 5 | Draw entry notice | Choose the draws you enter | Show named fictional prize, rules link, separate consent, selected-potential-winner-only disclosure, and no-marketing purpose only after owner/legal approval. |
-| 6 | Vendor draw settings | Manage a participating booth draw | Isolated fictional event only; no entrant list, real contact data, production winner, or enabled email side effect. |
+| 4 | QR Bingo progress or optional draw offer | Scan booths, then choose whether to enter | Show truthful post-scan progress and, if used, the separate optional offer with Official Rules version `2026-09-01-vendor-marketing`, no-purchase/no-admission context, and the clear named-vendor draw-and-wedding-related-marketing disclosure that must be affirmatively accepted before entry. Never imply that scanning automatically enters. If alternate entry is referenced, make clear it is draw-only and never advances QR Bingo. Do not show a blank camera or simulation control. Capture only after printed-camera and entry-flow testing. |
+| 5 | Native About/privacy controls | Your privacy and account controls | Show privacy, support, notification settings, and Delete Account without opening a destructive confirmation. |
+| 6 | Vendor dashboard or draw settings | Manage your free profile and booth draw | Use a marketing-safe fictional vendor; show no payment/upgrade flow, entrant identity/contact data, selected-winner personal data, test fixture label, or outbound-email result. If draw controls are shown, the prize/rules/consent state must match version `2026-09-01-vendor-marketing` and public rules; a percentage-off example must show its maximum savings and material restrictions. A report scene may explain that current-version entrant details are shared only with the named vendor for draw administration and that vendor's wedding-related marketing, with consent marked included, but must never show the CSV contents or any real/fake person-level values. A verification scene must show the eligibility, math-answer, rules/release, and confirm/disqualify gate without personal data. |
 
 An About/privacy/account-controls scene can replace a weaker scene. Use the current deletion wording: account-owned data is deleted, conversations close, and shared history may remain read-only for the other participant under the retention policy.
 

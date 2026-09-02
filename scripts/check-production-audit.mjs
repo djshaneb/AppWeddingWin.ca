@@ -6,15 +6,24 @@ const expectedPackages = new Set([
   '@expo/cli',
   '@expo/metro',
   '@expo/metro-config',
+  '@react-navigation/bottom-tabs',
+  '@react-navigation/core',
+  '@react-navigation/elements',
+  '@react-navigation/native',
+  '@react-navigation/native-stack',
+  'decode-uri-component',
   'expo',
+  'expo-router',
   'image-size',
   'metro',
   'metro-config',
   'metro-transform-worker',
+  'query-string',
 ]);
 const expectedAdvisories = new Map([
   [1138808, 'https://github.com/advisories/GHSA-w3rx-r6r6-pgpr'],
   [1138809, 'https://github.com/advisories/GHSA-5p2g-fcmc-qvqq'],
+  [1147955, 'https://github.com/advisories/GHSA-vcc3-ghjq-m6fr'],
 ]);
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const npmExecPath = String(process.env.npm_execpath || '').trim();
@@ -68,7 +77,7 @@ for (const vulnerability of Object.values(vulnerabilities)) {
   }
 }
 
-for (const severity of ['critical', 'moderate', 'low', 'info']) {
+for (const severity of ['critical', 'low', 'info']) {
   if ((counts[severity] ?? 0) !== 0) {
     failures.push(`unexpected ${severity} findings: ${counts[severity]}`);
   }
@@ -78,8 +87,14 @@ if ((counts.high ?? 0) > 8) {
   failures.push(`high findings increased above the reviewed ceiling: ${counts.high}`);
 }
 
-if ((counts.total ?? 0) !== (counts.high ?? 0)) {
-  failures.push(`total findings (${counts.total ?? 0}) do not equal the reviewed high-only total (${counts.high ?? 0})`);
+if ((counts.moderate ?? 0) > 8) {
+  failures.push(`moderate findings increased above the reviewed ceiling: ${counts.moderate}`);
+}
+
+if ((counts.total ?? 0) !== (counts.high ?? 0) + (counts.moderate ?? 0)) {
+  failures.push(
+    `total findings (${counts.total ?? 0}) do not equal the reviewed high-plus-moderate total (${(counts.high ?? 0) + (counts.moderate ?? 0)})`,
+  );
 }
 
 const unexpectedPackages = packageNames.filter((name) => !expectedPackages.has(name));
@@ -115,7 +130,7 @@ if ((counts.total ?? 0) === 0) {
   console.log('Production dependency audit is clean.');
 } else {
   console.log(
-    `Production audit baseline matched: ${counts.high} high findings across ${packageNames.length} Expo/Metro packages.`,
+    `Production audit baseline matched: ${counts.high} high and ${counts.moderate} moderate findings across ${packageNames.length} reviewed packages.`,
   );
   console.log(`Reviewed advisories: ${[...advisories.values()].sort().join(', ')}`);
 }

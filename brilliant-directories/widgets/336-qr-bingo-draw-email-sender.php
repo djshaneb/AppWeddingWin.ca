@@ -100,15 +100,15 @@ if (!function_exists('ww_qbdes_json')) {
         $lines = array(
             'Hi ' . $winner . ',',
             '',
-            'You were selected as a potential winner in ' . $vendor . "'s draw. Wedding Win verified your eligibility and skill-testing answer.",
+            'You were selected as a potential winner in ' . $vendor . "'s draw. " . $vendor . ' confirmed that you meet the draw rules, WeddingWin confirmed your answer to the required math question was correct, and the vendor completed any required declaration or release step. WeddingWin recorded the vendor attestation but did not perform or certify the vendor checks.',
             '',
             'Vendor: ' . $vendor,
             'Draw item: ' . $prize,
             '',
-            $vendor . ' may contact you only to verify and arrange prize fulfillment. This notice does not itself award the prize.',
+            $vendor . ' is responsible for this promotion and prize. They may contact you only to arrange prize fulfillment or address a vendor-administered prize requirement under the official rules. This notice does not itself award the prize.',
             $profileUrl ? 'Vendor profile: ' . $profileUrl : 'You can connect with them through WeddingWin.ca.',
             '',
-            'You received this because you opted in after scanning this vendor QR code at the wedding show.',
+            'You received this because you chose to enter this vendor draw through WeddingWin.',
             '',
             'WeddingWin.ca'
         );
@@ -120,10 +120,10 @@ if (!function_exists('ww_qbdes_json')) {
         $prize = ww_qbdes_label($prizeTitle, 'the booth draw item', 500);
         $profile = $profileUrl ? '<p style="margin:14px 0 0;"><a href="' . ww_qbdes_e($profileUrl) . '" target="_blank" style="background-color:#aa565d;border-radius:6px;color:#ffffff;display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;line-height:18px;padding:11px 16px;text-decoration:none;">View vendor profile</a></p>' : '';
         $html = '';
-        $html .= ww_qbdes_section('<p style="margin:0 0 14px;font-size:16px;line-height:1.55;">Hi ' . ww_qbdes_e($winner) . ',</p><p style="margin:0;font-size:16px;line-height:1.55;">You were selected as a potential winner in ' . ww_qbdes_e($vendor) . '&#39;s draw. Wedding Win verified your eligibility and skill-testing answer.</p>');
+        $html .= ww_qbdes_section('<p style="margin:0 0 14px;font-size:16px;line-height:1.55;">Hi ' . ww_qbdes_e($winner) . ',</p><p style="margin:0;font-size:16px;line-height:1.55;">You were selected as a potential winner in ' . ww_qbdes_e($vendor) . '&#39;s draw. ' . ww_qbdes_e($vendor) . ' confirmed that you meet the draw rules, WeddingWin confirmed your answer to the required math question was correct, and the vendor completed any required declaration or release step. WeddingWin recorded the vendor attestation but did not perform or certify the vendor checks.</p>');
         $html .= ww_qbdes_section(ww_qbdes_heading('Your draw') . '<p style="margin:0 0 8px;"><strong>Vendor:</strong> ' . ww_qbdes_e($vendor) . '</p><p style="margin:0;"><strong>Draw item:</strong> ' . ww_qbdes_e($prize) . '</p>', '#fff7f6', '1px solid #efd8d5');
-        $html .= ww_qbdes_section(ww_qbdes_heading('What happens next') . '<p style="margin:0;">' . ww_qbdes_e($vendor) . ' may contact you only to verify and arrange prize fulfillment. This notice does not itself award the prize.</p>' . $profile);
-        $html .= ww_qbdes_section(ww_qbdes_heading('Why you received this') . '<p style="margin:0;">You received this because you opted in after scanning this vendor QR code at the wedding show.</p>');
+        $html .= ww_qbdes_section(ww_qbdes_heading('What happens next') . '<p style="margin:0;">' . ww_qbdes_e($vendor) . ' is responsible for this promotion and prize. They may contact you about prize fulfillment and, under the terms you accepted when entering, wedding-related offers and promotions. You may unsubscribe from vendor marketing at any time. This notice does not itself award the prize.</p>' . $profile);
+        $html .= ww_qbdes_section(ww_qbdes_heading('Why you received this') . '<p style="margin:0;">You received this because you chose to enter this vendor draw through WeddingWin.</p>');
         $html .= '<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="width:100%;"><tr><td style="padding:4px 20px 0;font-family:Arial,Helvetica,sans-serif;color:#2e2e32;font-size:15px;line-height:1.55;">WeddingWin.ca</td></tr></table>';
         return $html;
     }
@@ -134,10 +134,10 @@ if (!function_exists('ww_qbdes_json')) {
         $date = ww_qbdes_label($winnerWeddingDate, 'Not provided', 120);
         $prize = ww_qbdes_label($prizeTitle, 'the booth draw item', 500);
         $html = '';
-        $html .= ww_qbdes_section('<p style="margin:0;font-size:16px;line-height:1.55;">Wedding Win verified this QR Bingo potential winner&#39;s eligibility and skill-testing answer.</p>');
+        $html .= ww_qbdes_section('<p style="margin:0;font-size:16px;line-height:1.55;">WeddingWin recorded your business&#39;s confirmation that the selected couple meets the draw rules, answered the required short math question correctly, and completed any required declaration or release step. WeddingWin did not perform or certify the vendor checks. Your business remains responsible for the lawful promotion, winner notice, and prize fulfilment.</p>');
         $html .= ww_qbdes_section(ww_qbdes_heading('Winner details') . '<p style="margin:0 0 6px;"><strong>Name:</strong> ' . ww_qbdes_e($winner) . '</p><p style="margin:0 0 6px;"><strong>Email:</strong> <a href="mailto:' . ww_qbdes_e($email) . '" style="color:#aa565d;">' . ww_qbdes_e($email) . '</a></p><p style="margin:0 0 6px;"><strong>Phone:</strong> ' . ww_qbdes_e($phone) . '</p><p style="margin:0;"><strong>Wedding date:</strong> ' . ww_qbdes_e($date) . '</p>', '#fff7f6', '1px solid #efd8d5');
         $html .= ww_qbdes_section(ww_qbdes_heading('Draw item') . '<p style="margin:0;">' . ww_qbdes_e($prize) . '</p>');
-        $html .= ww_qbdes_section(ww_qbdes_heading('Purpose limitation') . '<p style="margin:0;">Use these contact details only to verify or fulfill this prize. Marketing use is prohibited without separate consent. WeddingWin.ca has sent the verified potential winner a fulfillment notice.</p>');
+        $html .= ww_qbdes_section(ww_qbdes_heading('Contact information') . '<p style="margin:0;">This couple accepted your draw and agreed that your business may use the shared contact information for this draw and wedding-related marketing. Honour unsubscribe requests and protect the information under the Vendor Draw Rules. Your business is responsible for the promotion, winner confirmation, notice, and prize fulfilment; WeddingWin provides the technical record and email delivery.</p>');
         return $html;
     }
     function ww_qbdes_plain_to_html($body) {
@@ -159,6 +159,102 @@ if (!function_exists('ww_qbdes_json')) {
         $result = sendEmailTemplate($sender, $safeTo, $safeSubject, $htmlBody, $textBody, '2', $w, $email);
         return $result !== false;
     }
+    function ww_qbdes_random_hex($bytes) {
+        $bytes = (int)$bytes;
+        if ($bytes < 16 || $bytes > 64) { return ''; }
+        if (function_exists('random_bytes')) {
+            try { return bin2hex(random_bytes($bytes)); } catch (Exception $ignored) { return ''; }
+        }
+        if (function_exists('openssl_random_pseudo_bytes')) {
+            $strong = false;
+            $value = openssl_random_pseudo_bytes($bytes, $strong);
+            if ($value !== false && $strong === true) { return bin2hex($value); }
+        }
+        return '';
+    }
+    function ww_qbdes_valid_delivery_key($value) {
+        return is_string($value)
+            && preg_match('/^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/D', $value) === 1;
+    }
+    function ww_qbdes_ensure_delivery_ledger() {
+        global $w;
+        $query = "CREATE TABLE IF NOT EXISTS ww_qr_bingo_email_delivery_keys (
+            delivery_hash CHAR(64) NOT NULL,
+            channel VARCHAR(16) NOT NULL,
+            payload_hash CHAR(64) NOT NULL,
+            status VARCHAR(16) NOT NULL,
+            claim_token CHAR(64) DEFAULT NULL,
+            claimed_at DATETIME DEFAULT NULL,
+            lease_expires_at DATETIME DEFAULT NULL,
+            sent_at DATETIME DEFAULT NULL,
+            last_error VARCHAR(255) DEFAULT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (delivery_hash, channel),
+            KEY ww_qr_bingo_email_delivery_status (status, lease_expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+        return mysql($w['database'], $query) !== false;
+    }
+    function ww_qbdes_claim_delivery($eventKey, $channel, $deliveryKey, $payloadHash) {
+        global $w;
+        if (($channel !== 'vendor' && $channel !== 'couple')
+            || !ww_qbdes_valid_delivery_key($deliveryKey)
+            || !preg_match('/^[0-9a-f]{64}$/D', $payloadHash)) {
+            return array('state' => 'invalid');
+        }
+        $claimToken = ww_qbdes_random_hex(32);
+        if (!$claimToken || !ww_qbdes_ensure_delivery_ledger()) { return array('state' => 'error'); }
+        $deliveryHash = hash('sha256', (string)$eventKey . '|' . $channel . '|' . $deliveryKey);
+        $safeDeliveryHash = mysql_real_escape_string($deliveryHash);
+        $safeChannel = mysql_real_escape_string($channel);
+        $safePayloadHash = mysql_real_escape_string($payloadHash);
+        $safeClaimToken = mysql_real_escape_string($claimToken);
+        $query = "INSERT INTO ww_qr_bingo_email_delivery_keys
+            (delivery_hash, channel, payload_hash, status, claim_token, claimed_at, lease_expires_at)
+            VALUES ('$safeDeliveryHash', '$safeChannel', '$safePayloadHash', 'claimed', '$safeClaimToken', NOW(), DATE_ADD(NOW(), INTERVAL 15 MINUTE))
+            ON DUPLICATE KEY UPDATE
+              status = IF(payload_hash = VALUES(payload_hash) AND status <> 'sent' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()), 'claimed', status),
+              claim_token = IF(payload_hash = VALUES(payload_hash) AND status <> 'sent' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()), VALUES(claim_token), claim_token),
+              claimed_at = IF(payload_hash = VALUES(payload_hash) AND status <> 'sent' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()), NOW(), claimed_at),
+              lease_expires_at = IF(payload_hash = VALUES(payload_hash) AND status <> 'sent' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()), DATE_ADD(NOW(), INTERVAL 15 MINUTE), lease_expires_at),
+              last_error = IF(payload_hash = VALUES(payload_hash) AND status <> 'sent' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()), NULL, last_error)";
+        if (mysql($w['database'], $query) === false) { return array('state' => 'error'); }
+        $result = mysql($w['database'], "SELECT payload_hash, status, claim_token FROM ww_qr_bingo_email_delivery_keys WHERE delivery_hash = '$safeDeliveryHash' AND channel = '$safeChannel' LIMIT 1");
+        $row = $result ? mysql_fetch_assoc($result) : false;
+        if (!$row || !hash_equals($payloadHash, (string)$row['payload_hash'])) {
+            return array('state' => $row ? 'conflict' : 'error');
+        }
+        if ((string)$row['status'] === 'sent') {
+            return array('state' => 'sent', 'delivery_hash' => $deliveryHash, 'channel' => $channel);
+        }
+        if (hash_equals($claimToken, (string)$row['claim_token'])) {
+            return array(
+                'state' => 'claimed',
+                'delivery_hash' => $deliveryHash,
+                'channel' => $channel,
+                'claim_token' => $claimToken
+            );
+        }
+        return array('state' => 'in_progress');
+    }
+    function ww_qbdes_finish_delivery($claim, $sent, $errorMessage = '') {
+        global $w;
+        if (!is_array($claim) || !isset($claim['state']) || $claim['state'] !== 'claimed') { return false; }
+        $safeDeliveryHash = mysql_real_escape_string((string)$claim['delivery_hash']);
+        $safeChannel = mysql_real_escape_string((string)$claim['channel']);
+        $safeClaimToken = mysql_real_escape_string((string)$claim['claim_token']);
+        $safeError = mysql_real_escape_string(ww_qbdes_clean_header($errorMessage, 240));
+        if ($sent) {
+            $set = "status = 'sent', sent_at = NOW(), claim_token = NULL, lease_expires_at = NULL, last_error = NULL";
+        } else {
+            $set = "status = 'failed', claim_token = NULL, lease_expires_at = NULL, last_error = '$safeError'";
+        }
+        $updated = mysql($w['database'], "UPDATE ww_qr_bingo_email_delivery_keys SET $set WHERE delivery_hash = '$safeDeliveryHash' AND channel = '$safeChannel' AND claim_token = '$safeClaimToken' AND status = 'claimed' LIMIT 1");
+        if ($updated === false) { return false; }
+        $result = mysql($w['database'], "SELECT status FROM ww_qr_bingo_email_delivery_keys WHERE delivery_hash = '$safeDeliveryHash' AND channel = '$safeChannel' LIMIT 1");
+        $row = $result ? mysql_fetch_assoc($result) : false;
+        return $row && (string)$row['status'] === ($sent ? 'sent' : 'failed');
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_action']) && $_POST['ww_qr_draw_email_action'] === 'send_draw') {
@@ -168,10 +264,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
     if (!ww_qbdes_valid_signature($payload, $expires, $signature)) { ww_qbdes_json(false, 'This draw email request could not be verified.'); }
     $data = json_decode($payload, true);
     if (!is_array($data)) { ww_qbdes_json(false, 'Draw email payload is invalid.'); }
-    if (!isset($data['winner_verified']) || (string)$data['winner_verified'] !== '1') { ww_qbdes_json(false, 'Potential-winner fulfillment notices require completed eligibility and skill-testing verification.'); }
+    if (!isset($data['winner_verified']) || (string)$data['winner_verified'] !== '1') { ww_qbdes_json(false, 'Potential-winner notices require confirmation that the selected couple meets the draw rules and answered the required short math question correctly.'); }
     $eventKey = ww_qbdes_clean_header(isset($data['event_key']) ? $data['event_key'] : '', 180);
     $deliveryMode = ww_qbdes_clean_header(isset($data['delivery_mode']) ? $data['delivery_mode'] : '', 120);
     $verificationState = ww_qbdes_clean_header(isset($data['verification_state']) ? $data['verification_state'] : '', 120);
+    $isEmailTestFixture = strpos($eventKey, 'email-test-') === 0;
     if (strpos($eventKey, 'app-review-') === 0) {
         ww_qbdes_json(true, 'Outbound email is suppressed for the isolated App Review fixture.', array(
             'vendor_sent' => false,
@@ -179,7 +276,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
             'outbound_email_suppressed' => true
         ));
     }
-    if ($deliveryMode !== 'production_verified_fulfillment' || $verificationState !== 'verified_potential_winner') {
+    $validDeliveryMode = $isEmailTestFixture
+        ? $deliveryMode === 'isolated_verified_email_test'
+        : $deliveryMode === 'production_verified_fulfillment';
+    if (!$validDeliveryMode || $verificationState !== 'verified_potential_winner') {
         ww_qbdes_json(false, 'Outbound potential-winner notices are disabled for this delivery mode.');
     }
     $vendorTo = strtolower(ww_qbdes_clean_header(isset($data['vendor_to']) ? $data['vendor_to'] : '', 254));
@@ -190,6 +290,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
     $incomingCoupleText = ww_qbdes_clean(isset($data['couple_text']) ? $data['couple_text'] : '', 6000);
     $sendVendor = ww_qbdes_flag($data, 'send_vendor', true);
     $sendCouple = ww_qbdes_flag($data, 'send_couple', true);
+    if ($isEmailTestFixture) {
+        $drawId = ww_qbdes_clean_header(isset($data['draw_id']) ? $data['draw_id'] : '', 80);
+        $fixtureId = ww_qbdes_clean_header(isset($data['fixture_id']) ? $data['fixture_id'] : '', 80);
+        $emailTestFlag = isset($data['email_test_fixture']) && (string)$data['email_test_fixture'] === '1';
+        $expectedRecipientHash = 'e335ee1d5cd1defcd861262d600a69d823b65811365b4d5ea74ff86c2fd362bb';
+        $validUuid = '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/Di';
+        if (
+            !$emailTestFlag
+            || $sendVendor
+            || !$sendCouple
+            || !preg_match($validUuid, $drawId)
+            || !preg_match($validUuid, $fixtureId)
+            || !hash_equals($expectedRecipientHash, hash('sha256', $coupleTo))
+            || $incomingCoupleSubject !== 'Your name was selected for a QR Bingo booth draw'
+        ) {
+            ww_qbdes_json(false, 'The isolated email-test request is not allowlisted.');
+        }
+    } elseif (isset($data['email_test_fixture']) && (string)$data['email_test_fixture'] === '1') {
+        ww_qbdes_json(false, 'The isolated email-test marker is not valid for this event.');
+    }
     if (!$sendVendor && !$sendCouple) {
         ww_qbdes_json(true, 'Draw emails were already delivered.', array(
             'vendor_sent' => true,
@@ -201,6 +321,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
     if ($sendVendor && !filter_var($vendorTo, FILTER_VALIDATE_EMAIL)) { ww_qbdes_json(false, 'Vendor email address is missing or invalid.'); }
     if ($sendCouple && !filter_var($coupleTo, FILTER_VALIDATE_EMAIL)) { ww_qbdes_json(false, 'Couple email address is missing or invalid.'); }
     if (($sendVendor || $sendCouple) && (!$vendorSubject || !$vendorText)) { ww_qbdes_json(false, 'Draw email content is incomplete.'); }
+    $vendorDeliveryKey = isset($data['vendor_delivery_key']) ? (string)$data['vendor_delivery_key'] : '';
+    $coupleDeliveryKey = isset($data['couple_delivery_key']) ? (string)$data['couple_delivery_key'] : '';
+    if ($sendVendor && !ww_qbdes_valid_delivery_key($vendorDeliveryKey)) { ww_qbdes_json(false, 'Vendor delivery key is missing or invalid.'); }
+    if ($sendCouple && !ww_qbdes_valid_delivery_key($coupleDeliveryKey)) { ww_qbdes_json(false, 'Couple delivery key is missing or invalid.'); }
     $winnerName = ww_qbdes_line_after($vendorText, 'Name:');
     if (!$winnerName) { $winnerName = ww_qbdes_line_after($vendorText, 'Winner:'); }
     $winnerEmail = ww_qbdes_line_after($vendorText, 'Email:');
@@ -210,25 +334,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
     if (!$prizeTitle) { $prizeTitle = ww_qbdes_line_after($incomingCoupleText, 'Draw item:'); }
     $vendorName = ww_qbdes_vendor_from_couple_text($incomingCoupleText);
     $profileUrl = ww_qbdes_profile_url_from_text($incomingCoupleText);
-    $coupleSubject = $incomingCoupleSubject ? $incomingCoupleSubject : 'QR Bingo potential-winner verification complete';
+    $coupleSubject = $incomingCoupleSubject ? $incomingCoupleSubject : 'Your name was selected for a QR Bingo booth draw';
     $coupleText = ww_qbdes_text_body($winnerName, $vendorName, $prizeTitle, $profileUrl);
     $coupleHtml = ww_qbdes_couple_html($winnerName, $vendorName, $prizeTitle, $profileUrl);
     $vendorHtml = ww_qbdes_vendor_html($winnerName, $winnerEmail, $winnerPhone, $winnerWeddingDate, $prizeTitle);
-    $vendorSent = $sendVendor ? ww_qbdes_send_mail($vendorTo, $vendorSubject, $vendorText, $vendorHtml) : true;
-    $coupleSent = $sendCouple ? ww_qbdes_send_mail($coupleTo, $coupleSubject, $coupleText, $coupleHtml) : true;
+    $vendorPayloadHash = hash('sha256', json_encode(array($vendorTo, $vendorSubject, $vendorText)));
+    $couplePayloadHash = hash('sha256', json_encode(array($coupleTo, $coupleSubject, $coupleText)));
+    $vendorClaim = $sendVendor
+        ? ww_qbdes_claim_delivery($eventKey, 'vendor', $vendorDeliveryKey, $vendorPayloadHash)
+        : array('state' => 'sent');
+    $blockingClaimStates = array('invalid', 'conflict', 'error', 'in_progress');
+    if (in_array($vendorClaim['state'], $blockingClaimStates, true)) {
+        ww_qbdes_json(false, 'Vendor email delivery is already in progress or its delivery key conflicts with an earlier request.', array(
+            'vendor_sent' => false,
+            'couple_sent' => false
+        ));
+    }
+    $coupleClaim = $sendCouple
+        ? ww_qbdes_claim_delivery($eventKey, 'couple', $coupleDeliveryKey, $couplePayloadHash)
+        : array('state' => 'sent');
+    if (in_array($coupleClaim['state'], $blockingClaimStates, true)) {
+        if ($vendorClaim['state'] === 'claimed') { ww_qbdes_finish_delivery($vendorClaim, false, 'Companion channel could not be claimed.'); }
+        ww_qbdes_json(false, 'Couple email delivery is already in progress or its delivery key conflicts with an earlier request.', array(
+            'vendor_sent' => $vendorClaim['state'] === 'sent',
+            'couple_sent' => false
+        ));
+    }
+    $vendorSent = $vendorClaim['state'] === 'sent';
+    $coupleSent = $coupleClaim['state'] === 'sent';
+    if ($vendorClaim['state'] === 'claimed') {
+        $vendorSent = ww_qbdes_send_mail($vendorTo, $vendorSubject, $vendorText, $vendorHtml);
+        if (!ww_qbdes_finish_delivery($vendorClaim, $vendorSent, $vendorSent ? '' : 'WeddingWin mail transport returned failure.')) {
+            $vendorSent = false;
+        }
+    }
+    if ($coupleClaim['state'] === 'claimed') {
+        $coupleSent = ww_qbdes_send_mail($coupleTo, $coupleSubject, $coupleText, $coupleHtml);
+        if (!ww_qbdes_finish_delivery($coupleClaim, $coupleSent, $coupleSent ? '' : 'WeddingWin mail transport returned failure.')) {
+            $coupleSent = false;
+        }
+    }
     if (!$vendorSent || !$coupleSent) {
         ww_qbdes_json(false, 'One or more draw emails could not be sent through WeddingWin.ca.', array(
             'vendor_sent' => $vendorSent ? true : false,
             'couple_sent' => $coupleSent ? true : false,
-            'vendor_skipped' => $sendVendor ? false : true,
-            'couple_skipped' => $sendCouple ? false : true
+            'vendor_skipped' => !$sendVendor || $vendorClaim['state'] === 'sent',
+            'couple_skipped' => !$sendCouple || $coupleClaim['state'] === 'sent'
         ));
     }
     ww_qbdes_json(true, 'Draw emails sent through WeddingWin.ca.', array(
         'vendor_sent' => true,
         'couple_sent' => true,
-        'vendor_skipped' => $sendVendor ? false : true,
-        'couple_skipped' => $sendCouple ? false : true,
+        'vendor_skipped' => !$sendVendor || $vendorClaim['state'] === 'sent',
+        'couple_skipped' => !$sendCouple || $coupleClaim['state'] === 'sent',
         'couple_subject' => $coupleSubject
     ));
 }
@@ -236,6 +394,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
 <div class="ww-qbdes">
   <div class="ww-qbdes-card">
     <h2>QR Bingo Draw Email Sender</h2>
-    <p>This secure WeddingWin endpoint sends QR Bingo draw winner emails for the app and website dashboard.</p>
+    <p>This secure WeddingWin endpoint sends vendor-draw potential-winner notices for the app and website dashboard.</p>
   </div>
 </div>

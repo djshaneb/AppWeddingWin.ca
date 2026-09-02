@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.5
 import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from "npm:jose@5.9.6";
 import { verifiedAppleEmail } from "./apple_identity.ts";
 import { ensureStableBdIdentity } from "./bd_identity.ts";
+import { requireCurrentPolicyConsent } from "./policy_consent.ts";
 import { allowedFinalRedirect } from "./oauth_state.ts";
 import { createOneTimeAppLoginUrl } from "./auth_exchange.ts";
 import { findAuthUserByEmail } from "./auth_users.ts";
@@ -186,19 +187,17 @@ export function decodeJwtPayloadUnsafe(token: string): Record<string, unknown> {
 }
 
 export function getNativeAppleAudiences(cfg: AppleConfig): string[] {
-  const audiences = [cfg.iosBundleId, cfg.serviceId];
-  const extraAudiences = (Deno.env.get("APPLE_EXTRA_AUDIENCES") || "")
-    .split(",")
-    .map((aud) => aud.trim())
-    .filter(Boolean);
+  const audiences = [cfg.iosBundleId];
 
-  // The production endpoint must never accept Expo Go's shared container
-  // audience unless a developer explicitly opts in for a temporary test.
+  // A native credential is issued to the iOS bundle id. The web Services ID
+  // and arbitrary extra audiences belong to separate OAuth clients and must
+  // never be accepted by this endpoint. Expo Go remains an explicit,
+  // development-only escape hatch and must be disabled in production.
   if (Deno.env.get("ALLOW_EXPO_GO_APPLE_AUD") === "1") {
-    extraAudiences.push("host.exp.Exponent");
+    audiences.push("host.exp.Exponent");
   }
 
-  return Array.from(new Set([...audiences, ...extraAudiences].filter(Boolean)));
+  return Array.from(new Set(audiences.filter(Boolean)));
 }
 
 export async function upsertAppleUser(args: {
@@ -212,13 +211,14 @@ export async function upsertAppleUser(args: {
 
   const { data: profileByApple, error: profileErr } = await admin
     .from("profiles")
-    .select("id, email")
+    .select("id, email, display_name")
     .eq("apple_sub", appleSub)
     .maybeSingle();
   if (profileErr) throw new Error(`profile lookup failed: ${profileErr.message}`);
 
   let userId = profileByApple?.id || "";
   let email = profileByApple?.email || providedEmail;
+  const resolvedFullName = fullName || profileByApple?.display_name || "";
 
   if (!userId) {
     if (!email) {
@@ -234,8 +234,8 @@ export async function upsertAppleUser(args: {
         email_confirm: true,
         user_metadata: {
           ...md,
-          full_name: md.full_name || fullName,
-          name: md.name || fullName,
+          full_name: md.full_name || resolvedFullName,
+          name: md.name || resolvedFullName,
           provider: "apple",
           apple_sub: appleSub,
         },
@@ -245,8 +245,8 @@ export async function upsertAppleUser(args: {
         email,
         email_confirm: true,
         user_metadata: {
-          full_name: fullName,
-          name: fullName,
+          full_name: resolvedFullName,
+          name: resolvedFullName,
           provider: "apple",
           apple_sub: appleSub,
         },
@@ -261,13 +261,13 @@ export async function upsertAppleUser(args: {
   const { error: upsertErr } = await admin.from("profiles").upsert({
     id: userId,
     email,
-    display_name: fullName,
+    display_name: resolvedFullName,
     apple_sub: appleSub,
     updated_at: new Date().toISOString(),
   });
   if (upsertErr) throw new Error(`profile upsert failed: ${upsertErr.message}`);
 
-  return { userId, email, appleSub, fullName };
+  return { userId, email, appleSub, fullName: resolvedFullName };
 }
 
 export async function makeMagicRedirect(email: string, finalRedirect: string): Promise<string> {
@@ -433,9 +433,7 @@ async function createBdUserForApple(
   subscriptionId = BD_DEFAULT_SUBSCRIPTION_ID,
   consent: SignupConsent = null,
 ): Promise<BdUser | undefined> {
-  if (!consent?.acceptedAt) {
-    throw new Error("Agreement to the Terms of Use and Privacy Policy is required.");
-  }
+  const policyConsent = requireCurrentPolicyConsent(consent);
 
   const { firstName, lastName } = splitName(fullName);
   const passwordBytes = new Uint8Array(24);
@@ -451,9 +449,9 @@ async function createBdUserForApple(
     send_email_notifications: "0",
     signup_terms_accepted: "1",
     signup_privacy_accepted: "1",
-    signup_terms_accepted_at: consent.acceptedAt,
-    signup_terms_version: consent.termsVersion || "",
-    signup_privacy_version: consent.privacyVersion || "",
+    signup_terms_accepted_at: policyConsent.acceptedAt,
+    signup_terms_version: policyConsent.termsVersion,
+    signup_privacy_version: policyConsent.privacyVersion,
   });
 
   const created = await callBd("/api/v2/user/create", {
