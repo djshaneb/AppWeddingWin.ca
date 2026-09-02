@@ -211,9 +211,10 @@ const vendorRaffleFetch = app.match(
 assert(vendorRaffleFetch, 'Vendor draw fetch block could not be located');
 assert(
   vendorRaffleFetch.includes('setVendorRaffle(null)') &&
-    vendorRaffleFetch.includes('if (!data?.vendor)') &&
+    vendorRaffleFetch.includes('if (!isCompleteVendorRaffleDashboard(data))') &&
+    app.includes('value?.vendor && value?.settings && value?.rules_version') &&
     vendorRaffleFetch.match(/setVendorRaffle\(null\)/g)?.length >= 2,
-  'Vendor draw fetch does not clear stale data and fail closed when eligibility cannot be verified'
+  'Vendor draw fetch does not clear stale data and fail closed when a complete eligible dashboard cannot be verified'
 );
 const vendorEligibilityGateStart = app.indexOf('{vendorRaffle?.vendor ? (');
 const vendorEligibilityGateEnd = app.indexOf(

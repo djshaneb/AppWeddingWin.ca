@@ -258,9 +258,15 @@ Deno.test("vendor acceptance is canonical, attributable, hashed, and append-only
         source.includes(
           'code: "stale_vendor_responsibility_disclosure"',
         ) &&
-        source.includes(
+        (source.includes(
           "vendor_responsibility_disclosure: vendorResponsibilityDisclosure(",
-        ),
+        ) ||
+          (source.includes(
+            "const currentVendorResponsibilityDisclosure =\n    vendorResponsibilityDisclosure(vendor.name)",
+          ) &&
+            source.includes(
+              "vendor_responsibility_disclosure: currentVendorResponsibilityDisclosure",
+            ))),
       "vendor dashboard saves must round-trip the exact canonical agreement",
     );
   }
@@ -455,7 +461,7 @@ Deno.test("authenticated offers are minimized snapshots, public discovery is ret
   }
 });
 
-Deno.test("locked vendor offers permit only the one-way fresh in-person rules reacceptance", async () => {
+Deno.test("locked vendor offers permit only a fresh known-rules to in-person reacceptance", async () => {
   const sources = await Promise.all(
     syncUrls.map((url) => Deno.readTextFile(url)),
   );
@@ -472,14 +478,21 @@ Deno.test("locked vendor offers permit only the one-way fresh in-person rules re
 
     assert(
       source.includes(
-        'const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";',
+        'const LEGACY_CONTACT_SHARING_RULES_VERSION = "2026-08-30-contact-share";',
       ) &&
+        source.includes(
+          'const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";',
+        ) &&
         source.includes(
           'const CONTACT_SHARING_RULES_VERSION = "2026-09-01-in-person-entry";',
         ) &&
-        transition.includes(
-          "cleanText(current.legal_terms_version, 80) ===\n      PREVIOUS_CONTACT_SHARING_RULES_VERSION",
+        source.includes(
+          "const IN_PERSON_REACCEPTANCE_SOURCE_RULES_VERSIONS = [",
         ) &&
+        transition.includes(
+          "IN_PERSON_REACCEPTANCE_SOURCE_RULES_VERSIONS.includes(",
+        ) &&
+        transition.includes("currentVersion as") &&
         transition.includes(
           "cleanText(next.legal_terms_version, 80) === CONTACT_SHARING_RULES_VERSION",
         ) &&
@@ -488,7 +501,7 @@ Deno.test("locked vendor offers permit only the one-way fresh in-person rules re
           "nonConsentMaterialSettingsFingerprint(current) ===",
         ) &&
         transition.includes("nonConsentMaterialSettingsFingerprint(next)"),
-      "the locked-offer exception must be exactly the immediately-prior-to-current in-person rules transition",
+      "the locked-offer exception must be exactly a known historical-to-current in-person rules transition",
     );
 
     for (
@@ -529,10 +542,19 @@ Deno.test("locked vendor offers permit only the one-way fresh in-person rules re
     );
     const executableTransition = transition
       .replace("current: Partial<RaffleSettings>", "current")
-      .replace("next: Partial<RaffleSettings>", "next");
+      .replace("next: Partial<RaffleSettings>", "next")
+      .replace(
+        /currentVersion as typeof IN_PERSON_REACCEPTANCE_SOURCE_RULES_VERSIONS\[\s*number\s*\]/,
+        "currentVersion",
+      );
     const permitsTransition = new Function(`
+      const LEGACY_CONTACT_SHARING_RULES_VERSION = "2026-08-30-contact-share";
       const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";
       const CONTACT_SHARING_RULES_VERSION = "2026-09-01-in-person-entry";
+      const IN_PERSON_REACCEPTANCE_SOURCE_RULES_VERSIONS = [
+        LEGACY_CONTACT_SHARING_RULES_VERSION,
+        PREVIOUS_CONTACT_SHARING_RULES_VERSION,
+      ];
       function cleanText(value, max) {
         return String(value || "").replace(/\\s+/g, " ").trim().slice(0, max);
       }
@@ -589,11 +611,18 @@ Deno.test("locked vendor offers permit only the one-way fresh in-person rules re
       "the exact old-to-current consent-only transition must remain possible after offer activation",
     );
     assert(
+      permitsTransition(
+        { ...current, legal_terms_version: "2026-08-30-contact-share" },
+        next,
+      ),
+      "a locked offer that skipped the short-lived marketing revision must be able to accept the current rules directly",
+    );
+    assert(
       !permitsTransition(next, current) &&
         !permitsTransition(current, current) &&
         !permitsTransition(next, next) &&
         !permitsTransition(
-          { ...current, legal_terms_version: "2026-08-30-contact-share" },
+          { ...current, legal_terms_version: "2026-08-28" },
           next,
         ) &&
         !permitsTransition(current, {
@@ -601,7 +630,7 @@ Deno.test("locked vendor offers permit only the one-way fresh in-person rules re
           participant_responsibility_disclosure_text:
             "A disclosure without the required marketing withdrawal language.",
         }),
-      "reverse, same-version, pre-marketing, and incomplete-disclosure transitions must stay blocked",
+      "reverse, same-version, unknown historical, and incomplete-disclosure transitions must stay blocked",
     );
 
     const materialMutations: Array<[string, unknown]> = [
@@ -629,9 +658,105 @@ Deno.test("locked vendor offers permit only the one-way fresh in-person rules re
     }
 
     assert(
-      /const materialTermsChanged\s*=\s*materialSettingsFingerprint\(currentSettings\)\s*!==\s*materialSettingsFingerprint\(nextMaterialSettings\)\s*&&\s*!isPermittedInPersonEntryRulesTransition\(\s*currentSettings,\s*nextMaterialSettings,?\s*\)/
-        .test(source),
-      "the material lock guard must invoke the narrow transition exception without bypassing ordinary change detection",
+      source.includes("const materialFingerprintChanged =") &&
+        source.includes(
+          "const permittedLockedRulesReacceptance = materialTermsLocked &&",
+        ) &&
+        source.includes("currentRulesAcceptanceRequested &&") &&
+        source.includes("isPermittedInPersonEntryRulesTransition(") &&
+        source.includes(
+          "const materialTermsChanged = materialFingerprintChanged &&",
+        ),
+      "the material lock guard must invoke the narrow transition exception only for a complete fresh acceptance",
+    );
+
+    const acceptancePatchStart = source.indexOf(
+      "permittedLockedRulesReacceptance\n            ? {",
+    );
+    const ordinaryPatchStart = source.indexOf(
+      "\n            : {",
+      acceptancePatchStart,
+    );
+    assert(
+      acceptancePatchStart >= 0 && ordinaryPatchStart > acceptancePatchStart,
+      "the locked reacceptance patch is missing",
+    );
+    const acceptancePatch = source.slice(
+      acceptancePatchStart,
+      ordinaryPatchStart,
+    );
+    for (
+      const forbiddenMaterialField of [
+        "prize_title",
+        "prize_description",
+        "prize_approx_value_cad",
+        "eligibility_region",
+        "entry_closes_at",
+        "draw_at",
+        "draw_opens_at",
+        "odds_basis",
+        "no_purchase_required",
+        "skill_testing_question_required",
+        "alternate_free_entry_url",
+        "max_winners",
+        "exclude_previous_winners",
+        "official_rules_url",
+        "administrator_name",
+        "co_sponsor_name",
+        "prize_provider_name",
+      ]
+    ) {
+      assert(
+        !acceptancePatch.includes(`${forbiddenMaterialField}:`),
+        `locked rules reacceptance must not write ${forbiddenMaterialField}`,
+      );
+    }
+    for (
+      const requiredAcceptanceField of [
+        "legal_terms_accepted",
+        "legal_terms_version",
+        "legal_terms_accepted_at",
+        "rules_viewed_at",
+        "apple_non_sponsor_acknowledged",
+        "vendor_responsibility_acknowledged",
+        "vendor_responsibility_disclosure_text",
+        "vendor_responsibility_acknowledged_at",
+        "vendor_responsibility_version",
+      ]
+    ) {
+      assert(
+        acceptancePatch.includes(`${requiredAcceptanceField}:`),
+        `locked rules reacceptance must write ${requiredAcceptanceField}`,
+      );
+    }
+    assert(
+      /materialTermsLocked\s*&&\s*materialTermsChanged\s*&&\s*!enabled\s*&&\s*!acceptanceRefreshRequested/
+        .test(source) &&
+        source.includes("code: acceptanceRefreshRequested") &&
+        source.includes('"vendor_rules_reacceptance_conflict"'),
+      "a locked disabled draw must not report a false-success when fresh rules acceptance could not be saved",
+    );
+  }
+});
+
+Deno.test("material-lock conflicts return a complete vendor dashboard", async () => {
+  const sources = await Promise.all(
+    syncUrls.map((url) => Deno.readTextFile(url)),
+  );
+
+  for (const source of sources) {
+    const marker = "if (materialTermsLocked && materialTermsChanged) {";
+    const start = source.indexOf(marker);
+    assert(start >= 0, "the material-lock conflict branch is missing");
+    const branch = source.slice(start, source.indexOf("try {", start));
+    assert(
+      branch.includes("const dashboard = await getVendorRaffleDashboard(") &&
+        branch.includes("conflict: true") &&
+        branch.includes("material_terms_locked: true") &&
+        branch.includes("vendor,") &&
+        branch.includes("...dashboard") &&
+        branch.includes("}, 409)"),
+      "material-lock 409 responses must include the authoritative dashboard instead of a partial error object",
     );
   }
 });

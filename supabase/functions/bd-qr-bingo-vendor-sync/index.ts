@@ -30,8 +30,13 @@ const ODDS_BASIS =
   "Each accepted entry request has an equal chance in random potential-winner selection; eligibility is confirmed by the named vendor after selection.";
 const NO_PURCHASE_REQUIRED = true;
 const SKILL_TESTING_QUESTION_REQUIRED = true;
+const LEGACY_CONTACT_SHARING_RULES_VERSION = "2026-08-30-contact-share";
 const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";
 const CONTACT_SHARING_RULES_VERSION = "2026-09-01-in-person-entry";
+const IN_PERSON_REACCEPTANCE_SOURCE_RULES_VERSIONS = [
+  LEGACY_CONTACT_SHARING_RULES_VERSION,
+  PREVIOUS_CONTACT_SHARING_RULES_VERSION,
+] as const;
 const NAMED_VENDOR_CONTACT_RULES_VERSIONS = [
   PREVIOUS_CONTACT_SHARING_RULES_VERSION,
   CONTACT_SHARING_RULES_VERSION,
@@ -901,12 +906,16 @@ function isPermittedInPersonEntryRulesTransition(
   current: Partial<RaffleSettings>,
   next: Partial<RaffleSettings>,
 ) {
+  const currentVersion = cleanText(current.legal_terms_version, 80);
   const nextDisclosure = cleanText(
     next.participant_responsibility_disclosure_text,
     2000,
   );
-  return cleanText(current.legal_terms_version, 80) ===
-      PREVIOUS_CONTACT_SHARING_RULES_VERSION &&
+  return IN_PERSON_REACCEPTANCE_SOURCE_RULES_VERSIONS.includes(
+    currentVersion as typeof IN_PERSON_REACCEPTANCE_SOURCE_RULES_VERSIONS[
+      number
+    ],
+  ) &&
     cleanText(next.legal_terms_version, 80) === CONTACT_SHARING_RULES_VERSION &&
     nextDisclosure.includes(
       "contact me with wedding-related offers and promotions",
@@ -2477,18 +2486,29 @@ async function getVendorRaffleDashboard(
   const canTestSuppressedNotice = verifiedNoticePending &&
     suppressOutboundEmail &&
     isolatedFixturePurpose(isolatedFixture) === "app_review";
+  const currentVendorResponsibilityDisclosure =
+    vendorResponsibilityDisclosure(vendor.name);
+  const vendorAcceptanceCurrent = Boolean(
+    settings.legal_terms_accepted &&
+      settings.legal_terms_version === qrBingoConfig().rules_version &&
+      settings.legal_terms_accepted_at &&
+      settings.rules_viewed_at &&
+      settings.apple_non_sponsor_acknowledged &&
+      settings.vendor_responsibility_acknowledged === true &&
+      settings.vendor_responsibility_version === qrBingoConfig().rules_version &&
+      settings.vendor_responsibility_acknowledged_at &&
+      cleanText(settings.vendor_responsibility_disclosure_text, 2000) ===
+        currentVendorResponsibilityDisclosure &&
+      cleanText(settings.participant_responsibility_disclosure_text, 2000) ===
+        participantResponsibilityDisclosure(vendor.name)
+  );
 
   return {
     event_key: eventKey,
     event_revision: qrBingoConfig().revision,
     settings: {
       ...settings,
-      legal_terms_accepted: Boolean(
-        settings.legal_terms_accepted &&
-          settings.legal_terms_version === qrBingoConfig().rules_version &&
-          settings.rules_viewed_at &&
-          settings.apple_non_sponsor_acknowledged,
-      ),
+      legal_terms_accepted: vendorAcceptanceCurrent,
     },
     // The dashboard never returns the full entrant list. Draw history contains
     // only the selected person's contact snapshot and is scoped above to this
@@ -2541,9 +2561,8 @@ async function getVendorRaffleDashboard(
     outbound_email_suppressed: suppressOutboundEmail,
     terms_url: qrBingoConfig().official_rules_url,
     rules_version: qrBingoConfig().rules_version,
-    vendor_responsibility_disclosure: vendorResponsibilityDisclosure(
-      vendor.name,
-    ),
+    vendor_responsibility_disclosure: currentVendorResponsibilityDisclosure,
+    vendor_acceptance_current: vendorAcceptanceCurrent,
     rules_current: isSettingsEnterable(
       { ...settings, enabled: true },
       isolatedFixture,
@@ -4059,6 +4078,8 @@ Deno.serve(async (request) => {
               "Add prize details and its approximate retail value in CAD, view the current official rules, and explicitly accept the vendor responsibilities before turning this on.",
           }, 400);
         }
+        const currentRulesAcceptanceRequested = legalTermsAccepted &&
+          rulesReviewed && vendorResponsibilityAcknowledged;
         const acceptedAt = legalTermsAccepted && rulesReviewed
           ? currentSettings.legal_terms_version ===
                 qrBingoConfig().rules_version && currentSettings.rules_viewed_at
@@ -4123,14 +4144,42 @@ Deno.serve(async (request) => {
         ).length;
         const materialTermsLocked = entryCount > 0 ||
           await activatedVendorOfferExists(raffleEventKey, vendor.id);
-        const materialTermsChanged =
+        const materialFingerprintChanged =
           materialSettingsFingerprint(currentSettings) !==
-            materialSettingsFingerprint(nextMaterialSettings) &&
-          !isPermittedInPersonEntryRulesTransition(
+            materialSettingsFingerprint(nextMaterialSettings);
+        const permittedLockedRulesReacceptance = materialTermsLocked &&
+          currentRulesAcceptanceRequested && materialFingerprintChanged &&
+          isPermittedInPersonEntryRulesTransition(
             currentSettings,
             nextMaterialSettings,
           );
-        if (materialTermsLocked && materialTermsChanged && !enabled) {
+        const acceptanceRefreshRequested = currentRulesAcceptanceRequested &&
+          (
+            currentSettings.legal_terms_accepted !== true ||
+            currentSettings.legal_terms_version !==
+              qrBingoConfig().rules_version ||
+            !currentSettings.legal_terms_accepted_at ||
+            !currentSettings.rules_viewed_at ||
+            currentSettings.apple_non_sponsor_acknowledged !== true ||
+            currentSettings.vendor_responsibility_acknowledged !== true ||
+            currentSettings.vendor_responsibility_version !==
+              qrBingoConfig().rules_version ||
+            !currentSettings.vendor_responsibility_acknowledged_at ||
+            cleanText(
+                currentSettings.vendor_responsibility_disclosure_text,
+                2000,
+              ) !== responsibilityDisclosure ||
+            cleanText(
+                currentSettings.participant_responsibility_disclosure_text,
+                2000,
+              ) !== participantResponsibilityDisclosure(vendor.name)
+          );
+        const materialTermsChanged = materialFingerprintChanged &&
+          !permittedLockedRulesReacceptance;
+        if (
+          materialTermsLocked && materialTermsChanged && !enabled &&
+          !acceptanceRefreshRequested
+        ) {
           try {
             await compareAndUpdateSettings(
               vendor,
@@ -4185,18 +4234,43 @@ Deno.serve(async (request) => {
           });
         }
         if (materialTermsLocked && materialTermsChanged) {
+          const dashboard = await getVendorRaffleDashboard(
+            vendor,
+            user,
+            raffleEventKey,
+            allowEarlyDraw,
+            suppressOutboundEmail,
+            reviewFixture,
+          );
           return jsonResponse({
             ok: false,
+            vendor,
+            ...dashboard,
+            conflict: true,
             material_terms_locked: true,
-            error:
-              "Prize and draw terms cannot change after the first entry. Close this draw and create a separately versioned promotion instead.",
+            code: acceptanceRefreshRequested
+              ? "vendor_rules_reacceptance_conflict"
+              : "material_terms_locked",
+            error: acceptanceRefreshRequested
+              ? "The current rules could not be accepted because this saved draw no longer matches its locked prize and event terms. Reload the draw and contact Wedding Win support; no prize terms were changed."
+              : "Prize and draw terms cannot change after the first entry. Close this draw and create a separately versioned promotion instead.",
           }, 409);
         }
-        try {
-          await compareAndUpdateSettings(
-            vendor,
-            clientSettingsUpdatedAt,
-            {
+        const settingsPatch: Partial<RaffleSettings> =
+          permittedLockedRulesReacceptance
+            ? {
+              enabled,
+              legal_terms_accepted: true,
+              legal_terms_version: qrBingoConfig().rules_version,
+              legal_terms_accepted_at: acceptedAt,
+              rules_viewed_at: acceptedAt,
+              apple_non_sponsor_acknowledged: true,
+              vendor_responsibility_acknowledged: true,
+              vendor_responsibility_disclosure_text: responsibilityDisclosure,
+              vendor_responsibility_acknowledged_at: responsibilityAcceptedAt,
+              vendor_responsibility_version: qrBingoConfig().rules_version,
+            }
+            : {
               enabled,
               prize_title: prizeTitle,
               prize_description: prizeDescription,
@@ -4238,7 +4312,12 @@ Deno.serve(async (request) => {
                   vendorResponsibilityAcknowledged
                   ? qrBingoConfig().rules_version
                   : "",
-            },
+            };
+        try {
+          await compareAndUpdateSettings(
+            vendor,
+            clientSettingsUpdatedAt,
+            settingsPatch,
             raffleEventKey,
             {
               actorUserId: acceptingVendorUserId,

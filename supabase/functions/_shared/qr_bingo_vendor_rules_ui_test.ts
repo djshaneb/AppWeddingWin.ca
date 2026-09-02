@@ -48,7 +48,7 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
       'testID="vendor-draw-wizard-finish"',
       "continueVendorRaffleWizard",
       "recommendedVendorRaffleWizardStep",
-      "setVendorRaffleRulesExpanded(initialWizardStep === 2 && !currentRulesAccepted)",
+      "setVendorRaffleRulesExpanded(false)",
       "vendorRaffleEntriesAutoLoadRef.current = true",
     ]
   ) {
@@ -56,12 +56,14 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
   }
   for (
     const required of [
-      'accessibilityLabel="Vendor Draw Rules"',
+      'accessibilityLabel="Vendor Draw Rules and responsibilities"',
       "accessibilityState={{ expanded: vendorRaffleRulesExpanded }}",
       "{vendorRaffleRulesExpanded ? (",
-      'accessibilityLabel="View vendor draw official rules"',
+      'testID="vendor-draw-rules-details"',
+      'accessibilityLabel="Open vendor draw official rules"',
       ">Vendor responsibilities</Text>",
       "{vendorResponsibilityDisclosure ||",
+      'testID="vendor-draw-rules-acceptance"',
       'accessibilityLabel="Confirm the Official Rules and vendor responsibilities were read and accepted"',
       "I confirm I have read and accept the current Official Rules and vendor responsibilities",
     ]
@@ -71,10 +73,18 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
       `Vendor Draw Rules section is missing ${required}`,
     );
   }
+  const detailsStart = rulesSection.indexOf('testID="vendor-draw-rules-details"');
+  const detailsClose = rulesSection.indexOf(') : null}', detailsStart);
+  const acceptance = rulesSection.indexOf('testID="vendor-draw-rules-acceptance"');
   assert(
-    app.includes("setVendorRaffleRulesExpanded(true);") &&
+    detailsStart >= 0 && detailsClose > detailsStart && acceptance > detailsClose,
+    "the legal details must collapse independently while the required acceptance remains visible",
+  );
+  assert(
+    !app.includes("setVendorRaffleRulesExpanded(true);") &&
+      app.includes("setVendorRaffleRulesExpanded(false);") &&
       app.includes("vendor_responsibility_disclosure: vendorResponsibilityDisclosure"),
-    "the acceptance gate must open the rules section while preserving the exact server disclosure payload",
+    "the rules must stay collapsed by default while preserving the exact server disclosure payload",
   );
 
   const couplesPanel = app.indexOf('testID="vendor-draw-step-couples"');
@@ -89,9 +99,38 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
       app.includes("Step 5 of 5, confirm and fulfill"),
     "the optional visual guide must expose its instructions to assistive technology",
   );
+  assert(
+    app.includes("vendorRaffleSaveIndicatorSlot") &&
+      app.includes("numberOfLines={vendorRaffleSaveHasIssue ? 2 : 1}") &&
+      app.includes("height: 58") &&
+      app.includes("Saved automatically"),
+    "the autosave footer must reserve a stable height across save states",
+  );
 });
 
-Deno.test("locked prize terms still allow current rules reacceptance without mutating material fields", async () => {
+Deno.test("vendor draw autosave signature tracks the accepted rules version", async () => {
+  const app = await Deno.readTextFile(
+    new URL("../../../app/(tabs)/index.tsx", import.meta.url),
+  );
+  const signature = sourceSection(
+    app,
+    "const vendorRaffleSignature = useCallback",
+    "const markVendorRaffleLocalEdit",
+  );
+
+  assert(
+    signature.includes("legalTermsVersion: string") &&
+      signature.includes("legal_terms_version: legalAccepted ? legalTermsVersion : ''"),
+    "autosave must distinguish old and current rules acceptance",
+  );
+  assert(
+    app.includes("data.settings?.legal_terms_version || ''") &&
+      app.includes("vendorRaffleRulesViewedVersion"),
+    "hydrated and edited autosave signatures must carry their exact rules version",
+  );
+});
+
+Deno.test("vendor draw autosave keeps the wizard mounted on partial conflicts", async () => {
   const app = await Deno.readTextFile(
     new URL("../../../app/(tabs)/index.tsx", import.meta.url),
   );
@@ -99,6 +138,67 @@ Deno.test("locked prize terms still allow current rules reacceptance without mut
     app,
     "const saveVendorRaffle = useCallback",
     "const closeVendorRaffle = useCallback",
+  );
+  const conflict = sourceSection(
+    save,
+    "if (response.status === 409 || data?.conflict)",
+    "const message =",
+  );
+
+  assert(
+    app.includes("function isCompleteVendorRaffleDashboard(") &&
+      app.includes("value?.vendor && value?.settings && value?.rules_version") &&
+      conflict.includes("if (isCompleteVendorRaffleDashboard(data))") &&
+      conflict.includes(
+        "applyVendorRaffle(data, { preserveWizardContext: true })",
+      ) &&
+      !conflict.includes("setVendorRaffle(data)"),
+    "a partial 409 must never replace the complete dashboard, while a complete conflict must hydrate authoritative values without moving the wizard",
+  );
+  assert(
+    save.includes("vendorRaffleLastFailedSignatureRef.current = ''") &&
+      save.includes("setVendorRaffleSaveError(null)") &&
+      save.includes("setVendorRaffleSaveMessage(message)") &&
+      save.includes("return false"),
+    "a handled conflict must not expose a retry that could overwrite the authoritative settings",
+  );
+  assert(
+    save.includes("if (!isCompleteVendorRaffleDashboard(data))") &&
+      save.includes("vendorRaffleLastFailedSignatureRef.current = savedSignature") &&
+      app.includes("signature === vendorRaffleLastFailedSignatureRef.current") &&
+      app.includes("vendorRaffleLastFailedSignatureRef.current = ''"),
+    "failed autosaves must keep the draft visible without retrying the same unchanged signature forever",
+  );
+  assert(
+    app.includes("height: '92%'") &&
+      app.includes("vendorRaffleScroll: {\n    flex: 1") &&
+      app.includes("style={styles.vendorRaffleScroll}") &&
+      app.includes('testID="vendor-draw-save-retry"') &&
+      app.includes("vendorRaffleSaveError || vendorRaffleSaveStatusText") &&
+      app.includes("accessibilityLabel={vendorRaffleSaveError || vendorRaffleSaveMessage || vendorRaffleSaveStatusText}"),
+    "the vendor draw sheet must stay stable and show the actionable save error beside a retry control",
+  );
+});
+
+Deno.test("locked prize terms still allow current rules reacceptance without mutating material fields", async () => {
+  const app = await Deno.readTextFile(
+    new URL("../../../app/(tabs)/index.tsx", import.meta.url),
+  );
+  const website = await Deno.readTextFile(
+    new URL(
+      "../../../brilliant-directories/widgets/328-qr-bingo-vendor-draw-dashboard.js",
+      import.meta.url,
+    ),
+  );
+  const save = sourceSection(
+    app,
+    "const saveVendorRaffle = useCallback",
+    "const closeVendorRaffle = useCallback",
+  );
+  const websiteSave = sourceSection(
+    website,
+    "async function save()",
+    "async function drawPotentialWinner()",
   );
 
   for (
@@ -138,5 +238,30 @@ Deno.test("locked prize terms still allow current rules reacceptance without mut
         "materialTermsLocked ? Boolean(currentSettings?.legal_terms_accepted)",
       ),
     "locked draws must not freeze legal acceptance to the previously saved version",
+  );
+  assert(
+    app.includes("vendor_acceptance_current?: boolean") &&
+      app.includes("const acceptancePersisted = data.vendor_acceptance_current") &&
+      app.includes("if (combinedAcceptance && !acceptancePersisted)") &&
+      app.includes("Your agreement was not saved") &&
+      app.includes("data.settings?.legal_terms_version === data.rules_version"),
+    "the client must verify current-version acceptance persisted and hydrate from acceptance-specific state",
+  );
+  assert(
+    websiteSave.includes(
+      "const requestLegalAccepted = Boolean(legalAccepted.checked);",
+    ) &&
+      websiteSave.includes("state.rulesViewedVersion === rulesVersion") &&
+      websiteSave.includes(
+        "state.responsibilityViewedVersion === rulesVersion",
+      ) &&
+      websiteSave.includes(
+        "const combinedAcceptance = Boolean(requestLegalAccepted && rulesReviewed);",
+      ) &&
+      !websiteSave.includes(
+        "materialTermsLocked\n        ? Boolean(settings.legal_terms_accepted)",
+      ) &&
+      !websiteSave.includes("state.data.rules_current !== false"),
+    "the website must use the vendor's current checkbox and current document review when locked prize terms need fresh acceptance",
   );
 });

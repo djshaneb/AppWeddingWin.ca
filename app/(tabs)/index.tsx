@@ -343,6 +343,7 @@ type QrBingoVendorRaffleResponse = {
   vendor?: QrBingoVendor;
   settings?: QrBingoRaffleSettings;
   entries?: QrBingoRaffleEntry[];
+  draw?: QrBingoRaffleDraw;
   draws?: QrBingoRaffleDraw[];
   can_draw?: boolean;
   max_draws?: number;
@@ -383,6 +384,7 @@ type QrBingoVendorRaffleResponse = {
   terms_url?: string;
   rules_version?: string;
   rules_current?: boolean;
+  vendor_acceptance_current?: boolean;
   administrator_name?: string;
   co_sponsor_name?: string;
   prize_provider_name?: string;
@@ -416,6 +418,17 @@ type QrBingoVendorRaffleResponse = {
     purpose: string;
   };
 };
+type CompleteQrBingoVendorRaffleResponse = QrBingoVendorRaffleResponse & {
+  vendor: QrBingoVendor;
+  settings: QrBingoRaffleSettings;
+  rules_version: string;
+};
+
+function isCompleteVendorRaffleDashboard(
+  value: QrBingoVendorRaffleResponse | null | undefined
+): value is CompleteQrBingoVendorRaffleResponse {
+  return Boolean(value?.vendor && value?.settings && value?.rules_version);
+}
 type VendorRaffleWizardStep = 1 | 2 | 3 | 4;
 type QrScanFeedbackTone = 'idle' | 'success' | 'duplicate' | 'error';
 
@@ -2563,6 +2576,7 @@ function NativeHome({
   const [vendorRaffleEntriesLoading, setVendorRaffleEntriesLoading] = useState(false);
   const [vendorRaffleEntryUpdatingReference, setVendorRaffleEntryUpdatingReference] = useState<string | null>(null);
   const [vendorRaffleError, setVendorRaffleError] = useState<string | null>(null);
+  const [vendorRaffleSaveError, setVendorRaffleSaveError] = useState<string | null>(null);
   const [vendorRaffle, setVendorRaffle] = useState<QrBingoVendorRaffleResponse | null>(null);
   const [vendorRaffleEntries, setVendorRaffleEntries] = useState<QrBingoRaffleEntry[]>([]);
   const [vendorRaffleEntryReasons, setVendorRaffleEntryReasons] = useState<Record<string, string>>({});
@@ -2597,6 +2611,7 @@ function NativeHome({
   const vendorRaffleSaveInFlightRef = useRef(false);
   const vendorRaffleSaveSeqRef = useRef(0);
   const vendorRaffleLastLocalEditRef = useRef(0);
+  const vendorRaffleLastFailedSignatureRef = useRef('');
   const lastVendorDrawOpenRequestRef = useRef(0);
   const vendorRaffleScrollRef = useRef<ScrollView>(null);
   const vendorRaffleEntriesAutoLoadRef = useRef(false);
@@ -2749,7 +2764,8 @@ function NativeHome({
       prizeApproxValueCad: string,
       maxWinners: number,
       excludePreviousWinners: boolean,
-      legalAccepted: boolean
+      legalAccepted: boolean,
+      legalTermsVersion: string
     ) =>
       JSON.stringify({
         enabled,
@@ -2758,12 +2774,15 @@ function NativeHome({
         max_winners: normalizeRaffleMaxWinners(maxWinners),
         exclude_previous_winners: excludePreviousWinners,
         legal_terms_accepted: legalAccepted,
+        legal_terms_version: legalAccepted ? legalTermsVersion : '',
       }),
     []
   );
 
   const markVendorRaffleLocalEdit = () => {
     vendorRaffleLastLocalEditRef.current = Date.now();
+    vendorRaffleLastFailedSignatureRef.current = '';
+    setVendorRaffleSaveError(null);
   };
 
   const finishVendorRaffleHydration = useCallback(() => {
@@ -2773,7 +2792,10 @@ function NativeHome({
     }, 0);
   }, []);
 
-  const applyVendorRaffle = useCallback((data: QrBingoVendorRaffleResponse) => {
+  const applyVendorRaffle = useCallback((
+    data: CompleteQrBingoVendorRaffleResponse,
+    options: { preserveWizardContext?: boolean } = {}
+  ) => {
     vendorRaffleHydratingRef.current = true;
     setVendorRaffle(data);
     setRaffleEnabled(Boolean(data.settings?.enabled));
@@ -2784,12 +2806,16 @@ function NativeHome({
     );
     setRaffleMaxWinners(normalizeRaffleMaxWinners(data.settings?.max_winners));
     setRaffleExcludePreviousWinners(data.settings?.exclude_previous_winners !== false);
-    const currentRulesAccepted = Boolean(data.settings?.legal_terms_accepted && data.rules_current !== false);
-    const initialWizardStep = recommendedVendorRaffleWizardStep(data);
+    const currentRulesAccepted = data.vendor_acceptance_current ?? Boolean(
+      data.settings?.legal_terms_accepted &&
+      data.settings?.legal_terms_version === data.rules_version
+    );
     setRaffleLegalAccepted(currentRulesAccepted);
     setVendorRaffleRulesViewedVersion(currentRulesAccepted ? data.rules_version || '' : '');
-    setVendorRaffleWizardStep(initialWizardStep);
-    setVendorRaffleRulesExpanded(initialWizardStep === 2 && !currentRulesAccepted);
+    if (!options.preserveWizardContext) {
+      setVendorRaffleWizardStep(recommendedVendorRaffleWizardStep(data));
+      setVendorRaffleRulesExpanded(false);
+    }
     setVendorEligibilityConfirmed(false);
     setVendorRulesReleaseConfirmed(false);
     setVendorSkillAnswer('');
@@ -2803,8 +2829,11 @@ function NativeHome({
       data.settings?.prize_approx_value_cad ? String(data.settings.prize_approx_value_cad) : '',
       normalizeRaffleMaxWinners(data.settings?.max_winners),
       data.settings?.exclude_previous_winners !== false,
-      Boolean(data.settings?.legal_terms_accepted)
+      Boolean(data.settings?.legal_terms_accepted),
+      data.settings?.legal_terms_version || ''
     );
+    vendorRaffleLastFailedSignatureRef.current = '';
+    setVendorRaffleSaveError(null);
     setVendorRaffleSaveMessage('Changes save automatically to the app and website.');
     finishVendorRaffleHydration();
   }, [finishVendorRaffleHydration, vendorRaffleSignature]);
@@ -2845,7 +2874,7 @@ function NativeHome({
       if (!response.ok || data?.ok === false) {
         throw new Error(data?.detail || data?.error || 'Vendor draw tools are unavailable.');
       }
-      if (!data?.vendor) {
+      if (!isCompleteVendorRaffleDashboard(data)) {
         throw new Error('Vendor draw tools did not return an eligible vendor.');
       }
       applyVendorRaffle(data);
@@ -2861,6 +2890,7 @@ function NativeHome({
     vendorRaffleLoadedRef.current = false;
     vendorRaffleEntriesAutoLoadRef.current = false;
     setVendorRaffleSaveMessage('');
+    setVendorRaffleSaveError(null);
     setVendorRaffleWizardStep(1);
     setVendorRaffleGuideExpanded(false);
     setVendorRaffleEmailPreviewExpanded(false);
@@ -2935,11 +2965,13 @@ function NativeHome({
       draftPrizeApproxValueCad,
       draftMaxWinners,
       draftExcludePreviousWinners,
-      draftLegalAccepted
+      draftLegalAccepted,
+      vendorRaffleRulesViewedVersion
     );
     vendorRaffleSaveInFlightRef.current = true;
     setVendorRaffleSaving(true);
     setVendorRaffleError(null);
+    setVendorRaffleSaveError(null);
     try {
       const { response, data } = await fetchQrBingoJsonWithTimeout<QrBingoVendorRaffleResponse>(
         VENDOR_RAFFLE_FUNCTION_URL,
@@ -2973,31 +3005,39 @@ function NativeHome({
       );
       if (!response.ok || data?.ok === false) {
         if (response.status === 409 || data?.conflict) {
-          const userKeptTyping = vendorRaffleLastLocalEditRef.current > saveStartedAt;
-          if (userKeptTyping) {
-            setVendorRaffle(data);
-            vendorRaffleLastSavedRef.current = vendorRaffleSignature(
-              Boolean(data.settings?.enabled),
-              data.settings?.prize_description || '',
-              data.settings?.prize_approx_value_cad ? String(data.settings.prize_approx_value_cad) : '',
-              normalizeRaffleMaxWinners(data.settings?.max_winners),
-              data.settings?.exclude_previous_winners !== false,
-              Boolean(data.settings?.legal_terms_accepted)
-            );
-          } else {
-            applyVendorRaffle(data);
+          if (isCompleteVendorRaffleDashboard(data)) {
+            // A complete 409 means another save won the optimistic lock (or
+            // the legal agreement changed). Keep the wizard on the same step,
+            // but restore every field from the authoritative response. Merely
+            // borrowing its new timestamp while keeping stale draft values
+            // would let a retry overwrite changes from another device.
+            applyVendorRaffle(data, { preserveWizardContext: true });
           }
           const message =
             data?.detail ||
             data?.error ||
             'This draw was updated in another tab. Review the latest settings before saving again.';
           if (!options.silent) Alert.alert('Updated in another tab', message);
-          throw new Error(message);
+          vendorRaffleLastFailedSignatureRef.current = '';
+          setVendorRaffleSaveError(null);
+          setVendorRaffleSaveMessage(message);
+          return false;
         }
         throw new Error(data?.detail || data?.error || 'Could not save this draw.');
       }
+      if (!isCompleteVendorRaffleDashboard(data)) {
+        throw new Error('The saved draw response was incomplete. Your current screen was kept open; try again.');
+      }
+      const acceptancePersisted = data.vendor_acceptance_current ?? Boolean(
+        data.settings.legal_terms_accepted &&
+        data.settings.legal_terms_version === data.rules_version
+      );
+      if (combinedAcceptance && !acceptancePersisted) {
+        throw new Error('Your agreement was not saved. Your prize details were left unchanged; tap Try again.');
+      }
       setVendorRaffle(data);
       vendorRaffleLastSavedRef.current = savedSignature;
+      vendorRaffleLastFailedSignatureRef.current = '';
       if (vendorRaffleLastLocalEditRef.current <= saveStartedAt && saveSeq === vendorRaffleSaveSeqRef.current) {
         vendorRaffleHydratingRef.current = true;
         setRaffleEnabled(Boolean(data.settings?.enabled));
@@ -3008,7 +3048,10 @@ function NativeHome({
         );
         setRaffleMaxWinners(normalizeRaffleMaxWinners(data.settings?.max_winners));
         setRaffleExcludePreviousWinners(data.settings?.exclude_previous_winners !== false);
-        const currentRulesAccepted = Boolean(data.settings?.legal_terms_accepted && data.rules_current !== false);
+        const currentRulesAccepted = data.vendor_acceptance_current ?? Boolean(
+          data.settings?.legal_terms_accepted &&
+          data.settings?.legal_terms_version === data.rules_version
+        );
         setRaffleLegalAccepted(currentRulesAccepted);
         setVendorRaffleRulesViewedVersion(currentRulesAccepted ? data.rules_version || '' : '');
         finishVendorRaffleHydration();
@@ -3018,13 +3061,16 @@ function NativeHome({
           ? 'Saving your latest changes...'
           : 'Saved to the app and website.'
       );
+      setVendorRaffleSaveError(null);
       if (!options.silent) {
         Alert.alert('Saved', 'Your QR Bingo vendor draw settings are synced in the app and on the website.');
       }
       return true;
     } catch (error) {
-      setVendorRaffleError(error instanceof Error ? error.message : 'Could not save this draw.');
-      setVendorRaffleSaveMessage('Could not autosave. Check the message above and try again.');
+      vendorRaffleLastFailedSignatureRef.current = savedSignature;
+      const message = error instanceof Error ? error.message : 'Could not save this draw.';
+      setVendorRaffleSaveError(message);
+      setVendorRaffleSaveMessage('Could not save. Tap Try again.');
       return false;
     } finally {
       vendorRaffleSaveInFlightRef.current = false;
@@ -3065,7 +3111,8 @@ function NativeHome({
       rafflePrizeApproxValueCad,
       raffleMaxWinners,
       raffleExcludePreviousWinners,
-      raffleLegalAccepted
+      raffleLegalAccepted,
+      vendorRaffleRulesViewedVersion
     );
     if (currentSignature === vendorRaffleLastSavedRef.current) {
       setShowVendorRaffle(false);
@@ -3098,6 +3145,7 @@ function NativeHome({
     rafflePrizeApproxValueCad,
     saveVendorRaffle,
     vendorRaffle,
+    vendorRaffleRulesViewedVersion,
     vendorRaffleSignature,
   ]);
 
@@ -3111,9 +3159,11 @@ function NativeHome({
       rafflePrizeApproxValueCad,
       raffleMaxWinners,
       raffleExcludePreviousWinners,
-      raffleLegalAccepted
+      raffleLegalAccepted,
+      vendorRaffleRulesViewedVersion
     );
     if (signature === vendorRaffleLastSavedRef.current) return;
+    if (signature === vendorRaffleLastFailedSignatureRef.current) return;
     if (vendorRaffleSaving || vendorRaffleSaveInFlightRef.current) {
       setVendorRaffleSaveMessage('Saving your latest changes...');
       return;
@@ -3142,6 +3192,7 @@ function NativeHome({
     saveVendorRaffle,
     showVendorRaffle,
     vendorRaffle,
+    vendorRaffleRulesViewedVersion,
     vendorRaffleSaving,
     vendorRaffleSignature,
   ]);
@@ -3347,7 +3398,10 @@ function NativeHome({
               if (!response.ok || data?.ok === false) {
                 throw new Error(data?.detail || data?.error || 'Could not select a potential winner.');
               }
-              applyVendorRaffle(data);
+              if (!isCompleteVendorRaffleDashboard(data)) {
+                throw new Error('The winner response was incomplete. Reload the vendor draw before trying again.');
+              }
+              applyVendorRaffle(data, { preserveWizardContext: true });
               await fetchVendorRaffleEntries();
               Alert.alert(
                 'Potential Winner Selected',
@@ -3406,7 +3460,10 @@ function NativeHome({
               if (!response.ok || data?.ok === false) {
                 throw new Error(data?.detail || data?.error || 'Could not send the winner email.');
               }
-              applyVendorRaffle(data);
+              if (!isCompleteVendorRaffleDashboard(data)) {
+                throw new Error('The winner-email response was incomplete. Reload the vendor draw before trying again.');
+              }
+              applyVendorRaffle(data, { preserveWizardContext: true });
               if (data.suppressed_test_complete === true || data.suppressed === true) {
                 Alert.alert(
                   'Test Send Completed',
@@ -3530,7 +3587,10 @@ function NativeHome({
               if (!response.ok || data?.ok === false) {
                 throw new Error(data?.detail || data?.error || 'Could not record the potential-winner review.');
               }
-              applyVendorRaffle(data);
+              if (!isCompleteVendorRaffleDashboard(data)) {
+                throw new Error('The winner-review response was incomplete. Reload the vendor draw before trying again.');
+              }
+              applyVendorRaffle(data, { preserveWizardContext: true });
               await fetchVendorRaffleEntries();
               Alert.alert(
                 decision === 'confirm' ? 'Verification Recorded' : 'Potential Winner Disqualified',
@@ -3687,11 +3747,20 @@ function NativeHome({
       !vendorRaffleCanTestSuppressedNotice
   );
   const vendorRaffleMaterialLocked = Boolean(vendorRaffle?.material_terms_locked);
+  const vendorRaffleSaveMessageLower = vendorRaffleSaveMessage.toLowerCase();
+  const vendorRaffleSaveHasIssue =
+    Boolean(vendorRaffleSaveError) ||
+    vendorRaffleSaveMessageLower.includes('could not') ||
+    vendorRaffleSaveMessageLower.includes('not saved');
+  const vendorRaffleSaveIsPending =
+    vendorRaffleSaving || vendorRaffleSaveMessageLower.includes('saving');
+  const vendorRaffleSaveStatusText = vendorRaffleSaveHasIssue
+    ? 'Could not save'
+    : vendorRaffleSaveIsPending
+      ? 'Saving changes...'
+      : 'Saved automatically';
   const vendorRafflePrizeStepComplete = Boolean(
     rafflePrizeDescription.trim() && Number(rafflePrizeApproxValueCad) > 0
-  );
-  const vendorRaffleRulesStepComplete = Boolean(
-    raffleLegalAccepted && vendorRaffleRulesViewedVersion === vendorRaffleRulesVersion
   );
   const vendorRaffleWizardStepTitle = {
     1: 'Describe your prize',
@@ -3740,9 +3809,6 @@ function NativeHome({
     if (step === 3 && !vendorRaffleEntries.length && !vendorRaffleEntriesLoading) {
       vendorRaffleEntriesAutoLoadRef.current = true;
       void fetchVendorRaffleEntries();
-    }
-    if (step === 2 && !vendorRaffleRulesStepComplete) {
-      setVendorRaffleRulesExpanded(true);
     }
     requestAnimationFrame(() => {
       vendorRaffleScrollRef.current?.scrollTo({ y: 0, animated: true });
@@ -4568,6 +4634,7 @@ function NativeHome({
             ) : (
               <ScrollView
                 ref={vendorRaffleScrollRef}
+                style={styles.vendorRaffleScroll}
                 testID="vendor-draw-wizard-scroll"
                 showsVerticalScrollIndicator={false}
                 keyboardDismissMode="interactive"
@@ -4722,40 +4789,31 @@ function NativeHome({
                     activeOpacity={0.78}
                     onPress={() => setVendorRaffleRulesExpanded((value) => !value)}
                     accessibilityRole="button"
-                    accessibilityLabel="Vendor Draw Rules"
-                    accessibilityHint="Shows the Official Rules, vendor responsibilities, and acceptance"
+                    accessibilityLabel="Vendor Draw Rules and responsibilities"
+                    accessibilityHint={vendorRaffleRulesExpanded ? 'Hides the legal details' : 'Shows the legal details'}
                     accessibilityState={{ expanded: vendorRaffleRulesExpanded }}>
                     <View style={styles.vendorRaffleRulesHeaderCopy}>
-                      <Text style={styles.vendorRaffleRulesTitle}>Vendor Draw Rules</Text>
+                      <Text style={styles.vendorRaffleRulesTitle}>Vendor draw agreement</Text>
                       <Text style={styles.vendorRaffleRulesSummary}>
                         {raffleLegalAccepted && vendorRaffleRulesViewedVersion === vendorRaffleRulesVersion
-                          ? `Accepted for rules version ${vendorRaffleRulesVersion}. Tap to review.`
-                          : 'Review the Official Rules and vendor responsibilities before opening entries.'}
+                          ? 'Accepted. You can review the legal details anytime.'
+                          : 'Open the Official Rules, then confirm below.'}
                       </Text>
                     </View>
-                    <ChevronDown
-                      size={20}
-                      color="#8A454B"
-                      strokeWidth={2.2}
-                      style={vendorRaffleRulesExpanded ? styles.vendorRaffleRulesChevronOpen : undefined}
-                    />
+                    <View style={styles.vendorRaffleRulesHeaderAction}>
+                      <Text style={styles.vendorRaffleRulesHeaderActionText}>
+                        {vendorRaffleRulesExpanded ? 'Hide details' : 'View details'}
+                      </Text>
+                      <ChevronDown
+                        size={18}
+                        color="#8A454B"
+                        strokeWidth={2.2}
+                        style={vendorRaffleRulesExpanded ? styles.vendorRaffleRulesChevronOpen : undefined}
+                      />
+                    </View>
                   </TouchableOpacity>
                   {vendorRaffleRulesExpanded ? (
-                    <View style={styles.vendorRaffleRulesContent}>
-                      <Text style={styles.vendorRaffleHint}>
-                        Review both items here. Your dated acceptance is saved with the exact agreement shown below.
-                      </Text>
-                      <TouchableOpacity
-                        activeOpacity={0.72}
-                        onPress={() => {
-                          if (!vendorRaffle?.terms_url) return;
-                          Linking.openURL(vendorRaffle.terms_url)
-                            .catch(() => setVendorRaffleError('The official rules could not be opened.'));
-                        }}
-                        accessibilityRole="link"
-                        accessibilityLabel="View vendor draw official rules">
-                        <Text style={styles.vendorRaffleRulesLink}>View vendor draw official rules</Text>
-                      </TouchableOpacity>
+                    <View style={styles.vendorRaffleRulesContent} testID="vendor-draw-rules-details">
                       <View style={styles.vendorRaffleInfoCard}>
                         <Text style={styles.vendorRaffleInfoTitle}>Vendor responsibilities</Text>
                         <Text style={styles.vendorRaffleInfoText}>
@@ -4780,36 +4838,50 @@ function NativeHome({
                           Vendor draws are for eligible couples attending the wedding show in person. Couples visit your booth, scan your QR code, and separately choose whether to enter. The QR entry replaces a paper ballot. General admission is free in advance while available; VIP and door admission may be paid, but paid admission never improves the odds. Eligibility: {vendorRaffle?.eligibility_region || vendorRaffle?.settings?.eligibility_region || 'see Official Rules'}. Entries close {formatPromotionDate(vendorRaffle?.entry_closes_at || vendorRaffle?.settings?.entry_closes_at)}. Scheduled draw {formatPromotionDate(vendorRaffle?.draw_at || vendorRaffle?.settings?.draw_at)}. {vendorRaffle?.odds_basis || vendorRaffle?.settings?.odds_basis || 'Each accepted entry has an equal chance in random potential-winner selection.'}
                         </Text>
                       </View>
-                      <TouchableOpacity
-                        style={styles.signupConsentToggle}
-                        activeOpacity={0.78}
-                        onPress={() => {
-                          if (!vendorRaffle?.terms_url || !vendorRaffle?.rules_version || !vendorResponsibilityDisclosure) {
-                            Alert.alert('Agreement unavailable', 'Reload the current Official Rules and vendor responsibilities before accepting.');
-                            return;
-                          }
-                          if (raffleEnabled && raffleLegalAccepted) {
-                            Alert.alert('Turn entries off first', 'An open draw must keep its vendor responsibility acceptance. Turn off prize entries before withdrawing acceptance.');
-                            return;
-                          }
-                          markVendorRaffleLocalEdit();
-                          const nextAccepted = !raffleLegalAccepted;
-                          setRaffleLegalAccepted(nextAccepted);
-                          setVendorRaffleRulesViewedVersion(nextAccepted ? vendorRaffleRulesVersion : '');
-                        }}
-                        testID="vendor-draw-rules-acceptance"
-                        accessibilityRole="checkbox"
-                        accessibilityLabel="Confirm the Official Rules and vendor responsibilities were read and accepted"
-                        accessibilityState={{ checked: raffleLegalAccepted }}>
-                        <View style={[styles.signupConsentBox, raffleLegalAccepted && styles.signupConsentBoxChecked]}>
-                          {raffleLegalAccepted ? <Text style={styles.signupConsentCheck}>{'\u2713'}</Text> : null}
-                        </View>
-                        <Text style={styles.signupConsentText}>
-                          I confirm I have read and accept the current Official Rules and vendor responsibilities, and I am authorized to do so for this vendor.
-                        </Text>
-                      </TouchableOpacity>
                     </View>
                   ) : null}
+                  <View style={styles.vendorRaffleAgreementPanel}>
+                    <TouchableOpacity
+                      style={styles.vendorRaffleRulesLinkButton}
+                      activeOpacity={0.76}
+                      onPress={() => {
+                        if (!vendorRaffle?.terms_url) return;
+                        Linking.openURL(vendorRaffle.terms_url)
+                          .catch(() => setVendorRaffleError('The official rules could not be opened.'));
+                      }}
+                      accessibilityRole="link"
+                      accessibilityLabel="Open vendor draw official rules">
+                      <Text style={styles.vendorRaffleRulesLink}>Open Official Rules</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.signupConsentToggle}
+                      activeOpacity={0.78}
+                      onPress={() => {
+                        if (!vendorRaffle?.terms_url || !vendorRaffle?.rules_version || !vendorResponsibilityDisclosure) {
+                          Alert.alert('Agreement unavailable', 'Reload the current Official Rules and vendor responsibilities before accepting.');
+                          return;
+                        }
+                        if (raffleEnabled && raffleLegalAccepted) {
+                          Alert.alert('Turn entries off first', 'An open draw must keep its vendor responsibility acceptance. Turn off prize entries before withdrawing acceptance.');
+                          return;
+                        }
+                        markVendorRaffleLocalEdit();
+                        const nextAccepted = !raffleLegalAccepted;
+                        setRaffleLegalAccepted(nextAccepted);
+                        setVendorRaffleRulesViewedVersion(nextAccepted ? vendorRaffleRulesVersion : '');
+                      }}
+                      testID="vendor-draw-rules-acceptance"
+                      accessibilityRole="checkbox"
+                      accessibilityLabel="Confirm the Official Rules and vendor responsibilities were read and accepted"
+                      accessibilityState={{ checked: raffleLegalAccepted }}>
+                      <View style={[styles.signupConsentBox, raffleLegalAccepted && styles.signupConsentBoxChecked]}>
+                        {raffleLegalAccepted ? <Text style={styles.signupConsentCheck}>{'\u2713'}</Text> : null}
+                      </View>
+                      <Text style={[styles.signupConsentText, styles.vendorRaffleAgreementText]}>
+                        I confirm I have read and accept the current Official Rules and vendor responsibilities, and I am authorized to do so for this vendor.
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
                 <TouchableOpacity
                   style={styles.vendorRaffleToggleRow}
@@ -4819,7 +4891,6 @@ function NativeHome({
                     setRaffleEnabled((value) => {
                       const nextValue = !value;
                       if (nextValue && (!raffleLegalAccepted || vendorRaffleRulesViewedVersion !== vendorRaffleRulesVersion)) {
-                        setVendorRaffleRulesExpanded(true);
                         Alert.alert('Confirmation required', 'Check the box confirming you have read and accept the current Official Rules and vendor responsibilities.');
                         return false;
                       }
@@ -5709,11 +5780,42 @@ function NativeHome({
                   <View
                     style={styles.vendorRaffleAutosaveRow}
                     testID="vendor-draw-save-status"
+                    accessibilityLabel={vendorRaffleSaveError || vendorRaffleSaveMessage || vendorRaffleSaveStatusText}
                     accessibilityLiveRegion="polite">
-                    {vendorRaffleSaving ? <ActivityIndicator size="small" color="#AA565D" /> : null}
-                    <Text style={styles.vendorRaffleSaveHint}>
-                      {vendorRaffleSaveMessage || 'Changes save automatically to the app and website.'}
+                    <View style={styles.vendorRaffleSaveIndicatorSlot} pointerEvents="none">
+                      {vendorRaffleSaveIsPending ? (
+                        <ActivityIndicator size="small" color="#AA565D" />
+                      ) : (
+                        <View style={[
+                          styles.vendorRaffleSaveDot,
+                          vendorRaffleSaveHasIssue && styles.vendorRaffleSaveDotIssue,
+                        ]} />
+                      )}
+                    </View>
+                    <Text
+                      style={[
+                        styles.vendorRaffleSaveHint,
+                        vendorRaffleSaveHasIssue && styles.vendorRaffleSaveHintIssue,
+                      ]}
+                      numberOfLines={vendorRaffleSaveHasIssue ? 2 : 1}>
+                      {vendorRaffleSaveError || vendorRaffleSaveStatusText}
                     </Text>
+                    {vendorRaffleSaveHasIssue ? (
+                      <TouchableOpacity
+                        style={styles.vendorRaffleSaveRetry}
+                        activeOpacity={0.78}
+                        disabled={vendorRaffleSaving}
+                        onPress={() => {
+                          vendorRaffleLastFailedSignatureRef.current = '';
+                          setVendorRaffleSaveError(null);
+                          void saveVendorRaffle({ silent: false });
+                        }}
+                        testID="vendor-draw-save-retry"
+                        accessibilityRole="button"
+                        accessibilityLabel="Try saving vendor draw changes again">
+                        <Text style={styles.vendorRaffleSaveRetryText}>Try again</Text>
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
                   <View style={styles.vendorRaffleWizardActions}>
                     {vendorRaffleWizardStep > 1 ? (
@@ -9851,13 +9953,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(23, 23, 27, 0.46)',
   },
   vendorRaffleSheet: {
-    maxHeight: '92%',
+    height: '92%',
     borderTopLeftRadius: 26,
     borderTopRightRadius: 26,
     backgroundColor: '#FFF8F5',
     paddingTop: 18,
     paddingHorizontal: 18,
     paddingBottom: Platform.OS === 'ios' ? 34 : 22,
+  },
+  vendorRaffleScroll: {
+    flex: 1,
   },
   vendorRaffleHeader: {
     minHeight: 48,
@@ -10126,11 +10231,19 @@ const styles = StyleSheet.create({
   },
   vendorRaffleRulesLink: {
     color: '#AA565D',
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '900',
-    textDecorationLine: 'underline',
-    marginTop: 5,
+  },
+  vendorRaffleRulesLinkButton: {
+    minHeight: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E4C2BE',
+    backgroundColor: '#FFF8F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
   },
   vendorRaffleRulesCard: {
     borderRadius: 14,
@@ -10150,7 +10263,7 @@ const styles = StyleSheet.create({
   },
   vendorRaffleRulesHeaderCopy: {
     flex: 1,
-    paddingRight: 12,
+    paddingRight: 8,
   },
   vendorRaffleRulesTitle: {
     color: '#2E2E32',
@@ -10165,6 +10278,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 3,
   },
+  vendorRaffleRulesHeaderAction: {
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  vendorRaffleRulesHeaderActionText: {
+    color: '#8A454B',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+  },
   vendorRaffleRulesChevronOpen: {
     transform: [{ rotate: '180deg' }],
   },
@@ -10172,16 +10297,16 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#EAD2CC',
     backgroundColor: '#FFFDFC',
-    padding: 13,
-    gap: 12,
+    padding: 11,
+    gap: 8,
   },
   vendorRaffleInfoCard: {
-    borderRadius: 14,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#EAD2CC',
     backgroundColor: '#FFF8F6',
-    padding: 13,
-    marginBottom: 14,
+    padding: 11,
+    marginBottom: 0,
   },
   vendorRaffleInfoTitle: {
     color: '#2E2E32',
@@ -10196,6 +10321,19 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: '700',
     marginTop: 3,
+  },
+  vendorRaffleAgreementPanel: {
+    borderTopWidth: 1,
+    borderTopColor: '#EAD2CC',
+    backgroundColor: '#FFFFFF',
+    padding: 13,
+    gap: 12,
+  },
+  vendorRaffleAgreementText: {
+    color: '#433D3B',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '800',
   },
   vendorRaffleProcessRow: {
     flexDirection: 'row',
@@ -10402,18 +10540,33 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   vendorRaffleAutosaveRow: {
-    minHeight: 34,
+    height: 58,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#EFD8D6',
     backgroundColor: '#FFF5F4',
     paddingHorizontal: 12,
-    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     marginTop: 12,
+    overflow: 'hidden',
+  },
+  vendorRaffleSaveIndicatorSlot: {
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  vendorRaffleSaveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#3E8A5A',
+  },
+  vendorRaffleSaveDotIssue: {
+    backgroundColor: '#B84B52',
   },
   vendorRaffleSaveHint: {
     color: '#756662',
@@ -10422,6 +10575,24 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     flexShrink: 1,
+    flex: 1,
+  },
+  vendorRaffleSaveHintIssue: {
+    color: '#9A3F46',
+  },
+  vendorRaffleSaveRetry: {
+    minHeight: 34,
+    borderRadius: 9,
+    backgroundColor: '#AA565D',
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  vendorRaffleSaveRetryText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
   },
   vendorRaffleHint: {
     color: '#756662',

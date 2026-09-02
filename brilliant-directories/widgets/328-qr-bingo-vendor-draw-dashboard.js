@@ -1080,15 +1080,18 @@
       const requestExcludePreviousWinners = materialTermsLocked
         ? settings.exclude_previous_winners !== false
         : Boolean(excludePreviousWinners.checked);
-      const requestLegalAccepted = materialTermsLocked
-        ? Boolean(settings.legal_terms_accepted)
-        : Boolean(legalAccepted.checked);
+      // Prize terms stay locked after a draw opens, but accepting a newly
+      // published rules version is a fresh vendor action. Never freeze this
+      // value to the previously saved acceptance just because prize fields are
+      // locked.
+      const requestLegalAccepted = Boolean(legalAccepted.checked);
       const rulesVersion = text(state.data.rules_version);
-      const rulesReviewed = Boolean(requestLegalAccepted && rulesVersion && (
-        materialTermsLocked
-          ? state.data.rules_current !== false
-          : state.rulesViewedVersion === rulesVersion
-      ));
+      const rulesReviewed = Boolean(
+        requestLegalAccepted &&
+        rulesVersion &&
+        state.rulesViewedVersion === rulesVersion &&
+        state.responsibilityViewedVersion === rulesVersion
+      );
       const combinedAcceptance = Boolean(requestLegalAccepted && rulesReviewed);
       setBusy(true);
       setStatus('Saving these settings to the shared app and website record…');
