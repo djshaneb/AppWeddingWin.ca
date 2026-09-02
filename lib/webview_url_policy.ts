@@ -17,20 +17,29 @@ export function isWedWebsiteHost(host: unknown) {
 export function qrPayloadUrlAllowed(value: unknown) {
   const raw = String(value || "").trim();
   if (!raw) return false;
-  if (/^nws25[-_:]\s*\d{3}$/i.test(raw)) return true;
 
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
-    // Plain vendor ids remain compatible, but malformed URL-like payloads do
-    // not get to smuggle a trusted vendor id through a query string.
-    return !/^[a-z][a-z0-9+.-]*:/i.test(raw);
+    return false;
   }
 
-  const protocol = parsed.protocol.toLowerCase();
-  if (protocol === "https:") return isWeddingWinHost(parsed.hostname);
-  return protocol === "nws:" && parsed.hostname.toLowerCase() === "vendor";
+  const normalizedPath = parsed.pathname.replace(/\/+$/, "") || "/";
+  const vendorIds = parsed.searchParams.getAll("vendor_id");
+  const queryEntries = Array.from(parsed.searchParams.entries());
+  const qrHost = parsed.hostname.toLowerCase();
+  return parsed.protocol.toLowerCase() === "https:" &&
+    (qrHost === "weddingwin.ca" || qrHost === "www.weddingwin.ca") &&
+    !parsed.username &&
+    !parsed.password &&
+    !parsed.hash &&
+    (parsed.port === "" || parsed.port === "443") &&
+    normalizedPath === "/qr" &&
+    queryEntries.length === 1 &&
+    queryEntries[0][0] === "vendor_id" &&
+    vendorIds.length === 1 &&
+    /^[1-9][0-9]{0,19}$/.test(vendorIds[0]);
 }
 
 export function webViewSubframeUrlAllowed(value: unknown) {

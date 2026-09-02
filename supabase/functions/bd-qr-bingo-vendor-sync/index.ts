@@ -30,10 +30,14 @@ const ODDS_BASIS =
   "Each accepted entry request has an equal chance in random potential-winner selection; eligibility is confirmed by the named vendor after selection.";
 const NO_PURCHASE_REQUIRED = true;
 const SKILL_TESTING_QUESTION_REQUIRED = true;
-const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-08-30-contact-share";
-const CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";
+const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";
+const CONTACT_SHARING_RULES_VERSION = "2026-09-01-in-person-entry";
+const NAMED_VENDOR_CONTACT_RULES_VERSIONS = [
+  PREVIOUS_CONTACT_SHARING_RULES_VERSION,
+  CONTACT_SHARING_RULES_VERSION,
+] as const;
 const CONTACT_SHARE_SCOPE = "named_vendor_draw_administration";
-const QR_PARTICIPATION_NOTICE_VERSION = "2026-09-01-vendor-marketing";
+const QR_PARTICIPATION_NOTICE_VERSION = "2026-09-01-in-person-entry";
 const QR_DRAW_EMAIL_SEND_URL = Deno.env.get("QR_DRAW_EMAIL_SEND_URL") ||
   `${BD_API_BASE_URL}/qr-bingo-draw-email-send`;
 const MAX_RAFFLE_WINNERS = 3;
@@ -60,6 +64,14 @@ function qrPublicConfig(): PublicQrBingoEventConfig | null {
 
 function qrParticipationNoticeVersion() {
   return `${qrBingoConfig().rules_version}|${QR_PARTICIPATION_NOTICE_VERSION}`;
+}
+
+function productionShowScanWindowOpen() {
+  const opensAt = new Date(qrBingoConfig().history_starts_at).getTime();
+  const closesAt = new Date(qrBingoConfig().entry_closes_at).getTime();
+  return Number.isFinite(opensAt) && Number.isFinite(closesAt) &&
+    opensAt < closesAt && Date.now() >= opensAt &&
+    Date.now() < closesAt;
 }
 
 function isEmailTestFixture(
@@ -264,6 +276,8 @@ type RaffleEntry = {
   eligibility_attestation_text?: string;
   prize_provider_name?: string;
   entry_method?: "qr_scan_opt_in" | "alternate_free_entry";
+  in_show_scan_verified?: boolean | null;
+  in_show_scan_verified_at?: string | null;
   promotion_responsibility_acknowledged?: boolean;
   promotion_disclosure_text?: string;
   promotion_responsibility_acknowledged_at?: string;
@@ -770,7 +784,7 @@ function vendorAcceptanceSource(value: unknown) {
 }
 
 function participantResponsibilityDisclosure(vendorName: string) {
-  return `${vendorName} is the named vendor-promotion sponsor, contest operator, and prize provider and is responsible for lawful and accurate offer terms; prize ownership, availability, stated value, restrictions, insurance, taxes, claims, and disputes; entrant eligibility and duplicate-entry decisions; potential-winner verification, the mathematical skill-testing question, any declaration or release, required notices, delivery, and timely fulfillment. ${PLATFORM_ROLE} By entering, I agree that Wedding Win Inc. may share my name, email address, phone number, wedding date, and entry/consent evidence with ${vendorName}. ${vendorName} may use those details to administer this specific draw and contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time. ${APPLE_NON_SPONSOR_DISCLAIMER}`;
+  return `${vendorName} is the named vendor-promotion sponsor, contest operator, and prize provider and is responsible for lawful and accurate offer terms; prize ownership, availability, stated value, restrictions, insurance, taxes, claims, and disputes; entrant eligibility and duplicate-entry decisions; potential-winner verification, the mathematical skill-testing question, any declaration or release, required notices, delivery, and timely fulfillment. ${PLATFORM_ROLE} By entering, I confirm that I visited this vendor booth in person at the wedding show and scanned its QR code. I agree that Wedding Win Inc. may share my name, email address, phone number, wedding date, and entry/consent evidence with ${vendorName}. ${vendorName} may use those details to administer this specific draw and contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time. ${APPLE_NON_SPONSOR_DISCLAIMER}`;
 }
 
 function eligibilityAttested(body: Record<string, unknown>) {
@@ -883,7 +897,7 @@ function nonConsentMaterialSettingsFingerprint(
   });
 }
 
-function isPermittedNamedVendorMarketingTransition(
+function isPermittedInPersonEntryRulesTransition(
   current: Partial<RaffleSettings>,
   next: Partial<RaffleSettings>,
 ) {
@@ -898,6 +912,9 @@ function isPermittedNamedVendorMarketingTransition(
       "contact me with wedding-related offers and promotions",
     ) &&
     nextDisclosure.includes("unsubscribe from vendor marketing") &&
+    nextDisclosure.toLowerCase().includes(
+      "visited this vendor booth in person",
+    ) &&
     nonConsentMaterialSettingsFingerprint(current) ===
       nonConsentMaterialSettingsFingerprint(next);
 }
@@ -1210,65 +1227,16 @@ async function alternateEntryClosureStatus(
   vendorId: string,
   isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
-  if (
-    isolatedFixture?.enabled &&
-    isolatedFixture.event_key === eventKey &&
-    isolatedFixture.vendor_bingo_id === vendorId &&
-    new Date(isolatedFixture.expires_at).getTime() > Date.now()
-  ) {
-    return { ready: true, stale_reason: null, fixture_bypass: true } as const;
-  }
-  const config = qrBingoConfig();
-  if (eventKey !== config.event_key) {
-    return {
-      ready: false,
-      stale_reason: "unknown_event",
-      fixture_bypass: false,
-    } as const;
-  }
-  const db = requireAdmin();
-  const [declarationResult, reconciliationResult] = await Promise.all([
-    db.from("qr_bingo_alternate_entry_reconciliation_closures")
-      .select(
-        "declared_at,declared_by,event_revision,all_timely_submissions_reviewed",
-      )
-      .eq("event_key", eventKey)
-      .eq("event_revision", config.revision)
-      .order("declared_at", { ascending: false })
-      .limit(1),
-    db.from("qr_bingo_raffle_entries")
-      .select("reconciled_at")
-      .eq("event_key", eventKey)
-      .eq("entry_method", "alternate_free_entry")
-      .order("reconciled_at", { ascending: false })
-      .limit(1),
-  ]);
-  if (declarationResult.error) throw declarationResult.error;
-  if (reconciliationResult.error) throw reconciliationResult.error;
-  const declaration = declarationResult.data?.[0] || null;
-  const latestReconciledAt = String(
-    reconciliationResult.data?.[0]?.reconciled_at || "",
-  );
-  const reconciledAfterDeclaration = Boolean(
-    declaration && latestReconciledAt &&
-      new Date(latestReconciledAt).getTime() >
-        new Date(String(declaration.declared_at)).getTime(),
-  );
-  const staleReason = !declaration
-    ? "not_declared"
-    : Date.now() < new Date(config.entry_closes_at).getTime()
-    ? "entry_period_open"
-    : reconciledAfterDeclaration
-    ? "reconciliation_recorded_after_declaration"
-    : null;
   return {
-    ready: staleReason === null,
-    stale_reason: staleReason,
-    fixture_bypass: false,
-    declared_at: declaration?.declared_at || null,
-    declared_by: declaration?.declared_by || null,
-    event_revision: config.revision,
-  };
+    ready: true,
+    stale_reason: null,
+    fixture_bypass: Boolean(
+      isolatedFixture?.enabled && isolatedFixture.event_key === eventKey &&
+        isolatedFixture.vendor_bingo_id === vendorId,
+    ),
+    retired: true,
+    event_revision: qrBingoConfig().revision,
+  } as const;
 }
 
 async function upsertSettings(
@@ -1395,21 +1363,16 @@ function isSettingsEnterable(
   const entryClosesAt = String(settings?.entry_closes_at || "");
   const drawOpensAt = String(settings?.draw_opens_at || "");
   const drawAt = String(settings?.draw_at || "");
-  const alternateFreeEntryUrl = cleanText(
-    settings?.alternate_free_entry_url,
-    500,
-  );
   const fixtureAllowsEarlyDraw = Boolean(
     fixtureTerms && isolatedFixture?.allow_early_draw === true,
   );
-  const scheduleAndAmoeAreValid = validPromotionTime(entryClosesAt) &&
+  const scheduleIsValid = validPromotionTime(entryClosesAt) &&
     validPromotionTime(drawOpensAt) &&
     validPromotionTime(drawAt) &&
     (fixtureAllowsEarlyDraw ||
       new Date(drawOpensAt).getTime() >=
         new Date(entryClosesAt).getTime()) &&
-    new Date(drawAt).getTime() >= new Date(entryClosesAt).getTime() &&
-    validHttpsUrl(alternateFreeEntryUrl);
+    new Date(drawAt).getTime() >= new Date(entryClosesAt).getTime();
   const eventTermsMatch = fixtureTerms
     ? Boolean(cleanText(settings?.eligibility_region, 300))
     : Boolean(
@@ -1420,8 +1383,7 @@ function isSettingsEnterable(
           new Date(config.entry_closes_at).getTime() &&
         new Date(drawOpensAt).getTime() ===
           new Date(config.draw_opens_at).getTime() &&
-        new Date(drawAt).getTime() === new Date(config.draw_at).getTime() &&
-        alternateFreeEntryUrl === config.alternate_free_entry_url,
+        new Date(drawAt).getTime() === new Date(config.draw_at).getTime(),
     );
   return Boolean(
     qrPublicConfig()?.vendor_draws_enabled &&
@@ -1447,32 +1409,32 @@ function isSettingsEnterable(
       cleanText(settings.prize_title, 160) &&
       cleanText(settings.prize_description, 1000) &&
       positiveCadValue(settings.prize_approx_value_cad) &&
-      scheduleAndAmoeAreValid &&
+      scheduleIsValid &&
       eventTermsMatch &&
       cleanText(settings.odds_basis, 500) &&
       settings.no_purchase_required === true &&
       settings.skill_testing_question_required === true &&
-      raffleMaxWinners(settings.max_winners) === Number(settings.max_winners) &&
-      alternateFreeEntryUrl,
+      raffleMaxWinners(settings.max_winners) === Number(settings.max_winners),
   );
 }
 
-function entryHasCurrentConsent(
+function entryHasNamedVendorContactConsent(
   entry: Partial<RaffleEntry> | null | undefined,
 ) {
+  const consentVersion = cleanText(entry?.consent_version, 80);
   return Boolean(
     entry?.id &&
       offerVersionToken(entry.vendor_offer_version) &&
       entry.consent_share_contact === true &&
-      entry.consent_version === qrBingoConfig().rules_version &&
-      entry.consent_version === CONTACT_SHARING_RULES_VERSION &&
+      NAMED_VENDOR_CONTACT_RULES_VERSIONS.includes(
+        consentVersion as typeof NAMED_VENDOR_CONTACT_RULES_VERSIONS[number],
+      ) &&
       entry.rules_viewed_at &&
       entry.apple_non_sponsor_acknowledged === true &&
       entry.contact_share_scope === CONTACT_SHARE_SCOPE &&
       entry.draw_administration_contact_share_acknowledged === true &&
       entry.draw_administration_contact_share_acknowledged_at &&
-      entry.draw_administration_contact_share_version ===
-        CONTACT_SHARING_RULES_VERSION &&
+      entry.draw_administration_contact_share_version === consentVersion &&
       cleanText(
         entry.draw_administration_contact_share_consent_text,
         2000,
@@ -1486,8 +1448,7 @@ function entryHasCurrentConsent(
       entry.promotion_responsibility_acknowledged === true &&
       cleanText(entry.promotion_disclosure_text, 2000) &&
       entry.promotion_responsibility_acknowledged_at &&
-      entry.promotion_responsibility_version ===
-        qrBingoConfig().rules_version &&
+      entry.promotion_responsibility_version === consentVersion &&
       entry.eligibility_attested_at &&
       cleanText(entry.consent_text, 2000) &&
       cleanText(entry.eligibility_attestation_text, 1000) &&
@@ -1502,7 +1463,6 @@ function entryHasCurrentConsent(
         String(entry.draw_at || ""),
       ) &&
       cleanText(entry.odds_basis, 500) &&
-      validHttpsUrl(cleanText(entry.alternate_free_entry_url, 500)) &&
       entry.no_purchase_required === true &&
       entry.skill_testing_question_required === true &&
       raffleMaxWinners(entry.max_winners) === Number(entry.max_winners) &&
@@ -1510,6 +1470,21 @@ function entryHasCurrentConsent(
   );
 }
 
+function entryHasCurrentConsent(
+  entry: Partial<RaffleEntry> | null | undefined,
+) {
+  return entryHasNamedVendorContactConsent(entry) &&
+    entry?.consent_version === qrBingoConfig().rules_version &&
+    entry.consent_version === CONTACT_SHARING_RULES_VERSION;
+}
+
+function entryHasProductionInPersonProof(
+  entry: Partial<RaffleEntry> | null | undefined,
+) {
+  return entry?.entry_method === "qr_scan_opt_in" &&
+    entry.in_show_scan_verified === true &&
+    Boolean(entry.in_show_scan_verified_at);
+}
 function vendorVisibleDraw(
   draw: RaffleDraw,
   isolatedFixture?: IsolatedRaffleFixture | null,
@@ -1557,71 +1532,6 @@ function vendorVisibleDraw(
   };
 }
 
-async function publicAlternateFreeEntryOffers() {
-  const config = qrBingoConfig();
-  const now = Date.now();
-  if (
-    !config.vendor_draws_enabled ||
-    now < new Date(config.history_starts_at).getTime() ||
-    now >= new Date(config.entry_closes_at).getTime()
-  ) {
-    return [];
-  }
-  const { data, error } = await requireAdmin()
-    .from("qr_bingo_raffle_settings")
-    .select("*")
-    .eq("event_key", config.event_key)
-    .eq("enabled", true)
-    .order("vendor_name", { ascending: true });
-  if (error) throw error;
-  const offers = await Promise.all(
-    ((data || []) as RaffleSettings[]).map(async (settings) => {
-      if (!isSettingsEnterable(settings)) return null;
-      const snapshot = await loadCurrentVendorOfferSnapshot(settings);
-      if (!offerSnapshotIsEnterable(snapshot)) return null;
-      const vendorUser = await fetchFullBdUserById(
-        snapshot!.vendor_bd_user_id,
-      ).catch(() => undefined);
-      return {
-        event_key: config.event_key,
-        event_revision: config.revision,
-        event_name: snapshot!.event_name,
-        rules_version: snapshot!.rules_version,
-        entry_opens_at: snapshot!.history_starts_at,
-        vendor_bingo_id: snapshot!.vendor_bingo_id,
-        vendor_name: snapshot!.vendor_name,
-        vendor_business_name: cleanText(vendorUser?.company, 180) ||
-          snapshot!.vendor_name,
-        vendor_profile_url: absoluteWeddingWinUrl(vendorUser?.filename),
-        vendor_offer_version: snapshot!.vendor_offer_version,
-        prize_count: raffleMaxWinners(snapshot!.max_winners),
-        max_winners: raffleMaxWinners(snapshot!.max_winners),
-        exclude_previous_winners: snapshot!.exclude_previous_winners !== false,
-        prize_title: snapshot!.prize_title,
-        prize_description: snapshot!.prize_description,
-        prize_approx_value_cad: positiveCadValue(
-          snapshot!.prize_approx_value_cad,
-        ),
-        eligibility_region: snapshot!.eligibility_region,
-        entry_closes_at: snapshot!.entry_closes_at,
-        draw_at: snapshot!.draw_at,
-        odds_basis: snapshot!.odds_basis,
-        official_rules_url: snapshot!.official_rules_url,
-        alternate_free_entry_url: snapshot!.alternate_free_entry_url,
-        entry_limit:
-          "One valid entry per eligible couple per vendor draw, regardless of method.",
-        skill_testing_question_required:
-          snapshot!.skill_testing_question_required,
-        no_purchase_or_admission_required: snapshot!.no_purchase_required,
-        time_zone: "America/Toronto",
-        participant_responsibility_disclosure:
-          snapshot!.participant_responsibility_disclosure_text,
-      };
-    }),
-  );
-  return offers.filter((offer) => offer !== null);
-}
-
 function csvCell(value: unknown) {
   let raw = String(value ?? "").replace(/\u0000/g, "");
   if (/^[\s]*[=+@-]/.test(raw)) raw = `'${raw}`;
@@ -1654,7 +1564,7 @@ async function participationReference(
   }`;
 }
 
-async function countVendorCurrentConsentEntries(
+async function countVendorNamedContactEntries(
   vendor: QrVendor,
   eventKey: string,
 ) {
@@ -1667,17 +1577,17 @@ async function countVendorCurrentConsentEntries(
     .eq("vendor_bd_user_id", vendorBdUserId)
     .eq("consent_share_contact", true)
     .eq("contact_share_scope", CONTACT_SHARE_SCOPE)
-    .eq("consent_version", CONTACT_SHARING_RULES_VERSION)
+    .in("consent_version", NAMED_VENDOR_CONTACT_RULES_VERSIONS)
     .eq("vendor_marketing_consent", true)
     .eq("draw_administration_contact_share_acknowledged", true)
-    .eq(
+    .in(
       "draw_administration_contact_share_version",
-      CONTACT_SHARING_RULES_VERSION,
+      NAMED_VENDOR_CONTACT_RULES_VERSIONS,
     );
   if (error) throw error;
   if (typeof count !== "number") {
     throw new Error(
-      "Current-consent vendor entrant exact count was unavailable.",
+      "Named-vendor contact entrant exact count was unavailable.",
     );
   }
   return count;
@@ -1686,13 +1596,14 @@ async function countVendorCurrentConsentEntries(
 async function loadVendorEntryPool(
   vendor: QrVendor,
   eventKey: string,
+  isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
   const db = requireAdmin();
   const vendorBdUserId = String(vendor.user_id || vendor.id);
   const settings = await getSettings(vendor, eventKey);
   const excludePreviousWinners = settings?.exclude_previous_winners !== false;
   const entryRows = await collectExactPostgrestRows<RaffleEntry>(
-    "Current-consent vendor QR Bingo entrants",
+    "Named-vendor contact QR Bingo entrants",
     (row) => String(row.id || ""),
     () =>
       db.from("qr_bingo_raffle_entries")
@@ -1702,12 +1613,12 @@ async function loadVendorEntryPool(
         .eq("vendor_bd_user_id", vendorBdUserId)
         .eq("consent_share_contact", true)
         .eq("contact_share_scope", CONTACT_SHARE_SCOPE)
-        .eq("consent_version", CONTACT_SHARING_RULES_VERSION)
+        .in("consent_version", NAMED_VENDOR_CONTACT_RULES_VERSIONS)
         .eq("vendor_marketing_consent", true)
         .eq("draw_administration_contact_share_acknowledged", true)
-        .eq(
+        .in(
           "draw_administration_contact_share_version",
-          CONTACT_SHARING_RULES_VERSION,
+          NAMED_VENDOR_CONTACT_RULES_VERSIONS,
         ),
     (from, to) =>
       db.from("qr_bingo_raffle_entries")
@@ -1717,12 +1628,12 @@ async function loadVendorEntryPool(
         .eq("vendor_bd_user_id", vendorBdUserId)
         .eq("consent_share_contact", true)
         .eq("contact_share_scope", CONTACT_SHARE_SCOPE)
-        .eq("consent_version", CONTACT_SHARING_RULES_VERSION)
+        .in("consent_version", NAMED_VENDOR_CONTACT_RULES_VERSIONS)
         .eq("vendor_marketing_consent", true)
         .eq("draw_administration_contact_share_acknowledged", true)
-        .eq(
+        .in(
           "draw_administration_contact_share_version",
-          CONTACT_SHARING_RULES_VERSION,
+          NAMED_VENDOR_CONTACT_RULES_VERSIONS,
         )
         .order("created_at", { ascending: true })
         .order("id", { ascending: true })
@@ -1733,9 +1644,13 @@ async function loadVendorEntryPool(
     loadVendorSelectionStateRows(eventKey, vendor.id, vendorBdUserId),
     loadVendorDrawRows(eventKey, vendor.id, vendorBdUserId),
   ]);
+  const controlledFixture = isolatedFixtureMatchesSettings(
+    settings,
+    isolatedFixture,
+  );
   const entries = entryRows.filter((entry) =>
     !archivedIds.has(String(entry.id || "")) &&
-    entryHasCurrentConsent(entry as RaffleEntry)
+    entryHasNamedVendorContactConsent(entry as RaffleEntry)
   );
 
   const priorWinnerCoupleIds = new Set<string>();
@@ -1772,7 +1687,15 @@ async function loadVendorEntryPool(
       "not_selected";
     const previousWinner = excludePreviousWinners &&
       priorWinnerCoupleIds.has(String(entry.couple_bd_user_id));
-    const poolStatus = !included
+    const currentConsent = entryHasCurrentConsent(entry);
+    const productionInPersonProof = entryHasProductionInPersonProof(entry);
+    const selectionEligible = currentConsent &&
+      (controlledFixture || productionInPersonProof);
+    const poolStatus = !currentConsent
+      ? "reacceptance_required"
+      : !controlledFixture && !productionInPersonProof
+      ? "in_person_scan_required"
+      : !included
       ? "excluded"
       : selectionStatus === "potential"
       ? "already_selected"
@@ -1781,7 +1704,11 @@ async function loadVendorEntryPool(
       : previousWinner
       ? "previous_winner"
       : "included";
-    const poolStatusReason = poolStatus === "excluded"
+    const poolStatusReason = poolStatus === "reacceptance_required"
+      ? "This historical entry remains in the contact list, but the couple must scan this booth and accept the current in-person entry rules before selection."
+      : poolStatus === "in_person_scan_required"
+      ? "This historical entry remains in the contact list but has no verified in-show booth scan, so it cannot be selected."
+      : poolStatus === "excluded"
       ? cleanText(state?.exclusion_reason, 500)
       : poolStatus === "already_selected"
       ? "This entrant is the potential winner currently awaiting review."
@@ -1802,14 +1729,17 @@ async function loadVendorEntryPool(
       couple_wedding_date: entry.couple_wedding_date,
       entered_at: entry.consented_at || entry.created_at,
       entry_method: entry.entry_method || "qr_scan_opt_in",
+      rules_version: entry.consent_version || "",
       included,
       exclusion_reason: included ? "" : cleanText(state?.exclusion_reason, 500),
       pool_status: poolStatus,
       pool_status_reason: poolStatusReason,
       selection_status: selectionStatus,
       previous_winner: previousWinner,
-      in_selection_pool: poolStatus === "included",
-      can_update: !selectionInProgress && selectionStatus !== "disqualified",
+      selection_eligible: selectionEligible,
+      in_selection_pool: selectionEligible && poolStatus === "included",
+      can_update: selectionEligible && !selectionInProgress &&
+        selectionStatus !== "disqualified",
       _entry_id: entry.id,
       _couple_bd_user_id: entry.couple_bd_user_id,
     };
@@ -1821,9 +1751,13 @@ async function loadVendorEntryPool(
     rows,
     publicRows,
     entry_count: rows.length,
-    included_entry_count: rows.filter((row) => row.included).length,
-    excluded_entry_count: rows.filter((row) => !row.included).length,
+    included_entry_count:
+      rows.filter((row) => row.selection_eligible && row.included).length,
+    excluded_entry_count:
+      rows.filter((row) => row.selection_eligible && !row.included).length,
     eligible_entry_count: rows.filter((row) => row.in_selection_pool).length,
+    historical_entry_count: rows.filter((row) => !row.selection_eligible)
+      .length,
     selection_in_progress: selectionInProgress,
     can_update_entries: !selectionInProgress,
   };
@@ -1832,14 +1766,16 @@ async function loadVendorEntryPool(
 async function vendorRaffleEntriesResponse(
   vendor: QrVendor,
   eventKey: string,
+  isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
-  const pool = await loadVendorEntryPool(vendor, eventKey);
+  const pool = await loadVendorEntryPool(vendor, eventKey, isolatedFixture);
   return {
     entries: pool.publicRows,
     entry_count: pool.entry_count,
     included_entry_count: pool.included_entry_count,
     excluded_entry_count: pool.excluded_entry_count,
     eligible_entry_count: pool.eligible_entry_count,
+    historical_entry_count: pool.historical_entry_count,
     selection_in_progress: pool.selection_in_progress,
     can_update_entries: pool.can_update_entries,
   };
@@ -1850,6 +1786,7 @@ async function updateVendorRaffleEntrySelection(
   user: BdRow | undefined,
   body: Record<string, unknown>,
   eventKey: string,
+  isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
   const reference = cleanText(body.participant_reference, 40).toUpperCase();
   const source = vendorAcceptanceSource(body.client_platform);
@@ -1878,7 +1815,7 @@ async function updateVendorRaffleEntrySelection(
       error: "A rules-based exclusion reason is required.",
     }, 400);
   }
-  const pool = await loadVendorEntryPool(vendor, eventKey);
+  const pool = await loadVendorEntryPool(vendor, eventKey, isolatedFixture);
   const entrant = pool.rows.find((row) =>
     row.participant_reference === reference
   );
@@ -1928,7 +1865,7 @@ async function updateVendorRaffleEntrySelection(
     message: body.included
       ? "The participant was restored to the selection pool."
       : "The participant was excluded from selection and remains in the contact export.",
-    ...await vendorRaffleEntriesResponse(vendor, eventKey),
+    ...await vendorRaffleEntriesResponse(vendor, eventKey, isolatedFixture),
   });
 }
 
@@ -1975,6 +1912,7 @@ async function buildVendorParticipationReport(
   eventKey: string,
   requestedByBdUserId: string,
   clientPlatform: string,
+  isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
   const db = requireAdmin();
   const currentConfig = qrBingoConfig();
@@ -1996,7 +1934,7 @@ async function buildVendorParticipationReport(
     return { rate_limited: true, retry_after_seconds: 60 } as const;
   }
 
-  const exactConsentEntryCount = await countVendorCurrentConsentEntries(
+  const exactConsentEntryCount = await countVendorNamedContactEntries(
     vendor,
     eventKey,
   );
@@ -2007,7 +1945,7 @@ async function buildVendorParticipationReport(
       maximum_rows: 5000,
     } as const;
   }
-  const pool = await loadVendorEntryPool(vendor, eventKey);
+  const pool = await loadVendorEntryPool(vendor, eventKey, isolatedFixture);
   if (pool.entry_count > 5000) {
     return {
       rate_limited: false,
@@ -2028,7 +1966,7 @@ async function buildVendorParticipationReport(
     entry.entry_method === "alternate_free_entry"
       ? "Alternate free entry"
       : "QR scan opt-in",
-    CONTACT_SHARING_RULES_VERSION,
+    entry.rules_version,
     "Yes",
     entry.selection_status,
     entry.pool_status,
@@ -2097,7 +2035,7 @@ async function buildVendorParticipationReport(
       vendor_bd_user_id: vendorBdUserId,
       vendor_name: vendor.name,
       purpose:
-        "Named-vendor draw administration and wedding-related marketing. It contains contact details only for couples who explicitly entered this vendor's draw and accepted the current named-vendor marketing terms.",
+        "Named-vendor draw administration and wedding-related marketing. It contains contact details only for couples who explicitly entered this vendor's draw and accepted the named-vendor marketing terms recorded in each row. Historical rows remain contacts but are not eligible for a new selection without current in-person consent and proof.",
     },
   } as const;
 }
@@ -2155,9 +2093,8 @@ async function buildRaffleOffer(
     odds_basis: snapshot!.odds_basis,
     no_purchase_required: snapshot!.no_purchase_required,
     skill_testing_question_required: snapshot!.skill_testing_question_required,
-    alternate_free_entry_url: snapshot!.alternate_free_entry_url,
     entry_limit:
-      "One valid entry per eligible couple per vendor draw, regardless of method.",
+      "One valid in-show QR entry per eligible couple per vendor draw.",
     eligibility_exclusions: ELIGIBILITY_EXCLUSIONS,
     terms_url: snapshot!.official_rules_url,
     consent_version: snapshot!.rules_version,
@@ -2352,6 +2289,8 @@ async function optInToRaffle(
     vendor_marketing_consented_at: acceptedAt,
     vendor_marketing_consent_text: vendorMarketingConsentText(currentSnapshot!),
     entry_method: "qr_scan_opt_in",
+    in_show_scan_verified: true,
+    in_show_scan_verified_at: acceptedAt,
     promotion_responsibility_acknowledged: true,
     promotion_disclosure_text:
       currentSnapshot!.participant_responsibility_disclosure_text,
@@ -2493,7 +2432,11 @@ async function getVendorRaffleDashboard(
   isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
   const settings = await ensureSettings(vendor, eventKey);
-  const entryPool = await loadVendorEntryPool(vendor, eventKey);
+  const entryPool = await loadVendorEntryPool(
+    vendor,
+    eventKey,
+    isolatedFixture,
+  );
   const activeEntryCount = await activeVendorEntryCount(eventKey, vendor.id);
   const offerActivated = await activatedVendorOfferExists(eventKey, vendor.id);
   const alternateEntryClosure = await alternateEntryClosureStatus(
@@ -2556,6 +2499,7 @@ async function getVendorRaffleDashboard(
     included_entry_count: entryPool.included_entry_count,
     excluded_entry_count: entryPool.excluded_entry_count,
     eligible_entry_count: entryPool.eligible_entry_count,
+    historical_entry_count: entryPool.historical_entry_count,
     selection_in_progress: entryPool.selection_in_progress,
     can_update_entries: entryPool.can_update_entries,
     material_terms_locked: activeEntryCount > 0 || offerActivated,
@@ -3426,12 +3370,12 @@ Deno.serve(async (request) => {
       if (action === "alternate_free_entry_offers") {
         return jsonResponse(
           {
-            ok: true,
-            offers: await publicAlternateFreeEntryOffers(),
-            entry_unit:
-              "One valid entry per eligible couple per vendor draw, regardless of method.",
+            ok: false,
+            code: "offsite_entry_retired",
+            error:
+              "Vendor draws are available only to eligible couples who visit the booth and scan its QR code at the wedding show.",
           },
-          200,
+          410,
           false,
         );
       }
@@ -3655,6 +3599,15 @@ Deno.serve(async (request) => {
           });
         }
 
+        if (!productionShowScanWindowOpen()) {
+          return jsonResponse({
+            ok: false,
+            code: "show_scan_window_closed",
+            error:
+              "QR Bingo booth scans are accepted only during the published wedding-show hours.",
+          }, 403);
+        }
+
         const scanResult = await postQrAction(
           cookieJar,
           new URLSearchParams({
@@ -3701,6 +3654,16 @@ Deno.serve(async (request) => {
       }
 
       if (action === "raffle_offer") {
+        if (
+          !(reviewFixture && isReviewCouple) && !productionShowScanWindowOpen()
+        ) {
+          return jsonResponse({
+            ok: false,
+            code: "show_entry_window_closed",
+            error:
+              "Vendor draw entry is available only during the published wedding-show hours.",
+          }, 403);
+        }
         const vendorId = String(body?.vendor_id || "").trim();
         const vendor = page.vendors.find((item) => item.id === vendorId);
         if (!vendor) {
@@ -3738,6 +3701,16 @@ Deno.serve(async (request) => {
       }
 
       if (action === "raffle_opt_in") {
+        if (
+          !(reviewFixture && isReviewCouple) && !productionShowScanWindowOpen()
+        ) {
+          return jsonResponse({
+            ok: false,
+            code: "show_entry_window_closed",
+            error:
+              "Vendor draw entry is available only during the published wedding-show hours.",
+          }, 403);
+        }
         const vendorId = String(body?.vendor_id || "").trim();
         const vendor = page.vendors.find((item) => item.id === vendorId);
         if (!vendor) {
@@ -3851,6 +3824,7 @@ Deno.serve(async (request) => {
           eventKey,
           String(user.user_id || nativeSession.user_id),
           cleanText(body?.client_platform, 20).toLowerCase(),
+          reviewFixture && isReviewVendor ? reviewFixture : null,
         );
         if (result.rate_limited) {
           return jsonResponse({
@@ -3900,12 +3874,17 @@ Deno.serve(async (request) => {
             user,
             body as Record<string, unknown>,
             eventKey,
+            reviewFixture && isReviewVendor ? reviewFixture : null,
           );
         }
         return jsonResponse({
           ok: true,
           vendor: { id: vendor.id, name: vendor.name },
-          ...await vendorRaffleEntriesResponse(vendor, eventKey),
+          ...await vendorRaffleEntriesResponse(
+            vendor,
+            eventKey,
+            reviewFixture && isReviewVendor ? reviewFixture : null,
+          ),
         });
       }
 
@@ -4068,13 +4047,6 @@ Deno.serve(async (request) => {
         const alternateFreeEntryUrl = isReviewVendor
           ? String(currentSettings.alternate_free_entry_url || "")
           : qrBingoConfig().alternate_free_entry_url;
-        if (enabled && !validHttpsUrl(alternateFreeEntryUrl)) {
-          return jsonResponse({
-            ok: false,
-            error:
-              "Entries cannot open until Wedding Win configures a live alternate free entry route.",
-          }, 503);
-        }
         if (
           enabled &&
           (!legalTermsAccepted || !vendorResponsibilityAcknowledged ||
@@ -4154,7 +4126,7 @@ Deno.serve(async (request) => {
         const materialTermsChanged =
           materialSettingsFingerprint(currentSettings) !==
             materialSettingsFingerprint(nextMaterialSettings) &&
-          !isPermittedNamedVendorMarketingTransition(
+          !isPermittedInPersonEntryRulesTransition(
             currentSettings,
             nextMaterialSettings,
           );

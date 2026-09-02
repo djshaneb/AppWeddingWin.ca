@@ -73,17 +73,28 @@ Deno.test("safe HTTPS subframes stay embedded while unsafe schemes fail closed",
   );
 });
 
-Deno.test("QR URLs accept WeddingWin and legacy payloads but reject foreign hosts", () => {
+Deno.test("production QR payloads accept only canonical WeddingWin booth URLs", () => {
   for (const payload of [
     "https://www.weddingwin.ca/qr?vendor_id=38970",
-    "https://weddingwin.ca/vendor/example",
-    "nws://vendor/38970",
-    "NWS25-002",
-    "38970",
+    "https://weddingwin.ca/qr/?vendor_id=16849",
   ]) {
     assert(qrPayloadUrlAllowed(payload), `${payload} should be accepted as a QR payload`);
   }
   for (const payload of [
+    "38970",
+    "NWS25-002",
+    "nws://vendor/38970",
+    "https://www.weddingwin.ca/vendor/example",
+    "https://www.weddingwin.ca/qr",
+    "https://www.weddingwin.ca/qr?vendor_id=",
+    "https://www.weddingwin.ca/qr?vendor_id=0",
+    "https://www.weddingwin.ca/qr?vendor_id=38970&vendor_id=16849",
+    "https://www.weddingwin.ca/qr?vendor_id=999&vendor=38970",
+    "https://www.weddingwin.ca/qr?vendor=38970",
+    "https://www.weddingwin.ca/qr?vendor_id=38970#vendor_id=16849",
+    "https://user:password@www.weddingwin.ca/qr?vendor_id=38970",
+    "https://www.weddingwin.ca:444/qr?vendor_id=38970",
+    "https://evil.weddingwin.ca/qr?vendor_id=38970",
     "https://attacker.example/qr?vendor_id=38970",
     "http://weddingwin.ca/qr?vendor_id=38970",
     "javascript:38970",

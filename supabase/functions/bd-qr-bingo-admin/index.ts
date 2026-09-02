@@ -425,22 +425,23 @@ Deno.serve(async (request) => {
 
     if (action === "admin_get") {
       const config = await loadPublishedQrBingoConfig(requireAdmin());
-      const alternateEntryReconciliation =
-        await alternateEntryReconciliationStatus(
-          config,
-        );
       return jsonResponse({
         ok: true,
         event_config: publicQrBingoEventConfig(config),
         stats: await dashboardStats(config),
-        alternate_entry_operations: {
-          form_id: 354,
-          pending_count_available: false,
-          reconciliation: alternateEntryReconciliation,
-          guidance:
-            "Review pending Form 354 inquiries in the Brilliant Directories forms inbox, validate the submission, then reconcile one inquiry here using the exact event revision, rules version, and vendor offer version recorded by Form 354.",
-        },
       });
+    }
+
+    if (
+      action === "declare_alternate_entry_reconciliation_complete" ||
+      action === "reconcile_alternate_free_entry"
+    ) {
+      return jsonResponse({
+        ok: false,
+        code: "offsite_entry_retired",
+        error:
+          "Off-site entry is retired. Vendor draws are available only after a couple visits the booth and scans its QR code at the wedding show.",
+      }, 410);
     }
 
     if (action === "declare_alternate_entry_reconciliation_complete") {

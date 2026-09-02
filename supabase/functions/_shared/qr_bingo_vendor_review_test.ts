@@ -51,7 +51,7 @@ Deno.test("vendor draw responses use an explicit DTO and never expose answer sec
     const visibleDto = sourceSection(
       source,
       "function vendorVisibleDraw(",
-      "async function publicAlternateFreeEntryOffers",
+      "function csvCell(",
     );
     const dashboard = sourceSection(
       source,

@@ -1564,7 +1564,7 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
       <span>Prize-draw activity</span>
       <strong><?php echo $ww_qrbs_safe_stats['entries'] === null ? '—' : ww_qrbs_escape($ww_qrbs_safe_stats['entries']); ?> couple entr<?php echo $ww_qrbs_safe_stats['entries'] === 1 ? 'y' : 'ies'; ?></strong>
       <p class="ww-qrbs-help">
-        <?php echo $ww_qrbs_safe_stats['alternate_entries_reconciled'] === null ? '—' : ww_qrbs_escape($ww_qrbs_safe_stats['alternate_entries_reconciled']); ?> alternate entries added ·
+        <?php echo $ww_qrbs_safe_stats['alternate_entries_reconciled'] === null ? '—' : ww_qrbs_escape($ww_qrbs_safe_stats['alternate_entries_reconciled']); ?> historical entry record<?php echo $ww_qrbs_safe_stats['alternate_entries_reconciled'] === 1 ? '' : 's'; ?> retained (not current entries) ·
         <?php echo $ww_qrbs_safe_stats['verified_notices_pending'] === null ? '—' : ww_qrbs_escape($ww_qrbs_safe_stats['verified_notices_pending']); ?> winner emails waiting
       </p>
     </div>
@@ -1696,7 +1696,7 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
       </details>
     </section>
 
-    <details class="ww-qrbs-advanced ww-qrbs-section"<?php echo isset($ww_qrbs_errors['rules_version']) || isset($ww_qrbs_errors['eligibility_region']) || isset($ww_qrbs_errors['official_rules_url']) || isset($ww_qrbs_errors['alternate_free_entry_url']) ? ' open' : ''; ?>>
+    <details class="ww-qrbs-advanced ww-qrbs-section"<?php echo isset($ww_qrbs_errors['rules_version']) || isset($ww_qrbs_errors['eligibility_region']) || isset($ww_qrbs_errors['official_rules_url']) ? ' open' : ''; ?>>
       <summary>Advanced: legal pages and eligibility</summary>
       <div class="ww-qrbs-advanced-body">
         <p class="ww-qrbs-help">These normally stay the same. Change them only when the official rules or eligible region changes.</p>
@@ -1717,12 +1717,7 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
             <input id="ww-qrbs-rules-url" name="official_rules_url" type="url" maxlength="500" required value="<?php echo ww_qrbs_escape($ww_qrbs_form_config['official_rules_url']); ?>">
             <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'official_rules_url'); ?>
           </div>
-          <div class="ww-qrbs-field ww-qrbs-wide">
-            <label for="ww-qrbs-free-entry-url">Alternate free-entry page</label>
-            <input id="ww-qrbs-free-entry-url" name="alternate_free_entry_url" type="url" maxlength="500" required value="<?php echo ww_qrbs_escape($ww_qrbs_form_config['alternate_free_entry_url']); ?>">
-            <p class="ww-qrbs-help">Both pages must be public HTTPS pages on weddingwin.ca.</p>
-            <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'alternate_free_entry_url'); ?>
-          </div>
+          <input class="ww-qrbs-form-token" name="alternate_free_entry_url" type="text" readonly tabindex="-1" aria-hidden="true" autocomplete="off" value="<?php echo ww_qrbs_escape($ww_qrbs_form_config['alternate_free_entry_url']); ?>">
         </div>
       </div>
     </details>
@@ -1733,6 +1728,7 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
     </div>
   </form>
 
+  <?php if (false): /* Historical Form 354 tools are intentionally retired. */ ?>
   <details class="ww-qrbs-advanced ww-qrbs-section"<?php echo isset($ww_qrbs_errors['_reconciliation']) || isset($ww_qrbs_errors['form_inquiry_id']) ? ' open' : ''; ?>>
     <summary>Advanced: process an alternate free-entry request</summary>
     <div class="ww-qrbs-advanced-body">
@@ -1926,4 +1922,5 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
   </form>
     </div>
   </details>
+  <?php endif; ?>
 </div>

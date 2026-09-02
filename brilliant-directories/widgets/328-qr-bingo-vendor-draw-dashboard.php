@@ -146,14 +146,13 @@ if ($ww_qrvd_token === '' && isset($_COOKIE['token'])) {
             <p>Once a promotion opens or receives an entry, its prize, winner count, and repeat-winner rule stay fixed so every entrant receives the offer they accepted. Close the current draw before creating a materially different prize under a new rules version.</p>
           </details>
           <details class="ww-qrvd-disclosures" aria-label="Current draw terms">
-            <summary>View event dates, eligibility, odds, admission, and free-entry rules</summary>
+            <summary>View event dates, eligibility, odds, admission, and entry rules</summary>
             <div>
               <p><strong>Eligibility:</strong> <span data-role="eligibility">Loading…</span></p>
               <p><strong>Entries close:</strong> <span data-role="entry-close">Loading…</span></p>
               <p><strong>Scheduled draw:</strong> <span data-role="draw-at">Loading…</span></p>
               <p><strong>Odds:</strong> <span data-role="odds">Loading…</span></p>
-              <p>General admission is free when obtained in advance while the free allocation remains. VIP admission is paid. Anyone without an advance general-admission ticket must purchase admission at the door. No purchase, ticket, admission, VIP status, show attendance, booth visit, or QR scan is required to enter a vendor draw through the equal alternate free method, and none creates an extra entry or improves the odds.</p>
-              <a class="is-hidden" data-role="free-entry-link" href="#" target="_blank" rel="noopener">View the equal alternate free-entry rule</a>
+              <p>Vendor draws are only for eligible couples attending the wedding show in person. Couples visit your booth, scan your QR code, then separately choose whether to enter. The QR entry replaces a paper ballot. No purchase from your business is required. General admission is free in advance while available; VIP and door admission may be paid, but paid admission never creates an extra entry or improves the odds.</p>
             </div>
           </details>
           <label class="ww-qrvd-check">

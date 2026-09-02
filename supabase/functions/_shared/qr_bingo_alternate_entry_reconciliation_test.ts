@@ -23,11 +23,6 @@ const pageUrl = new URL(
   "../../../brilliant-directories/pages/qr-bingo-free-entry.html",
   import.meta.url,
 );
-const readmeUrl = new URL(
-  "../../../brilliant-directories/README.md",
-  import.meta.url,
-);
-
 function functionBody(sql: string, name: string) {
   const marker = `create or replace function public.${name}`;
   const start = sql.toLowerCase().indexOf(marker.toLowerCase());
@@ -341,193 +336,92 @@ Deno.test("alternate entry RPC uses original submission time and exact service-o
   );
 });
 
-Deno.test("signed admin boundary preserves source time and returns only safe reconciliation fields", async () => {
-  const [edge, widget, readme, ...syncSources] = await Promise.all([
+Deno.test("runtime alternate-entry boundaries fail closed while historical audit code remains available for records", async () => {
+  const [edge, widget, ...syncSources] = await Promise.all([
     Deno.readTextFile(edgeUrl),
     Deno.readTextFile(widgetUrl),
-    Deno.readTextFile(readmeUrl),
     ...syncSourceUrls.map((url) => Deno.readTextFile(url)),
   ]);
 
-  for (
-    const required of [
-      "await requireSignedAdminRequest(request, rawBody);",
-      'action === "reconcile_alternate_free_entry"',
-      "const formSubmittedAt = requiredIsoTimestamp(submission.form_submitted_at)",
-      "const operatorIdentity = plainText(submission.operator_identity, 160)",
-      '"reconcile_qr_bingo_alternate_free_entry"',
-      "p_form_submitted_at: validated.formSubmittedAt",
-      "p_actor: `brilliant-directories-admin:${validated.operatorIdentity}`",
-      "alternate_entries_reconciled",
-      "pending_count_available: false",
-      "No entry or scan progress was changed.",
-    ]
-  ) {
-    assert(
-      edge.includes(required),
-      `admin Edge function is missing ${required}`,
-    );
-  }
+  const adminGetStart = edge.indexOf('if (action === "admin_get")');
+  const retiredStart = edge.indexOf(
+    'action === "declare_alternate_entry_reconciliation_complete" ||',
+  );
+  const legacyDeclarationStart = edge.indexOf(
+    'if (action === "declare_alternate_entry_reconciliation_complete")',
+    retiredStart + 1,
+  );
   assert(
-    !/reconciliation:\s*\{[^}]*couple_(?:email|phone|name)/s.test(edge),
-    "admin response must not construct a contact-data response",
+    edge.includes("await requireSignedAdminRequest(request, rawBody);") &&
+      adminGetStart >= 0 && retiredStart > adminGetStart &&
+      legacyDeclarationStart > retiredStart,
+    "the signed admin retirement gate must run before any historical reconciliation implementation",
+  );
+  const adminGet = edge.slice(adminGetStart, retiredStart);
+  assert(
+    !adminGet.includes("alternate_entry_operations") &&
+      !adminGet.includes("Form 354"),
+    "the live admin dashboard must not advertise retired off-site entry operations",
+  );
+  assert(
+    edge.slice(retiredStart, legacyDeclarationStart).includes(
+      'code: "offsite_entry_retired"',
+    ) && edge.slice(retiredStart, legacyDeclarationStart).includes("}, 410);"),
+    "retired admin alternate-entry actions must return HTTP 410",
+  );
+  assert(
+    widget.includes(
+      "<?php if (false): /* Historical Form 354 tools are intentionally retired. */ ?>",
+    ) && widget.includes("<?php endif; ?>"),
+    "the Brilliant Directories admin must keep historical Form 354 controls out of the rendered UI",
   );
 
-  for (
-    const expected of [
-      "hash_equals($ww_qrbs_csrf, $ww_qrbs_submitted_csrf)",
-      "ww_qrbs_validate_reconciliation($_POST)",
-      "ww_qrbs_validate_toronto_local_datetime",
-      "new DateTimeZone('America/Toronto')",
-      "'action' => 'reconcile_alternate_free_entry'",
-      'name="form_inquiry_id"',
-      'name="form_submitted_local"',
-      'name="vendor_bingo_id"',
-      'name="submitted_rules_version"',
-      'name="operator_identity"',
-      'name="age_of_majority_confirmed"',
-      'name="eligible_residency_confirmed"',
-      'name="not_excluded_confirmed"',
-      'name="rules_acknowledged"',
-      'name="promotion_responsibility_acknowledged"',
-      'name="contact_share_consent_confirmed"',
-      'name="apple_non_sponsor_acknowledged"',
-      "This—not today’s reconciliation time—determines whether the entry met the deadline.",
-      "It does not record a booth visit or add QR Bingo progress.",
-    ]
-  ) {
-    assert(widget.includes(expected), `admin widget is missing ${expected}`);
-  }
-  assert(
-    readme.includes("The BD inbox remains the source of pending inquiries") &&
-      readme.includes(
-        "never writes a booth visit, scan, card-completion, or Bingo-credit",
-      ),
-    "operations documentation must explain pending/manual reconciliation and no scan credit",
-  );
   for (const source of syncSources) {
-    assert(
-      /vendor_responsibility_version:\s*vendorResponsibilityAcknowledged\s*\?\s*qrBingoConfig\(\)\.rules_version\s*:\s*""/
-        .test(source) &&
-        /const responsibilityAcceptedAt\s*=\s*legalTermsAccepted\s*&&\s*rulesReviewed\s*&&\s*vendorResponsibilityAcknowledged/
-          .test(source) &&
-        source.includes(
-          "p_participant_responsibility_disclosure:",
-        ),
-      "vendor settings payload must keep the non-null version invariant and separate responsibility timestamp",
-    );
     const publicOfferBranch = source.slice(
       source.indexOf('if (action === "alternate_free_entry_offers")'),
       source.indexOf("if (!runtimeConfig.scan_enabled"),
     );
     assert(
-      source.includes(
-        "function jsonResponse(body: unknown, status = 200, includeEventConfig = true)",
-      ) &&
-        source.includes(
-          "const eventConfig = includeEventConfig ? qrPublicConfig() : null;",
-        ) &&
-        /\},\s*200,\s*false,?\s*\);/.test(publicOfferBranch) &&
-        !publicOfferBranch.includes("scan_progress_changed"),
-      "public alternate-entry offers must not expose unrelated operational event configuration or scan state",
+      publicOfferBranch.includes('ok: false') &&
+        publicOfferBranch.includes('code: "offsite_entry_retired"') &&
+        /\},\s*410,\s*false,?\s*\);/.test(publicOfferBranch) &&
+        !publicOfferBranch.includes("publicAlternateFreeEntryOffers()") &&
+        !publicOfferBranch.includes("offers:"),
+      "public alternate-entry discovery must return HTTP 410 without exposing offers",
     );
   }
 });
 
-Deno.test("Form 354 documents reference-only labels and current acknowledgements", async () => {
+Deno.test("Form 354 source manifest is a tombstone and the public page exposes no submission path", async () => {
   const parsed = JSON.parse(await Deno.readTextFile(formUrl)) as {
     form_id?: number;
-    operations_reconciliation?: string;
-    fields?: Array<Record<string, unknown>>;
+    status?: string;
+    form_email_on?: boolean;
+    public_page_contains_form?: boolean;
+    new_submissions_accepted?: boolean;
+    historical_schema_and_submissions?: string;
+    fields?: unknown[];
   };
-  const fields = parsed.fields || [];
-  const byName = new Map(fields.map((field) => [String(field.name), field]));
+  const page = await Deno.readTextFile(pageUrl);
 
-  assert(parsed.form_id === 354, "alternate entry must remain Form 354");
   assert(
-    String(parsed.operations_reconciliation || "").includes(
-      "immutable event key/revision",
-    ) &&
-      String(byName.get("vendor_business_name")?.label || "").includes(
-        "reference only",
-      ) &&
-      String(byName.get("event_name")?.label || "").includes("reference only"),
-    "free-text vendor/event values must be explicitly reference-only",
-  );
-  for (
-    const name of [
-      "age_of_majority",
-      "eligible_residency",
-      "not_excluded",
-      "rules_consent",
-      "promotion_responsibility_consent",
-      "draw_administration_contact_share_consent",
-      "apple_non_sponsor_consent",
-    ]
-  ) {
-    assert(byName.get(name)?.required === true, `${name} must be required`);
-  }
-  for (
-    const name of [
-      "rules_consent",
-      "promotion_responsibility_consent",
-      "draw_administration_contact_share_consent",
-      "apple_non_sponsor_consent",
-    ]
-  ) {
-    assert(
-      byName.get(name)?.rules_version === "2026-09-01-vendor-marketing",
-      `${name} must use rules version 2026-09-01-vendor-marketing`,
-    );
-  }
-});
-
-Deno.test("Form 354 required hidden fields receive a Bootstrap validation row before initialization", async () => {
-  const [page, parsed] = await Promise.all([
-    Deno.readTextFile(pageUrl),
-    Deno.readTextFile(formUrl).then((text) => JSON.parse(text)) as Promise<{
-      fields?: Array<Record<string, unknown>>;
-    }>,
-  ]);
-  const byName = new Map(
-    (parsed.fields || []).map((field) => [String(field.name), field]),
-  );
-  const requiredHiddenFields = [
-    "vendor_bingo_id",
-    "event_key",
-    "event_revision",
-    "submitted_rules_version",
-    "vendor_offer_version",
-    "participant_responsibility_disclosure",
-  ];
-
-  for (const name of requiredHiddenFields) {
-    assert(
-      byName.get(name)?.type === "Hidden" &&
-        byName.get(name)?.required === true,
-      `${name} must remain a required hidden server-validated field`,
-    );
-    assert(
-      page.includes(`'${name}'`),
-      `${name} must receive a local validation-row wrapper`,
-    );
-  }
-
-  const wrapperStart = page.indexOf(
-    "var validationForm = document.querySelector",
-  );
-  const formValidationReady = page.indexOf(
-    "if (document.readyState === 'loading')",
+    parsed.form_id === 354 && parsed.status === "retired" &&
+      parsed.form_email_on === false &&
+      parsed.public_page_contains_form === false &&
+      parsed.new_submissions_accepted === false &&
+      (!Array.isArray(parsed.fields) || parsed.fields.length === 0) &&
+      String(parsed.historical_schema_and_submissions || "").includes(
+        "Preserved in Brilliant Directories",
+      ),
+    "Form 354 source must be an explicit no-new-submissions tombstone while directing operators to preserve historical BD records",
   );
   assert(
-    wrapperStart >= 0 &&
-      formValidationReady > wrapperStart &&
-      page.includes(
-        "row.className = 'form-group ww-qr-free-entry-hidden-validation-row';",
-      ) &&
-      page.includes("row.hidden = true;") &&
-      page.includes("field.parentNode.insertBefore(row, field);") &&
-      page.includes("row.appendChild(field);"),
-    "required hidden fields must be wrapped synchronously in hidden Bootstrap rows before validation initializes",
+    page.includes("cannot be used to submit a new entry") &&
+      page.includes('href="/qr"') &&
+      !page.includes("[form=qr_bingo_free_entry]") &&
+      !page.includes("alternate_free_entry_offers") &&
+      !/<form\b/i.test(page) &&
+      !/<script\b/i.test(page),
+    "the former public route must explain in-show entry without rendering or loading Form 354",
   );
 });

@@ -210,6 +210,8 @@ type QrBingoEventConfig = {
   email_delivery_mode: string;
   official_rules_url: string;
   rules_version: string;
+  history_starts_at: string;
+  entry_closes_at: string;
 };
 type QrBingoRaffleOffer = {
   app_review_fixture?: boolean;
@@ -292,13 +294,15 @@ type QrBingoRaffleEntry = {
   couple_phone: string;
   couple_wedding_date: string;
   entry_method?: string;
+  rules_version?: string;
   entered_at?: string;
   included: boolean;
   exclusion_reason?: string;
-  pool_status?: 'included' | 'excluded' | 'already_selected' | 'previous_winner' | 'disqualified';
+  pool_status?: 'included' | 'excluded' | 'already_selected' | 'previous_winner' | 'disqualified' | 'reacceptance_required' | 'in_person_scan_required';
   pool_status_reason?: string;
   selection_status?: string;
   previous_winner?: boolean;
+  selection_eligible?: boolean;
   in_selection_pool?: boolean;
   can_update?: boolean;
   consented_at?: string;
@@ -355,6 +359,7 @@ type QrBingoVendorRaffleResponse = {
   eligible_entry_count?: number;
   included_entry_count?: number;
   excluded_entry_count?: number;
+  historical_entry_count?: number;
   selection_in_progress?: boolean;
   can_update_entries?: boolean;
   material_terms_locked?: boolean;
@@ -438,7 +443,7 @@ const NATIVE_BRIDGE_SESSION_KEY = 'weddingwin.nativeBridgeSession.v1';
 const CHAT_UNREAD_SESSION_KEY = 'weddingwin.chatUnread.v1';
 const PUSH_TOKEN_SESSION_KEY = 'weddingwin.expoPushToken.v1';
 const ACCOUNT_DELETED_EVENT_KEY = 'weddingwin.accountDeleted.v1';
-const QR_BINGO_PARTICIPATION_NOTICE_VERSION = '2026-09-01-vendor-marketing';
+const QR_BINGO_PARTICIPATION_NOTICE_VERSION = '2026-09-01-in-person-entry';
 const VENDOR_RAFFLE_WIZARD_STEPS = [
   { id: 1, label: 'Prize' },
   { id: 2, label: 'Rules & Open' },
@@ -1291,6 +1296,15 @@ function normalizeQrBingoEventConfig(value: unknown): QrBingoEventConfig | null 
     : 0;
   const normalizedText = (candidate: unknown, max: number) =>
     typeof candidate === 'string' ? candidate.trim().slice(0, max) : '';
+  const historyStartsAt = normalizedText(payload.history_starts_at, 80);
+  const entryClosesAt = normalizedText(payload.entry_closes_at, 80);
+  const historyStartsAtMs = new Date(historyStartsAt).getTime();
+  const entryClosesAtMs = new Date(entryClosesAt).getTime();
+  if (
+    !Number.isFinite(historyStartsAtMs) ||
+    !Number.isFinite(entryClosesAtMs) ||
+    historyStartsAtMs >= entryClosesAtMs
+  ) return null;
 
   return {
     event_key: normalizedText(payload.event_key, 160),
@@ -1302,6 +1316,8 @@ function normalizeQrBingoEventConfig(value: unknown): QrBingoEventConfig | null 
     email_delivery_mode: normalizedText(payload.email_delivery_mode, 80),
     official_rules_url: normalizedText(payload.official_rules_url, 500),
     rules_version: normalizedText(payload.rules_version, 80),
+    history_starts_at: historyStartsAt,
+    entry_closes_at: entryClosesAt,
   };
 }
 
@@ -1347,11 +1363,21 @@ function NativeQrScanner({
   const [participationNoticeAccepted, setParticipationNoticeAccepted] = useState(false);
   const [participationNoticeLoading, setParticipationNoticeLoading] = useState(false);
   const [serverMissingContactFields, setServerMissingContactFields] = useState<string[]>([]);
+  const [scanWindowNow, setScanWindowNow] = useState(() => Date.now());
   const scanFeedbackClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bingoCardRequestIdRef = useRef(0);
   const eventConfigRevision = eventConfig?.revision;
   const eventScanEnabled = eventConfig?.scan_enabled;
   const eventVendorDrawsEnabled = eventConfig?.vendor_draws_enabled;
+  const scanOpensAt = new Date(String(eventConfig?.history_starts_at || '')).getTime();
+  const scanClosesAt = new Date(String(eventConfig?.entry_closes_at || '')).getTime();
+  const isolatedFixtureActive = emailTestFixture || appReviewFixture;
+  const productionScanWindowOpen = Number.isFinite(scanOpensAt) &&
+    Number.isFinite(scanClosesAt) &&
+    scanWindowNow >= scanOpensAt && scanWindowNow < scanClosesAt;
+  const scanWindowClosed = Boolean(
+    eventScanEnabled === true && !isolatedFixtureActive && !productionScanWindowOpen,
+  );
   const localMissingContactFields = useMemo(() => missingQrContactFields(member), [member]);
   const missingContactFields = serverMissingContactFields.length > 0
     ? serverMissingContactFields
@@ -1368,6 +1394,13 @@ function NativeQrScanner({
   useEffect(() => {
     requestCameraPermissionRef.current = requestPermission;
   }, [requestPermission]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setScanWindowNow(Date.now());
+    const timer = setInterval(() => setScanWindowNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, [visible]);
 
   useEffect(() => {
     setServerMissingContactFields([]);
@@ -1534,20 +1567,21 @@ function NativeQrScanner({
       !contactProfileComplete ||
       !participationNoticeAccepted ||
       eventScanEnabled !== true ||
+      scanWindowClosed ||
       !canRequestCameraPermission
     ) return;
     requestCameraPermissionRef.current().catch(() => {});
-  }, [canRequestCameraPermission, contactProfileComplete, eventScanEnabled, participationNoticeAccepted, visible]);
+  }, [canRequestCameraPermission, contactProfileComplete, eventScanEnabled, participationNoticeAccepted, scanWindowClosed, visible]);
 
   useEffect(() => {
     if (eventScanEnabled === undefined) return;
-    if (eventScanEnabled) {
+    if (eventScanEnabled && !scanWindowClosed) {
       setScanLocked(false);
       return;
     }
     setScanLocked(true);
     showScanFeedback('', 'idle');
-  }, [eventConfigRevision, eventScanEnabled, showScanFeedback]);
+  }, [eventConfigRevision, eventScanEnabled, scanWindowClosed, showScanFeedback]);
 
   useEffect(() => {
     if (eventVendorDrawsEnabled !== false) return;
@@ -1864,7 +1898,7 @@ function NativeQrScanner({
       !vendorDrawConsentConfirmed ||
       !raffleOffer?.participant_responsibility_disclosure
   );
-  const scanEnabled = eventScanEnabled === true;
+  const scanEnabled = eventScanEnabled === true && !scanWindowClosed;
   const scanDisabled = eventScanEnabled === false;
   const vendorDrawsEnabled = eventVendorDrawsEnabled === true;
 
@@ -1895,6 +1929,8 @@ function NativeQrScanner({
           ? 'Complete your contact details before recording booth visits.'
           : scanDisabled
           ? 'QR Bingo scanning is temporarily paused. Your saved progress is unchanged.'
+          : scanWindowClosed
+          ? 'Booth scanning opens at the Niagara Wedding Show on October 18 from 11:00 a.m. to 3:00 p.m. ET.'
           : 'Visit every vendor booth. Scan each QR. Fill your card.'}
       </Text>
 
@@ -1967,6 +2003,14 @@ function NativeQrScanner({
               accessibilityLabel="Open WeddingWin Privacy Policy">
               <Text style={styles.raffleTermsLink}>View Privacy Policy</Text>
             </TouchableOpacity>
+          </View>
+        ) : scanWindowClosed ? (
+          <View style={styles.qrPermissionPanel}>
+            <QrCode size={52} color={BRAND_COLOR} strokeWidth={1.8} />
+            <Text style={styles.qrPermissionTitle}>Scanning opens at the show</Text>
+            <Text style={styles.qrPermissionText}>
+              QR Bingo booth scans are available at {eventConfig?.event_name || 'the wedding show'} from {formatPromotionDate(eventConfig?.history_starts_at)} until {formatPromotionDate(eventConfig?.entry_closes_at)}.
+            </Text>
           </View>
         ) : scanDisabled ? (
           <View style={styles.qrPermissionPanel}>
@@ -2179,7 +2223,7 @@ function NativeQrScanner({
                 : 'A prior verified winner remains eligible for another random selection.'}
             </Text>
             <Text style={styles.raffleModalText}>
-              Entry is optional. Eligibility, dates, odds, admission, entry limits, and the equal alternate free-entry method are explained in the Draw Rules.
+              Vendor draws are only for eligible couples attending the wedding show in person. Visit the booth, scan its QR code, then choose whether to enter. The QR entry replaces a paper ballot; scanning alone only records the booth visit and QR Bingo progress. No purchase from the vendor is required. One entry is allowed per eligible couple for this vendor draw.
             </Text>
             <Text style={styles.raffleModalText}>
               By entering, I agree that Wedding Win Inc. may share my name, email address, phone number, wedding date, and entry/consent evidence with {raffleOffer?.vendor_business_name || raffleOffer?.vendor_name || 'the named vendor'}. That vendor may use these details to administer this draw and contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time. The named vendor remains responsible for the prize, eligibility, verification, delivery, and fulfilment disputes.
@@ -2201,13 +2245,6 @@ function NativeQrScanner({
               accessibilityRole="link"
               accessibilityLabel="View vendor draw rules">
               <Text style={styles.raffleTermsLink}>View draw rules</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              activeOpacity={0.76}
-              onPress={() => raffleOffer?.alternate_free_entry_url && Linking.openURL(raffleOffer.alternate_free_entry_url).catch(() => setBingoError('The equal alternate entry route could not be opened.'))}
-              accessibilityRole="link"
-              accessibilityLabel="Open equal alternate method of entry">
-              <Text style={styles.raffleTermsLink}>Equal alternate free entry — no purchase, ticket, admission, VIP status, show attendance, booth visit, or QR scan required</Text>
             </TouchableOpacity>
             <Text style={styles.raffleModalText}>
               {raffleRulesViewedVersion === raffleOffer?.consent_version
@@ -2701,7 +2738,7 @@ function NativeHome({
   const showOneAppMenu = !!member && !shouldCompleteProfile && (showCoupleMenu || showVendorMenu);
   const compactOneAppMenu = showOneAppMenu || viewportHeight < 740;
   const vendorRaffleRulesVersion =
-    vendorRaffle?.rules_version || vendorRaffle?.settings?.legal_terms_version || '2026-09-01-vendor-marketing';
+    vendorRaffle?.rules_version || vendorRaffle?.settings?.legal_terms_version || '2026-09-01-in-person-entry';
   const vendorResponsibilityDisclosure =
     vendorRaffle?.vendor_responsibility_disclosure?.trim() || '';
 
@@ -2884,15 +2921,13 @@ function NativeHome({
     const requestExcludePreviousWinners = materialTermsLocked
       ? currentSettings?.exclude_previous_winners !== false
       : draftExcludePreviousWinners;
-    const requestLegalAccepted = materialTermsLocked
-      ? Boolean(currentSettings?.legal_terms_accepted)
-      : draftLegalAccepted;
+    // Material prize terms stay locked after opening, but a vendor must still
+    // be able to accept a newly published rules version. Keep acceptance tied
+    // to the current draft and exact current version instead of freezing the
+    // previous acceptance with the prize fields.
+    const requestLegalAccepted = draftLegalAccepted;
     const draftRulesViewed =
-      requestLegalAccepted && (
-        materialTermsLocked
-          ? vendorRaffle?.rules_current !== false
-          : vendorRaffleRulesViewedVersion === vendorRaffleRulesVersion
-      );
+      requestLegalAccepted && vendorRaffleRulesViewedVersion === vendorRaffleRulesVersion;
     const combinedAcceptance = Boolean(requestLegalAccepted && draftRulesViewed);
     const savedSignature = vendorRaffleSignature(
       draftEnabled,
@@ -4740,20 +4775,10 @@ function NativeHome({
                         </Text>
                       </View>
                       <View style={styles.vendorRaffleInfoCard}>
-                        <Text style={styles.vendorRaffleInfoTitle}>Current event and free-entry terms</Text>
+                        <Text style={styles.vendorRaffleInfoTitle}>Current event and entry terms</Text>
                         <Text style={styles.vendorRaffleInfoText}>
-                          General admission is free when obtained in advance while the free allocation remains. VIP admission is paid, and admission at the door is paid without an advance ticket. No purchase, ticket, admission, VIP status, attendance, booth visit, or QR scan is required through the equal alternate free-entry method. Eligibility: {vendorRaffle?.eligibility_region || vendorRaffle?.settings?.eligibility_region || 'see Official Rules'}. Entries close {formatPromotionDate(vendorRaffle?.entry_closes_at || vendorRaffle?.settings?.entry_closes_at)}. Scheduled draw {formatPromotionDate(vendorRaffle?.draw_at || vendorRaffle?.settings?.draw_at)}. {vendorRaffle?.odds_basis || vendorRaffle?.settings?.odds_basis || 'Each accepted entry has an equal chance in random potential-winner selection.'}
+                          Vendor draws are for eligible couples attending the wedding show in person. Couples visit your booth, scan your QR code, and separately choose whether to enter. The QR entry replaces a paper ballot. General admission is free in advance while available; VIP and door admission may be paid, but paid admission never improves the odds. Eligibility: {vendorRaffle?.eligibility_region || vendorRaffle?.settings?.eligibility_region || 'see Official Rules'}. Entries close {formatPromotionDate(vendorRaffle?.entry_closes_at || vendorRaffle?.settings?.entry_closes_at)}. Scheduled draw {formatPromotionDate(vendorRaffle?.draw_at || vendorRaffle?.settings?.draw_at)}. {vendorRaffle?.odds_basis || vendorRaffle?.settings?.odds_basis || 'Each accepted entry has an equal chance in random potential-winner selection.'}
                         </Text>
-                        {vendorRaffle?.alternate_free_entry_url || vendorRaffle?.settings?.alternate_free_entry_url ? (
-                          <TouchableOpacity
-                            onPress={() => Linking.openURL(String(vendorRaffle?.alternate_free_entry_url || vendorRaffle?.settings?.alternate_free_entry_url)).catch(() => setVendorRaffleError('The equal alternate entry route could not be opened.'))}
-                            accessibilityRole="link"
-                            accessibilityLabel="View equal alternate method of entry">
-                            <Text style={styles.vendorRaffleRulesLink}>View equal alternate entry route</Text>
-                          </TouchableOpacity>
-                        ) : (
-                          <Text style={styles.vendorRaffleError}>Entries must remain off until Wedding Win configures a live equal alternate free-entry route.</Text>
-                        )}
                       </View>
                       <TouchableOpacity
                         style={styles.signupConsentToggle}
@@ -4793,10 +4818,6 @@ function NativeHome({
                     markVendorRaffleLocalEdit();
                     setRaffleEnabled((value) => {
                       const nextValue = !value;
-                      if (nextValue && !(vendorRaffle?.alternate_free_entry_url || vendorRaffle?.settings?.alternate_free_entry_url)) {
-                        Alert.alert('Equal alternate entry required', 'Wedding Win must configure a live alternate method of entry (AMOE) that provides an equal entry opportunity and equal odds without purchase, admission, attendance, or QR scanning before entries can open.');
-                        return false;
-                      }
                       if (nextValue && (!raffleLegalAccepted || vendorRaffleRulesViewedVersion !== vendorRaffleRulesVersion)) {
                         setVendorRaffleRulesExpanded(true);
                         Alert.alert('Confirmation required', 'Check the box confirming you have read and accept the current Official Rules and vendor responsibilities.');
@@ -5006,7 +5027,7 @@ function NativeHome({
                       </View>
                       <Text style={styles.vendorRafflePreviewSection}>Why you received this</Text>
                       <Text style={styles.vendorRafflePreviewBody}>
-                        You entered this vendor{'\u2019s'} optional prize draw through one of its permitted entry methods.
+                        You entered this vendor{'\u2019s'} optional prize draw after scanning at the wedding show.
                       </Text>
                       <Text style={styles.vendorRafflePreviewFooter}>WeddingWin.ca</Text>
                     </View>
@@ -5140,6 +5161,10 @@ function NativeHome({
                       ? 'Disqualified'
                       : poolStatus === 'previous_winner'
                       ? 'Prior winner'
+                      : poolStatus === 'reacceptance_required'
+                      ? 'Scan and reaccept required'
+                      : poolStatus === 'in_person_scan_required'
+                      ? 'In-show scan required'
                       : poolStatus === 'excluded'
                       ? 'Excluded'
                       : 'Included';
@@ -5238,7 +5263,7 @@ function NativeHome({
                           <View style={styles.vendorRaffleEntryManagement}>
                             <Text style={styles.vendorRaffleEntryReference}>Entry reference: {participantReference}</Text>
                             <Text style={styles.vendorRaffleEntryText}>
-                              {entry.entry_method === 'alternate_free_entry' ? 'Alternate free entry' : 'QR scan opt-in'}
+                              {entry.entry_method === 'alternate_free_entry' ? 'Archived historical entry' : 'In-show QR entry'}
                               {entry.entered_at ? ` · ${formatPromotionDate(entry.entered_at)}` : ''}
                             </Text>
                             {entry.pool_status_reason ? (

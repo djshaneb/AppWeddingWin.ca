@@ -358,7 +358,7 @@ Deno.test("alternate-entry closure is append-only and blocks production draws un
   );
 });
 
-Deno.test("Edge offers are minimized snapshots and stale opt-ins refresh with 409", async () => {
+Deno.test("authenticated offers are minimized snapshots, public discovery is retired, and stale opt-ins refresh with 409", async () => {
   const sources = await Promise.all(
     syncUrls.map((url) => Deno.readTextFile(url)),
   );
@@ -369,13 +369,9 @@ Deno.test("Edge offers are minimized snapshots and stale opt-ins refresh with 40
         profileUrl.includes("resolvedHost !== baseHost"),
       "vendor profile links must remain HTTPS and on the Wedding Win host",
     );
-    const publicOffers = sourceFunction(
-      source,
-      "publicAlternateFreeEntryOffers",
-    );
     const authOffer = sourceFunction(source, "buildRaffleOffer");
     const optIn = sourceFunction(source, "optInToRaffle");
-    for (const offerBody of [publicOffers, authOffer]) {
+    for (const offerBody of [authOffer]) {
       for (
         const required of [
           "vendor_offer_version",
@@ -414,6 +410,21 @@ Deno.test("Edge offers are minimized snapshots and stale opt-ins refresh with 40
         assert(!offerBody.includes(forbidden), `offer DTO leaks ${forbidden}`);
       }
     }
+    const retiredOfferStart = source.indexOf(
+      'if (action === "alternate_free_entry_offers")',
+    );
+    const retiredOfferEnd = source.indexOf(
+      "if (!runtimeConfig.scan_enabled",
+      retiredOfferStart,
+    );
+    const retiredOffer = source.slice(retiredOfferStart, retiredOfferEnd);
+    assert(
+      retiredOfferStart >= 0 && retiredOfferEnd > retiredOfferStart &&
+        retiredOffer.includes('code: "offsite_entry_retired"') &&
+        /\},\s*410,\s*false,?\s*\);/.test(retiredOffer) &&
+        !retiredOffer.includes("offers:"),
+      "public off-site offer discovery must return HTTP 410 without an offer DTO",
+    );
     for (
       const required of [
         "body.vendor_offer_version",
@@ -444,7 +455,7 @@ Deno.test("Edge offers are minimized snapshots and stale opt-ins refresh with 40
   }
 });
 
-Deno.test("locked vendor offers permit only the one-way consent-only marketing reacceptance", async () => {
+Deno.test("locked vendor offers permit only the one-way fresh in-person rules reacceptance", async () => {
   const sources = await Promise.all(
     syncUrls.map((url) => Deno.readTextFile(url)),
   );
@@ -456,15 +467,15 @@ Deno.test("locked vendor offers permit only the one-way consent-only marketing r
     );
     const transition = sourceFunction(
       source,
-      "isPermittedNamedVendorMarketingTransition",
+      "isPermittedInPersonEntryRulesTransition",
     );
 
     assert(
       source.includes(
-        'const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-08-30-contact-share";',
+        'const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";',
       ) &&
         source.includes(
-          'const CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";',
+          'const CONTACT_SHARING_RULES_VERSION = "2026-09-01-in-person-entry";',
         ) &&
         transition.includes(
           "cleanText(current.legal_terms_version, 80) ===\n      PREVIOUS_CONTACT_SHARING_RULES_VERSION",
@@ -472,11 +483,12 @@ Deno.test("locked vendor offers permit only the one-way consent-only marketing r
         transition.includes(
           "cleanText(next.legal_terms_version, 80) === CONTACT_SHARING_RULES_VERSION",
         ) &&
+        transition.includes('"visited this vendor booth in person"') &&
         transition.includes(
           "nonConsentMaterialSettingsFingerprint(current) ===",
         ) &&
         transition.includes("nonConsentMaterialSettingsFingerprint(next)"),
-      "the locked-offer exception must be exactly the old-to-current named-vendor marketing transition",
+      "the locked-offer exception must be exactly the immediately-prior-to-current in-person rules transition",
     );
 
     for (
@@ -519,8 +531,8 @@ Deno.test("locked vendor offers permit only the one-way consent-only marketing r
       .replace("current: Partial<RaffleSettings>", "current")
       .replace("next: Partial<RaffleSettings>", "next");
     const permitsTransition = new Function(`
-      const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-08-30-contact-share";
-      const CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";
+      const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";
+      const CONTACT_SHARING_RULES_VERSION = "2026-09-01-in-person-entry";
       function cleanText(value, max) {
         return String(value || "").replace(/\\s+/g, " ").trim().slice(0, max);
       }
@@ -536,7 +548,7 @@ Deno.test("locked vendor offers permit only the one-way consent-only marketing r
       }
       ${executableFingerprint}
       ${executableTransition}
-      return isPermittedNamedVendorMarketingTransition;
+      return isPermittedInPersonEntryRulesTransition;
     `)() as (
       current: Record<string, unknown>,
       next: Record<string, unknown>,
@@ -562,15 +574,15 @@ Deno.test("locked vendor offers permit only the one-way consent-only marketing r
     };
     const current = {
       ...materialSettings,
-      legal_terms_version: "2026-08-30-contact-share",
+      legal_terms_version: "2026-09-01-vendor-marketing",
       participant_responsibility_disclosure_text:
-        "Prior contact-sharing disclosure.",
+        "Prior named-vendor marketing disclosure.",
     };
     const next = {
       ...materialSettings,
-      legal_terms_version: "2026-09-01-vendor-marketing",
+      legal_terms_version: "2026-09-01-in-person-entry",
       participant_responsibility_disclosure_text:
-        "The vendor may contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time.",
+        "I visited this vendor booth in person. The vendor may contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time.",
     };
     assert(
       permitsTransition(current, next),
@@ -581,7 +593,7 @@ Deno.test("locked vendor offers permit only the one-way consent-only marketing r
         !permitsTransition(current, current) &&
         !permitsTransition(next, next) &&
         !permitsTransition(
-          { ...current, legal_terms_version: "2026-08-29" },
+          { ...current, legal_terms_version: "2026-08-30-contact-share" },
           next,
         ) &&
         !permitsTransition(current, {
@@ -589,7 +601,7 @@ Deno.test("locked vendor offers permit only the one-way consent-only marketing r
           participant_responsibility_disclosure_text:
             "A disclosure without the required marketing withdrawal language.",
         }),
-      "reverse, same-version, arbitrary-old, and incomplete-disclosure transitions must stay blocked",
+      "reverse, same-version, pre-marketing, and incomplete-disclosure transitions must stay blocked",
     );
 
     const materialMutations: Array<[string, unknown]> = [
@@ -617,7 +629,7 @@ Deno.test("locked vendor offers permit only the one-way consent-only marketing r
     }
 
     assert(
-      /const materialTermsChanged\s*=\s*materialSettingsFingerprint\(currentSettings\)\s*!==\s*materialSettingsFingerprint\(nextMaterialSettings\)\s*&&\s*!isPermittedNamedVendorMarketingTransition\(\s*currentSettings,\s*nextMaterialSettings,?\s*\)/
+      /const materialTermsChanged\s*=\s*materialSettingsFingerprint\(currentSettings\)\s*!==\s*materialSettingsFingerprint\(nextMaterialSettings\)\s*&&\s*!isPermittedInPersonEntryRulesTransition\(\s*currentSettings,\s*nextMaterialSettings,?\s*\)/
         .test(source),
       "the material lock guard must invoke the narrow transition exception without bypassing ordinary change detection",
     );

@@ -11,7 +11,7 @@ Do not paste until:
 - [ ] Reset couple `38971`/isolated event; attach `sample-qr-review-vendor-38970.png`.
 - [ ] Physical Apple/Google, printed QR, push, and iPad gates pass.
 - [ ] Final privacy policy, free-app/paid-admission boundary, vendor-draw rules, and role disclosures are published and verified.
-- [ ] Vendor `38970` has reviewed and accepted Official Rules version `2026-09-01-vendor-marketing`, including the named-vendor contact-use and marketing responsibilities; the isolated fixture is enabled, reset, contains only fictional contact/profile data, and still suppresses outbound email and any real prize.
+- [ ] Vendor `38970` has reviewed and accepted Official Rules version `2026-09-01-in-person-entry`, including the named-vendor contact-use and marketing responsibilities; the isolated fixture is enabled, reset, contains only fictional contact/profile data, and still suppresses outbound email and any real prize.
 
 ```text
 WeddingWin connects couples with wedding vendors. App/account features are free with no subscriptions or IAP. Advance general admission is free while allocated tickets remain; VIP is paid; without an advance general ticket, admission must be purchased at the door.
@@ -28,12 +28,12 @@ COUPLE FLOW
 2. Use the home screen's vendor-search, message, website, and QR Bingo tools.
 3. In Private Messages, open the prepared review-vendor conversation. Messaging is text-only; image sending is disabled.
 4. In QR Bingo, scan the attached QR for vendor 38970. The scan records an isolated booth visit and cannot change production event data. Camera frames are not uploaded.
-5. A separate offer appears. Open rules 2026-09-01-vendor-marketing; confirm eligibility and explicitly agree that vendor 38970 may receive the fictional name, email, provided phone/wedding date, and consent evidence for this draw and its wedding-related offers or promotions; then Enter. Scanning alone never enters, and declining leaves only the booth-visit record. The equal alternate method requires no purchase, admission, attendance, booth visit, or scan and never adds QR progress. The fixture awards no real prize or email.
+5. A separate offer appears. Open rules 2026-09-01-in-person-entry; confirm eligibility and explicitly agree that vendor 38970 may receive the fictional name, email, provided phone/wedding date, and consent evidence for this draw and its wedding-related offers or promotions; then Enter. Scanning alone never enters, and declining leaves only the booth-visit record. In production, this in-show QR entry is the digital replacement for a paper ballot and is available only after the eligible couple visits and scans the named vendor's booth. One entry is allowed per eligible couple for that vendor draw. The isolated fixture emulates the booth scan for review, awards no real prize, and sends no email.
 
 VENDOR FLOW
 1. Sign out, choose Vendor, and use the additional account above.
 2. Open Vendor Dashboard, Private Messages, and Draw.
-3. Draw shows settings, count, named-vendor entrant CSV, and potential-winner flow. Accept rules 2026-09-01-vendor-marketing if asked. The CSV is exact-vendor/event scoped, uses fictional name/contact/wedding data and consent evidence, and marks the named-vendor marketing consent as included. Legacy entries without fresh current-version consent must be absent. Before confirm/disqualify, independently verify eligibility, attest that the declaration/release was obtained, enter the math answer, and add a dated non-sensitive method/reference note. Wedding Win records the attestation but does not perform that vendor work. Review-fixture notices stay blocked; production verified-winner notices are not suppressed.
+3. Draw shows settings, count, named-vendor entrant CSV, and potential-winner flow. Accept rules 2026-09-01-in-person-entry if asked. The CSV is exact-vendor/event scoped, uses fictional name/contact/wedding data and consent evidence, and marks the named-vendor marketing consent as included. Legacy entries without fresh current-version consent must be absent. Before confirm/disqualify, independently verify eligibility, attest that the declaration/release was obtained, enter the math answer, and add a dated non-sensitive method/reference note. Wedding Win records the attestation but does not perform that vendor work. Review-fixture notices stay blocked; production verified-winner notices are not suppressed.
 4. The prepared conversation mirrors WeddingWin.ca text chat. The active couple can reply from the website and the reply appears in the vendor app.
 
 MESSAGING SAFETY

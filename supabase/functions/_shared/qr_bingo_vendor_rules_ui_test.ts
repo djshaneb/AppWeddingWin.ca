@@ -90,3 +90,53 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
     "the optional visual guide must expose its instructions to assistive technology",
   );
 });
+
+Deno.test("locked prize terms still allow current rules reacceptance without mutating material fields", async () => {
+  const app = await Deno.readTextFile(
+    new URL("../../../app/(tabs)/index.tsx", import.meta.url),
+  );
+  const save = sourceSection(
+    app,
+    "const saveVendorRaffle = useCallback",
+    "const closeVendorRaffle = useCallback",
+  );
+
+  for (
+    const lockedMaterialField of [
+      "currentSettings?.prize_title || draftPrizeTitle",
+      "currentSettings?.prize_description || draftPrizeDescription",
+      "Number(currentSettings?.prize_approx_value_cad || draftPrizeApproxValueCad)",
+      "normalizeRaffleMaxWinners(currentSettings?.max_winners)",
+      "currentSettings?.exclude_previous_winners !== false",
+    ]
+  ) {
+    assert(
+      save.includes(lockedMaterialField),
+      `locked save path is missing preserved material value ${lockedMaterialField}`,
+    );
+  }
+  assert(
+    save.includes("const requestLegalAccepted = draftLegalAccepted;") &&
+      save.includes(
+        "requestLegalAccepted && vendorRaffleRulesViewedVersion === vendorRaffleRulesVersion",
+      ) &&
+      save.includes(
+        "const combinedAcceptance = Boolean(requestLegalAccepted && draftRulesViewed);",
+      ) &&
+      save.includes("legal_terms_accepted: combinedAcceptance") &&
+      save.includes("consent_version: vendorRaffleRulesVersion") &&
+      save.includes("rules_viewed: combinedAcceptance") &&
+      save.includes("apple_non_sponsor_acknowledged: combinedAcceptance") &&
+      save.includes("vendor_responsibility_acknowledged: combinedAcceptance"),
+    "locked draws must submit the vendor's current draft acceptance only after the current rules version was viewed",
+  );
+  assert(
+    !save.includes(
+      "materialTermsLocked\n      ? Boolean(currentSettings?.legal_terms_accepted)",
+    ) &&
+      !save.includes(
+        "materialTermsLocked ? Boolean(currentSettings?.legal_terms_accepted)",
+      ),
+    "locked draws must not freeze legal acceptance to the previously saved version",
+  );
+});

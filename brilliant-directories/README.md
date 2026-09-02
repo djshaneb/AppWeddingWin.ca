@@ -13,11 +13,11 @@ result by fetching the widget source again after its automatic cache refresh.
 | `widgets/336-qr-bingo-draw-email-sender.php` | 336 | `/qr-bingo-draw-email-send`; verifies and sends draw emails |
 | `widgets/ww-qr-bingo-settings.php` | 361 | `/admin/go.php?widget=ww_qr_bingo_settings`; QR Bingo Settings in the BD admin Plugins section |
 | `pages/qr-bingo-official-rules.html` | custom page content | `/qr-bingo-vendor-draw-rules`; vendor prize-draw rules and App Store sponsor-role disclosures |
-| `pages/qr-bingo-free-entry.html` | custom page content | `/qr-bingo-free-entry`; public no-purchase/no-attendance/no-scan entry route |
+| `pages/qr-bingo-free-entry.html` | custom page content | `/qr-bingo-free-entry`; retired-route notice that directs couples to the in-show QR flow and contains no entry form |
 | `pages/about-terms.html` | custom page content | `/about/terms`; WeddingWin Terms of Use |
 | `pages/about-privacy.html` | custom page content | `/about/privacy`; WeddingWin Privacy Policy |
 | `pages/event-ticket-terms.html` | page 86 content | `/terms-of-service`; event admission and ticket terms, including free advance general admission, paid VIP, paid door admission, and the separate vendor-draw boundary |
-| `forms/qr-bingo-free-entry.json` | form 354 | `qr_bingo_free_entry`; stores alternate entry requests in the BD forms inbox and emails operations |
+| `forms/qr-bingo-free-entry.json` | historical form 354 definition | `qr_bingo_free_entry`; retained for migration/audit provenance only and not a current entry route |
 
 ## Live QR Bingo architecture
 
@@ -41,15 +41,15 @@ widget API strips them from `widget_data`.
 
 | Component | Live responsibility |
 |---|---|
-| BD widget 361 (`ww_qr_bingo_settings`) | Admin-only settings and Form 354 operations form. It loads the published revision, shows operational counts, publishes revision-checked settings, and reconciles a validated alternate-entry inquiry using its separately recorded event revision, exact vendor offer version, and immutable vendor ID. |
-| `bd-qr-bingo-admin` Edge Function | Serves the read-only `public_config` DTO to widget 258 and handles signed `admin_get`, `publish`, and alternate-entry reconciliation requests from widget 361. |
+| BD widget 361 (`ww_qr_bingo_settings`) | Admin-only event settings. It loads the published revision, shows operational counts, and publishes revision-checked settings. Legacy Form 354 code is retained but not rendered, and its server actions fail closed because off-site entry is retired. |
+| `bd-qr-bingo-admin` Edge Function | Serves the read-only `public_config` DTO to widget 258 and handles signed `admin_get` and `publish` requests from widget 361. Former off-site-entry reconciliation actions return HTTP 410 `offsite_entry_retired`. |
 | `bd-qr-bingo-sync` Edge Function | Native couple QR roster, scan/progress, vendor-offer, and optional vendor-draw entry flow. |
 | BD widget 328 | Website vendor settings and draw controls. It uses the same Edge contract as the native app, shows `entry_count`, and downloads an authenticated, audited contact CSV containing only entrants who accepted the current named-vendor draw-administration disclosure. |
 | `bd-qr-bingo-vendor-sync` Edge Function | Shared website/native vendor settings, entrant-count, vendor-scoped contact export, potential-winner selection, and verified fulfillment flow. |
 | `qr_bingo_event_configs` | Private, RLS-enabled immutable event revisions. Exactly one revision is published. Operational clients read it only through service-role Edge code. |
 | `qr_bingo_event_config_audit` | Immutable seed/publish history, including actor, expected revision, previous revision, and the full configuration snapshot. |
 | `qr_bingo_draw_email_deliveries` | Service-only, per-draw/per-channel delivery ledger used to claim and finalize vendor and couple fulfillment notices safely. |
-| `qr_bingo_raffle_entry_identities` | Service-only keyed identity registry. It stores no email and prevents the same normalized email from receiving another chance for the same event/vendor through a different entry method. |
+| `qr_bingo_raffle_entry_identities` | Service-only keyed identity registry. It stores no email and prevents the same normalized email from receiving another chance for the same event/vendor, including across retained historical entry-method records. |
 
 Widget 361 is intentionally reachable only at
 `/admin/go.php?widget=ww_qr_bingo_settings`. It accepts only GET and bounded
@@ -62,10 +62,11 @@ accepts only a short clock window and atomically consumes the nonce through
 than in source code.
 
 The public configuration endpoint exposes only the published operational DTO.
-Both the shared Edge parser and the database restrict official-rules and
-alternate-entry links to HTTPS URLs on `weddingwin.ca` or
-`www.weddingwin.ca`. The database remains authoritative for field, schedule,
-and plain-text constraints even if a caller bypasses the admin form.
+Both the shared Edge parser and the database restrict official-rules URLs, and
+the legacy compatibility field that formerly stored an alternate-entry URL, to
+HTTPS URLs on `weddingwin.ca` or `www.weddingwin.ca`. The compatibility field
+does not create an entry route. The database remains authoritative for field,
+schedule, and plain-text constraints even if a caller bypasses the admin form.
 
 ## Configuration migrations
 
@@ -76,9 +77,10 @@ These forward migrations define the live administration and delivery model:
 | `20260829180000_create_qr_bingo_event_configuration.sql` | Creates immutable event revisions, the audit and nonce tables, the Vault-backed HMAC loader, and the transactional publish RPC. Seeds `niagara-wedding-show-2026` with scans and vendor draws enabled. It does not bulk-change vendor prize settings or legal-acceptance history. |
 | `20260829194500_harden_qr_bingo_transactions.sql` | Requires a new rules version for material legal changes, adds atomic vendor-setting compare-and-update, and creates the token-fenced draw-email delivery ledger with claim, finalize, and operator-reconcile RPCs. |
 | `20260829201500_return_qr_bingo_publish_conflicts.sql` | Converts expected publish conflicts and validation failures into a completed JSON result so the admin request can return a clean conflict without leaving an aborted transaction. |
-| `20260830110000_add_qr_bingo_alternate_entry_reconciliation.sql` | Adds entry-method/source/responsibility audit fields, a Vault-keyed normalized-email identity registry, current vendor responsibility acceptance, and the service-only atomic Form 354 reconciliation RPC. Historical entries are retained. |
+| `20260830110000_add_qr_bingo_alternate_entry_reconciliation.sql` | Historical migration: added entry-method/source/responsibility audit fields, a Vault-keyed normalized-email identity registry, vendor responsibility acceptance, and a service-only Form 354 reconciliation RPC. Retained historical entries and schema fields remain audit provenance; the current server rejects new off-site entries. |
 | `20260830140000_enable_named_vendor_contact_exports.sql` | Historical foundation: adds explicit named-vendor draw-administration scope, false-by-default marketing-consent evidence, contact-export indexes, and metadata-only report-audit fields. It predates the current combined-consent contract and does not broaden historical entries. |
-| `20260901070000_enable_named_vendor_marketing_consent.sql` | Defines current contract `2026-09-01-vendor-marketing`: an explicit named-vendor draw entry includes contact sharing and that named vendor's wedding-related marketing consent; exact-vendor/event reports mark consent included; legacy entries remain excluded until fresh current-version consent. |
+| `20260901070000_enable_named_vendor_marketing_consent.sql` | Historical consent foundation for version `2026-09-01-vendor-marketing`: an explicit named-vendor draw entry includes contact sharing and that named vendor's wedding-related marketing consent; exact-vendor/event reports mark consent included; legacy entries remain excluded until fresh current-version consent. |
+| `20260901072000_disable_qr_bingo_alternate_free_entry.sql` | Retires new off-site entries while preserving historical rows and RPC/schema provenance. New QR opt-ins require server-stamped `in_show_scan_verified = true` and `in_show_scan_verified_at`; the former reconciliation RPC is a compatibility tombstone and selection no longer waits on a Form 354 queue. The active in-show rules and consent contract is version `2026-09-01-in-person-entry`. |
 
 Publishing is append-only. `publish_qr_bingo_event_config` serializes
 publishers, compares `p_expected_revision` with the current published revision,
@@ -143,32 +145,23 @@ and entry confirmation.
 
 Before a vendor draw can open, the native app requires a prize description and
 positive approximate retail value in CAD, then shows the eligible region,
-entry close/draw times, odds basis, no-purchase disclosure, and
-skill-testing-question condition. A vendor draw also fails closed until
-`QR_BINGO_ALTERNATE_FREE_ENTRY_URL` is a live HTTPS route that accepts entries
-without a purchase, ticket, admission, VIP status, event attendance, booth
-visit, or QR scan.
+entry close/draw times, odds basis, the fact that no purchase from the named
+vendor is required, and the skill-testing-question condition.
 
-The live alternate route is `https://www.weddingwin.ca/qr-bingo-free-entry`.
-Submissions enter the Brilliant Directories forms inbox for validation against
-the named vendor's current settings, entry period, and
-one-valid-entry-per-eligible-couple limit regardless of method. This operations
-queue must be reconciled with app entries before selection; a repeat submission
-or use of both methods never creates an additional chance.
+Vendor draws are available only to eligible couples attending the wedding show
+in person. The couple visits the participating vendor's booth, scans that
+vendor's QR code while signed in, reviews the separate draw offer and current
+rules, completes the eligibility and consent checks, and affirmatively chooses
+whether to enter. The QR entry is the digital replacement for a paper ballot.
+Scanning alone records only the booth visit and QR Bingo progress; it never
+enters the couple automatically. Each eligible couple may receive only one
+valid entry per named vendor draw.
 
-The public page accepts only trusted offers with a positive event revision and
-an ISO/RFC 3339 `vendor_offer_version`. Form 354 stores the selected immutable
-vendor ID, event key, submitted event revision, rules version, and exact vendor
-offer version in required hidden fields. Those browser values are audit and
-routing inputs, not a trust boundary; signed service reconciliation verifies
-them against the authoritative event and vendor-offer records.
-
-The canonical admission and odds disclosure is: general admission is free when
-obtained in advance while the free allocation remains; VIP admission is paid;
-anyone without an advance general-admission ticket must purchase admission at
-the door; and no purchase, ticket, admission, VIP status, show attendance, booth
-visit, or QR scan is required through the equal alternate free method or creates
-an extra entry or improves vendor-draw odds.
+The canonical admission and odds disclosure is: advance general admission is
+free while the free allocation remains; VIP admission is paid; anyone without
+an advance general-admission ticket must purchase admission at the door; no
+purchase from the named vendor is required to enter that vendor's draw; and
+paid admission never creates an extra entry or improves the odds.
 
 For every vendor draw, the named vendor is the promotion sponsor, operator, and
 prize provider and is solely responsible for lawful and accurate terms,
@@ -181,40 +174,29 @@ fulfil the vendor's prize. It remains responsible for its own technology,
 privacy, security, representations, administrative conduct, and non-waivable
 duties and does not claim blanket immunity.
 
-The public Terms, Privacy Policy, Vendor Prize-Draw Official Rules, and alternate
-free-entry page are required legal and operational surfaces and must remain
-published, versioned, linked, and synchronized. The `/qr` scanner and vendor
-dashboard are core operational pages. `/qr_results` is an intended public
-product feature with privacy limits, not a substitute for any required legal
-page. No public page in this directory is currently marked obsolete; do not
-delete one without a replacement-flow and legal review.
+The public Terms, Privacy Policy, and Vendor Prize-Draw Official Rules are
+required legal surfaces and must remain published, versioned, linked, and
+synchronized. The `/qr` scanner and vendor dashboard are core operational
+pages. `/qr_results` is an intended public product feature with privacy limits,
+not a substitute for any required legal page. `/qr-bingo-free-entry` is retained
+only as a clear retired-route notice; it contains no entry form and directs
+couples to the in-show QR flow.
 
-Form 354's vendor and event names remain reference-only. Its required hidden
-fields preserve the selected vendor ID, event key, submitted event revision,
-rules version, and exact vendor offer version shown to the participant, but an
-authenticated administrator must still open the inquiry in the BD forms inbox
-and use widget 361 to copy its immutable inquiry ID and verify every value.
-Widget 361 keeps the current admin `expected_revision` separate from the
-inquiry's `submitted_event_revision` and `vendor_offer_version`; the signed Edge
-action passes all three without silently substituting the current revision for
-the participant's snapshot. The service-role RPC then locks and rechecks the published
-configuration, currently enabled vendor setting, schedule, current rules,
-vendor responsibility acceptance, participant eligibility attestations, and
-Apple acknowledgement before inserting anything. Unknown, disabled, closed,
-stale-event, stale-offer, repeated-source, and repeated-email requests fail
-without an entry. A stale vendor offer returns HTTP 409
-`stale_vendor_offer`; POST/Redirect/GET reloads current admin data and does not
-retain the stale submission.
+### Historical off-site-entry provenance
 
-The reconciliation stores `entry_method = alternate_free_entry`, a unique
-`bd-form-354:<inquiry-id>` source, and the applicable participant/vendor
-responsibility snapshots. Duplicate checking uses a dedicated Vault-keyed HMAC
-of the normalized email; the raw email is never stored in the identity registry
-or returned by the admin endpoint. Reconciliation writes only the vendor-draw
-entry table—it never writes a booth visit, scan, card-completion, or Bingo-credit
-record. The BD inbox remains the source of pending inquiries, so widget 361
-reports reconciled totals and explicit manual guidance rather than claiming it
-can calculate the number still pending in BD.
+Migration `20260830110000_add_qr_bingo_alternate_entry_reconciliation.sql`,
+Form 354, the `alternate_free_entry` entry-method value, and related audit
+fields document an earlier architecture. Under that architecture, Form 354
+captured a selected vendor ID, event key, event revision, rules version, and
+vendor-offer version, and the service reconciled a validated inquiry without
+writing booth-visit or QR Bingo progress. Historical rows are retained for
+audit, retention, and migration integrity.
+
+That architecture is not a current way to enter. The public compatibility page
+contains no form, the public offer endpoint returns that in-show attendance and
+a booth QR scan are required, and both former signed admin reconciliation
+actions return HTTP 410 `offsite_entry_retired`. Do not process a new Form 354
+submission or describe the legacy compatibility field as an active entry URL.
 
 There is no production reviewer/test-vendor allowlist, early-draw bypass,
 outbound test email path, or multi-winner privilege. Migration `20260828162602`
@@ -226,7 +208,7 @@ member's active/public status or exposes the listing in the production roster.
 
 Vendor dashboards expose the entrant count, selected potential-winner record,
 and an authenticated, event/vendor-scoped contact CSV. For entries accepted or
-explicitly re-consented under `2026-09-01-vendor-marketing`, the entrant expressly
+explicitly re-consented under `2026-09-01-in-person-entry`, the entrant expressly
 allows the exact named vendor to receive the provided contact details for draw
 administration and that vendor's wedding-related offers or promotions. The CSV
 contains the entrant name, email, phone and wedding date when provided, entry

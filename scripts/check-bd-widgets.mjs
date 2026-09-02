@@ -15,8 +15,12 @@ const officialRulesPath = 'brilliant-directories/pages/qr-bingo-official-rules.h
 const migrationPath = 'supabase/migrations/20260828031649_stabilize_qr_bingo_vendor_ids_and_draw_signing.sql';
 const raffleAuditMigrationPath = 'supabase/migrations/20260828162602_add_qr_bingo_official_rules_audit.sql';
 const multiWinnerMigrationPath = 'supabase/migrations/20260830170000_add_qr_bingo_multi_winner_pool_controls.sql';
+const inPersonEntryMigrationPath = 'supabase/migrations/20260901072000_disable_qr_bingo_alternate_free_entry.sql';
+const inPersonRulesMigrationPath = 'supabase/migrations/20260901073000_require_in_person_qr_bingo_rules.sql';
+const qrAdminEdgePath = 'supabase/functions/bd-qr-bingo-admin/index.ts';
 const qrSyncPath = 'supabase/functions/bd-qr-bingo-sync/index.ts';
 const qrVendorSyncPath = 'supabase/functions/bd-qr-bingo-vendor-sync/index.ts';
+const qrUrlPolicyPath = 'lib/webview_url_policy.ts';
 const identityPath = 'supabase/functions/_shared/bd_identity.ts';
 const appPath = 'app/(tabs)/index.tsx';
 const appConfigPath = 'app.json';
@@ -38,8 +42,12 @@ const officialRules = fs.readFileSync(officialRulesPath, 'utf8');
 const migration = fs.readFileSync(migrationPath, 'utf8');
 const raffleAuditMigration = fs.readFileSync(raffleAuditMigrationPath, 'utf8');
 const multiWinnerMigration = fs.readFileSync(multiWinnerMigrationPath, 'utf8');
+const inPersonEntryMigration = fs.readFileSync(inPersonEntryMigrationPath, 'utf8');
+const inPersonRulesMigration = fs.readFileSync(inPersonRulesMigrationPath, 'utf8');
+const qrAdminEdge = fs.readFileSync(qrAdminEdgePath, 'utf8');
 const qrSync = fs.readFileSync(qrSyncPath, 'utf8');
 const qrVendorSync = fs.readFileSync(qrVendorSyncPath, 'utf8');
+const qrUrlPolicy = fs.readFileSync(qrUrlPolicyPath, 'utf8');
 const identity = fs.readFileSync(identityPath, 'utf8');
 const app = fs.readFileSync(appPath, 'utf8');
 const appConfig = fs.readFileSync(appConfigPath, 'utf8');
@@ -51,7 +59,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-const currentMarketingRulesVersion = '2026-09-01-vendor-marketing';
+const currentInPersonRulesVersion = '2026-09-01-in-person-entry';
 
 function normalizeQrEdgeCopy(source) {
   return source
@@ -77,7 +85,11 @@ assert(
 assert(
   qr.includes('bd-qr-bingo-admin?action=public_config') &&
     qr.includes("$eventTagId = intval($eventConfig['vendor_tag_id']);") &&
-    qr.includes("$eventHistoryStartsAt = $eventConfig['history_starts_at_sql'];"),
+    qr.includes("$config['history_starts_at_unix'] = $historyTimestamp;") &&
+    qr.includes("$config['entry_closes_at_unix'] = $entryClosesTimestamp;") &&
+    qr.includes("intval($eventConfig['history_starts_at_unix'])") &&
+    qr.includes("intval($eventConfig['entry_closes_at_unix'])") &&
+    !qr.includes('- (4 * 60 * 60)'),
   'QR widget does not consume the canonical published event configuration'
 );
 assert(
@@ -103,8 +115,14 @@ assert(qr.includes('"id" => (string)$vendorUserId'), 'QR widget ID is not the st
 assert(!qr.includes('$vendorUserIdToIndex'), 'QR widget still maps visits to array positions');
 assert(qr.includes('GROUP BY u.user_id'), 'QR widget vendor query does not deduplicate BD users');
 assert(
-  (qr.match(/vv\.scan_date\s*>=\s*'\$eventHistoryStartsAt'/g) || []).length >= 3,
-  'QR widget does not scope every visit query to the published event cutoff'
+  (qr.match(/vv\.scan_date\s*>=\s*'\$eventHistoryStartsAt'/g) || []).length >= 3 &&
+    (qr.match(/vv\.scan_date\s*<\s*'\$eventScanClosesAt'/g) || []).length >= 3 &&
+    qr.includes("$scanWindowOpensAt = isset($eventConfig['history_starts_at_unix'])") &&
+    qr.includes("$scanWindowClosesAt = isset($eventConfig['entry_closes_at_unix'])") &&
+    qr.includes('time() < $scanWindowOpensAt || time() >= $scanWindowClosesAt') &&
+    qr.includes("'code' => 'show_scan_window_closed'") &&
+    qr.indexOf("'code' => 'show_scan_window_closed'") < qr.indexOf('INSERT INTO vendor_visits'),
+  'QR widget does not fail closed outside the exact show window before recording a visit'
 );
 assert(!qr.includes('reset_progress'), 'QR widget exposes the undocumented progress-reset action');
 assert(
@@ -129,33 +147,27 @@ assert(
     !qr.includes('39001'),
   'QR website fixture access must require a strict authenticated one-vendor Edge proof while preserving the production active-tag path'
 );
-const expectedLegacyMap = {
-  '002': '16849',
-  '009': '27768',
-  '010': '29211',
-  '011': '29215',
-  '013': '31521',
-  '026': '38085',
-  '030': '38117',
-  '031': '38118',
-  '032': '38140',
-  '039': '38290',
-  '066': '38519',
-};
-for (const [ordinal, userId] of Object.entries(expectedLegacyMap)) {
-  assert(
-    qr.includes(`'${userId}' => '${ordinal}'`),
-    `QR widget is missing immutable NWS25-${ordinal} -> ${userId}`
-  );
-  assert(
-    app.includes(`'NWS25-${ordinal}': '${userId}'`),
-    `Native scanner is missing immutable NWS25-${ordinal} -> ${userId}`
-  );
-}
-assert(!qr.includes('$vendorLegacyIndex'), 'QR widget still derives legacy IDs from current array order');
-assert(!app.includes('legacyQrVendorPosition'), 'Native scanner still derives legacy IDs from current array order');
-assert(!app.includes('vendors[legacyPosition]'), 'Native scanner still indexes the current vendor array for NWS25');
-assert(!app.includes("'NWS25-001':"), 'Inactive NWS25-001 must not map into the October roster');
+assert(
+  qrUrlPolicy.includes('queryEntries.length === 1') &&
+    qrUrlPolicy.includes('queryEntries[0][0] === "vendor_id"') &&
+    qrUrlPolicy.includes('(qrHost === "weddingwin.ca" || qrHost === "www.weddingwin.ca")') &&
+    qrUrlPolicy.includes('normalizedPath === "/qr"') &&
+    qrUrlPolicy.includes('/^[1-9][0-9]{0,19}$/.test(vendorIds[0])') &&
+    app.includes('if (!qrPayloadUrlAllowed(raw)) return null;') &&
+    app.includes('data: `https://www.weddingwin.ca/qr?vendor_id=${encodeURIComponent(vendors[0].id)}`'),
+  'Native production scanning does not require one canonical WeddingWin /qr?vendor_id payload while preserving the isolated fixture emulator'
+);
+assert(
+  app.includes('history_starts_at: string;') &&
+    app.includes('const historyStartsAt = normalizedText(payload.history_starts_at, 80);') &&
+    app.includes('historyStartsAtMs >= entryClosesAtMs') &&
+    app.includes("new Date(String(eventConfig?.history_starts_at || '')).getTime()") &&
+    app.includes("new Date(String(eventConfig?.entry_closes_at || '')).getTime()") &&
+    app.includes('scanWindowNow >= scanOpensAt') &&
+    app.includes('scanWindowNow < scanClosesAt') &&
+    !app.includes('scanClosesAt - (4 * 60 * 60 * 1000)'),
+  'Native scanner does not validate and enforce both published show-window boundaries'
+);
 const unmatchedQrBranch = app.match(
   /if \(!matched\) \{([\s\S]*?)\n\s*\}\n\s*\n\s*if \(scannedVendorIds\.has/
 )?.[1];
@@ -221,37 +233,39 @@ assert(
   /disabled=\{\s*emailLoginLoading \|\|\s*signupLoading \|\|\s*\(authMode === 'signup' && !signupConsentAccepted\)\s*\}/.test(app),
   'Signup action is visually disabled for missing consent but remains interactable'
 );
-assert(qr.includes('normalizeWeddingWinVendorUrl'), 'QR widget is missing URL normalization');
 assert(
-  qr.includes('const queryVendorToken = extractWeddingWinQrVendorToken(raw);') &&
-    qr.includes("const supportedKeys = ['vendor_id', 'vendor', 'id', 'code', 'qr'];"),
-  'QR widget does not parse supported vendor tokens before URL query removal'
+  qr.includes('const vendorId = extractWeddingWinQrVendorId(raw);') &&
+    qr.includes("entries.length !== 1 || entries[0][0] !== 'vendor_id'") &&
+    qr.includes("/^[1-9][0-9]{0,19}$/.test(vendorId)"),
+  'QR website scanner does not require one canonical numeric vendor_id query'
 );
-const queryParserStart = qr.indexOf('function extractWeddingWinQrVendorToken');
-const queryParserEnd = qr.indexOf('\n\n    function normalizeWeddingWinVendorUrl', queryParserStart);
+const queryParserStart = qr.indexOf('function extractWeddingWinQrVendorId');
+const queryParserEnd = qr.indexOf('\n\n    function resetLastDecodedForRetry', queryParserStart);
 assert(queryParserStart >= 0 && queryParserEnd > queryParserStart, 'QR query-token parser could not be isolated');
-const extractWeddingWinQrVendorToken = new Function(
-  `${qr.slice(queryParserStart, queryParserEnd)}; return extractWeddingWinQrVendorToken;`
+const extractWeddingWinQrVendorId = new Function(
+  `${qr.slice(queryParserStart, queryParserEnd)}; return extractWeddingWinQrVendorId;`
 )();
-for (const key of ['vendor_id', 'vendor', 'id', 'code', 'qr']) {
-  assert(
-    extractWeddingWinQrVendorToken(`https://www.weddingwin.ca/qr?${key}=16849`) === '16849',
-    `QR widget does not accept the trusted ${key} query payload`
-  );
-}
 assert(
-  extractWeddingWinQrVendorToken('https://weddingwin.ca/qr/?code=NWS25-002') === 'NWS25-002',
-  'QR widget does not accept a trusted apex-host legacy-code payload'
+  extractWeddingWinQrVendorId('https://www.weddingwin.ca/qr?vendor_id=16849') === '16849' &&
+    extractWeddingWinQrVendorId('https://weddingwin.ca/qr/?vendor_id=38970') === '38970',
+  'QR widget rejects a canonical WeddingWin booth URL'
 );
 for (const rejected of [
+  '16849',
+  'NWS25-002',
+  'nws://vendor/16849',
   'http://www.weddingwin.ca/qr?vendor_id=16849',
+  'https://evil.weddingwin.ca/qr?vendor_id=16849',
   'https://attacker.example/qr?vendor_id=16849',
   'https://www.weddingwin.ca/vendor?vendor_id=16849',
+  'https://www.weddingwin.ca/qr?vendor=16849',
+  'https://www.weddingwin.ca/qr?vendor_id=999&vendor=16849',
+  'https://www.weddingwin.ca/qr?vendor_id=16849&vendor_id=38970',
   'https://www.weddingwin.ca:444/qr?vendor_id=16849',
   'https://user:password@www.weddingwin.ca/qr?vendor_id=16849',
   'https://www.weddingwin.ca/qr?vendor_id=16849#fragment',
 ]) {
-  assert(extractWeddingWinQrVendorToken(rejected) === '', `QR widget accepts unsafe URL payload: ${rejected}`);
+  assert(extractWeddingWinQrVendorId(rejected) === '', `QR widget accepts unsafe or non-canonical payload: ${rejected}`);
 }
 const retryHelperStart = qr.indexOf('function resetLastDecodedForRetry');
 const retryHelperEnd = qr.indexOf('\n\n    async function handleDecoded', retryHelperStart);
@@ -385,9 +399,9 @@ const websiteNoticeVersion = qr.match(/\$participationNoticeVersion = \(string\)
 for (const [label, source] of [['couple QR function', qrSync], ['vendor QR function', qrVendorSync]]) {
   const edgeNoticeVersion = source.match(/const QR_PARTICIPATION_NOTICE_VERSION = "([^"]+)"/)?.[1];
   assert(
-    appNoticeVersion === currentMarketingRulesVersion &&
-      websiteNoticeVersion === currentMarketingRulesVersion &&
-      edgeNoticeVersion === currentMarketingRulesVersion,
+    appNoticeVersion === currentInPersonRulesVersion &&
+      websiteNoticeVersion === currentInPersonRulesVersion &&
+      edgeNoticeVersion === currentInPersonRulesVersion,
     `${label} notice version is not aligned with native and website QR Bingo`
   );
   const productionScanStart = source.indexOf('if (action === "scan")');
@@ -403,6 +417,101 @@ for (const [label, source] of [['couple QR function', qrSync], ['vendor QR funct
     `${label} production scan does not forward the notice version or preserve safe website rejection statuses`
   );
 }
+assert(
+  alternateEntryPage.includes('cannot be used to submit a new entry') &&
+    alternateEntryPage.includes('href="/qr"') &&
+    !alternateEntryPage.includes('[form=qr_bingo_free_entry]') &&
+    !alternateEntryPage.includes('alternate_free_entry_offers') &&
+    !/<form\b/i.test(alternateEntryPage) &&
+    !/<script\b/i.test(alternateEntryPage) &&
+    !qr.includes('vendorDrawFreeEntry') &&
+    !vendorDraw.includes('data-role="free-entry-link"') &&
+    !vendorDrawScript.includes('freeEntryLink'),
+  'Retired off-site entry is still linked, rendered, loaded, or referenced by live couple/vendor UI'
+);
+const adminGetStart = qrAdminEdge.indexOf('if (action === "admin_get")');
+const retiredAdminStart = qrAdminEdge.indexOf(
+  'action === "declare_alternate_entry_reconciliation_complete" ||'
+);
+const legacyAdminStart = qrAdminEdge.indexOf(
+  'if (action === "declare_alternate_entry_reconciliation_complete")',
+  retiredAdminStart + 1
+);
+assert(
+  adminGetStart >= 0 && retiredAdminStart > adminGetStart && legacyAdminStart > retiredAdminStart &&
+    !qrAdminEdge.slice(adminGetStart, retiredAdminStart).includes('alternate_entry_operations') &&
+    qrAdminEdge.slice(retiredAdminStart, legacyAdminStart).includes('code: "offsite_entry_retired"') &&
+    qrAdminEdge.slice(retiredAdminStart, legacyAdminStart).includes('}, 410);'),
+  'Admin alternate-entry actions do not fail closed with HTTP 410 before historical code'
+);
+for (const [label, source] of [['couple QR function', qrSync], ['vendor QR function', qrVendorSync]]) {
+  const retiredOfferStart = source.indexOf('if (action === "alternate_free_entry_offers")');
+  const retiredOfferEnd = source.indexOf('if (!runtimeConfig.scan_enabled', retiredOfferStart);
+  const retiredOffer = source.slice(retiredOfferStart, retiredOfferEnd);
+  const enterableStart = source.indexOf('function isSettingsEnterable(');
+  const enterableEnd = source.indexOf('\nasync function ', enterableStart);
+  const enterable = source.slice(enterableStart, enterableEnd);
+  assert(
+    retiredOfferStart >= 0 && retiredOfferEnd > retiredOfferStart &&
+      retiredOffer.includes('code: "offsite_entry_retired"') &&
+      /\},\s*410,\s*false,?\s*\);/.test(retiredOffer) &&
+      !retiredOffer.includes('publicAlternateFreeEntryOffers()') &&
+      !retiredOffer.includes('offers:'),
+    `${label} still exposes public off-site vendor offers instead of HTTP 410`
+  );
+  assert(
+    source.includes('function productionShowScanWindowOpen()') &&
+      source.includes('const opensAt = new Date(qrBingoConfig().history_starts_at).getTime();') &&
+      source.includes('const closesAt = new Date(qrBingoConfig().entry_closes_at).getTime();') &&
+      source.includes('Number.isFinite(opensAt)') &&
+      source.includes('Number.isFinite(closesAt)') &&
+      source.includes('opensAt < closesAt') &&
+      source.includes('Date.now() >= opensAt') &&
+      source.includes('Date.now() < closesAt') &&
+      !source.includes('PRODUCTION_SHOW_DURATION_MS') &&
+      (source.match(/!productionShowScanWindowOpen\(\)/g) || []).length >= 3 &&
+      (source.match(/code: "show_entry_window_closed"/g) || []).length >= 2 &&
+      source.includes('code: "show_scan_window_closed"'),
+    `${label} does not enforce the exact show window for scan, offer review, and opt-in`
+  );
+  assert(
+    enterableStart >= 0 && enterableEnd > enterableStart &&
+      !enterable.includes('alternateFreeEntryUrl') &&
+      !enterable.includes('alternate_free_entry_url') &&
+      !enterable.includes('validHttpsUrl'),
+    `${label} still gates vendor activation on the retired off-site URL`
+  );
+}
+assert(
+  !app.includes('Equal alternate entry required') &&
+    !app.includes('View equal alternate entry route') &&
+    !app.includes('View equal alternate method of entry'),
+  'Native vendor activation or draw review still requires or links the retired off-site route'
+);
+assert(
+  inPersonEntryMigration.includes('function public.reject_new_qr_bingo_alternate_free_entry') &&
+    inPersonEntryMigration.includes('create trigger a00_reject_new_qr_bingo_alternate_entry') &&
+    inPersonEntryMigration.includes("message = 'alternate_entry_disabled'") &&
+    inPersonEntryMigration.includes('create trigger a01_require_new_qr_bingo_in_show_scan_proof') &&
+    inPersonEntryMigration.includes("message = 'in_show_scan_verification_required'") &&
+    inPersonEntryMigration.includes('entry.in_show_scan_verified is true') &&
+    inPersonEntryMigration.includes('drop trigger if exists require_qr_bingo_alternate_entry_closure_for_draw') &&
+    !/delete\s+from\s+public[.]qr_bingo_raffle_entries/i.test(inPersonEntryMigration) &&
+    !/update\s+public[.]qr_bingo_raffle_entries/i.test(inPersonEntryMigration),
+  'In-person cutover does not preserve historical rows, reject new alternate entries, require scan proof, or retire the obsolete closure gate'
+);
+assert(
+  inPersonRulesMigration.includes("previous_config.rules_version = '2026-09-01-vendor-marketing'") &&
+    inPersonRulesMigration.includes("new.rules_version = '2026-09-01-in-person-entry'") &&
+    inPersonRulesMigration.includes("timestamptz '2026-10-18 15:00:00+00'") &&
+    inPersonRulesMigration.includes("applicable_rules_version <> '2026-09-01-in-person-entry'") &&
+    inPersonRulesMigration.includes('new.in_show_scan_verified_at < current_config.history_starts_at') &&
+    inPersonRulesMigration.includes('new.in_show_scan_verified_at >= current_config.entry_closes_at') &&
+    inPersonRulesMigration.includes('visited this vendor booth in person') &&
+    !/delete\s+from\s+public[.]qr_bingo_raffle_entries/i.test(inPersonRulesMigration) &&
+    !/update\s+public[.]qr_bingo_raffle_entries/i.test(inPersonRulesMigration),
+  'Current in-person rules migration does not force fresh acceptance and published-window proof while preserving historical entries'
+);
 assert(!qr.includes('\\'), 'QR widget contains backslashes that the BD widget_data API strips');
 
 assert(
@@ -763,38 +872,11 @@ assert(
   'QR admin settings uses Brilliant Directories reserved email-subject form names'
 );
 assert(
-    qrAdminSettings.includes("'submitted_event_revision' => $submittedEventRevision") &&
-    qrAdminSettings.includes("'vendor_offer_version' => $vendorOfferVersion") &&
-    qrAdminSettings.includes("'participant_responsibility_disclosure' => $participantResponsibilityDisclosure") &&
-    qrAdminSettings.includes('name="submitted_event_revision"') &&
-    qrAdminSettings.includes('name="vendor_offer_version"') &&
-    qrAdminSettings.includes('name="participant_responsibility_disclosure"') &&
-    qrAdminSettings.includes('name="contact_share_consent_confirmed"') &&
-    qrAdminSettings.includes('wedding-related offers and promotions') &&
-    qrAdminSettings.includes("$ww_qrbs_reconcile_code === 'stale_vendor_offer'") &&
-    qrAdminSettings.includes('function ww_qrbs_validate_rfc3339_version'),
-  'QR admin reconciliation does not separately preserve the submitted event revision and exact vendor offer version'
-);
-assert(
-  qrAdminSettings.includes("'action' => 'declare_alternate_entry_reconciliation_complete'") &&
-    qrAdminSettings.includes('function ww_qrbs_validate_reconciliation_closure') &&
-    qrAdminSettings.includes('name="all_timely_submissions_reviewed"') &&
-    qrAdminSettings.includes('Declare Form 354 queue complete') &&
-    qrAdminSettings.includes('A later successful reconciliation automatically makes this declaration stale'),
-  'QR admin settings cannot close and re-close the exact Form 354 reconciliation queue before selection'
-);
-assert(
   qrAdminSettings.includes('function ww_qrbs_local_vendor_tag_options') &&
     qrAdminSettings.includes('FROM tags t') &&
     qrAdminSettings.includes('name="vendor_tag_id" required') &&
     qrAdminSettings.includes('Choose a vendor group'),
   'QR admin settings does not provide a named vendor-tag dropdown'
-);
-assert(
-  qrAdminSettings.includes('function ww_qrbs_local_tagged_vendor_options') &&
-    qrAdminSettings.includes('name="vendor_bingo_id" required') &&
-    qrAdminSettings.includes('Choose the vendor from Form 354'),
-  'QR admin reconciliation does not provide a named tagged-vendor dropdown'
 );
 assert(
   (qrAdminSettings.match(/type="datetime-local"/g) || []).length >= 5 &&
@@ -806,9 +888,11 @@ assert(
 assert(
   qrAdminSettings.includes('How to use this page') &&
     qrAdminSettings.includes('Advanced: legal pages and eligibility') &&
-    qrAdminSettings.includes('Advanced: process an alternate free-entry request') &&
-    qrAdminSettings.includes('Save settings for the app and website'),
-  'QR admin settings does not keep the primary workflow simple while preserving advanced controls'
+    qrAdminSettings.includes('Save settings for the app and website') &&
+    qrAdminSettings.includes('<?php if (false): /* Historical Form 354 tools are intentionally retired. */ ?>') &&
+    qrAdminSettings.includes('class="ww-qrbs-form-token" name="alternate_free_entry_url" type="text" readonly') &&
+    !qrAdminSettings.includes('name="alternate_free_entry_url" type="hidden"'),
+  'QR admin settings does not keep retired Form 354 controls out of view while safely preserving the legacy config value'
 );
 assert(
   qrAdminSettings.includes("'ww_qrbs_csrf_token' => 'csrf_token'") &&
@@ -821,93 +905,15 @@ assert(
 );
 assert(!qrAdminSettings.includes('\\'), 'QR admin settings widget contains backslashes that the BD widget_data API strips');
 
-const alternateEntryFields = new Map(
-  (Array.isArray(alternateEntryForm.fields) ? alternateEntryForm.fields : [])
-    .map((field) => [field.name, field])
-);
-for (const name of [
-  'vendor_bingo_id',
-  'event_key',
-  'event_revision',
-  'submitted_rules_version',
-  'vendor_offer_version',
-  'participant_responsibility_disclosure',
-]) {
-  assert(
-    alternateEntryFields.get(name)?.type === 'Hidden' && alternateEntryFields.get(name)?.required === true,
-    `Form 354 does not require hidden ${name}`
-  );
-}
 assert(
-  alternateEntryFields.get('vendor_offer_version')?.description?.includes('trusted live offer DTO') &&
-    alternateEntryPage.includes('function rfc3339Version') &&
-    alternateEntryPage.includes("setHidden('vendor_offer_version', rfc3339Version(offer.vendor_offer_version));") &&
-    alternateEntryPage.includes("offerVersionField.value !== rfc3339Version(selected.vendor_offer_version)") &&
-    alternateEntryPage.includes("setHidden('participant_responsibility_disclosure', offer.participant_responsibility_disclosure);") &&
-    alternateEntryPage.includes("responsibilityDisclosureField.value !== String(selected.participant_responsibility_disclosure || '')"),
-  'Form 354 does not validate, store, and submit-bind the trusted vendor offer version'
-);
-const alternateVersionValidatorStart = alternateEntryPage.indexOf('function rfc3339Version');
-const alternateVersionValidatorEnd = alternateEntryPage.indexOf('\n\n      function validOffer', alternateVersionValidatorStart);
-assert(
-  alternateVersionValidatorStart >= 0 && alternateVersionValidatorEnd > alternateVersionValidatorStart,
-  'Alternate-entry RFC 3339 vendor-offer validator could not be isolated'
-);
-const validateAlternateOfferVersion = new Function(
-  `${alternateEntryPage.slice(alternateVersionValidatorStart, alternateVersionValidatorEnd)}; return rfc3339Version;`
-)();
-for (const valid of [
-  '2026-08-30T12:34:56Z',
-  '2026-08-30T12:34:56.123456+00:00',
-  '2026-08-30T12:34:56-04:00',
-]) {
-  assert(validateAlternateOfferVersion(valid) === valid, `Alternate entry rejects valid offer version ${valid}`);
-}
-for (const invalid of [
-  '2026-02-30T12:34:56Z',
-  '2026-08-30 12:34:56Z',
-  '2026-08-30T25:34:56Z',
-  '2026-08-30T12:34:56+14:01',
-  '2026-08-30T12:34:56',
-]) {
-  assert(validateAlternateOfferVersion(invalid) === '', `Alternate entry accepts invalid offer version ${invalid}`);
-}
-assert(
-    alternateEntryForm.form_success_message?.includes('not confirmation of eligibility or an accepted entry') &&
-    alternateEntryFields.get('inquiry_email')?.description?.includes('wedding-related offers and promotions') &&
-    alternateEntryFields.get('rules_consent')?.options?.[0]?.value === currentMarketingRulesVersion &&
-    alternateEntryFields.get('rules_consent')?.options?.[0]?.label?.includes('one valid entry per eligible couple per vendor draw') &&
-    alternateEntryFields.get('promotion_responsibility_consent')?.options?.[0]?.label?.includes('acts only as the technical platform and administrator') &&
-    alternateEntryFields.get('apple_non_sponsor_consent')?.options?.[0]?.label?.includes('Apple Inc. is not a sponsor, operator, prize provider, or administrator'),
-  'Form 354 wording is not synchronized with the current rules, vendor responsibility, Apple disclaimer, and privacy limits'
-);
-const alternateContactShareConsent = alternateEntryFields.get('draw_administration_contact_share_consent');
-assert(
-  alternateContactShareConsent?.type === 'Select' &&
-    alternateContactShareConsent?.required === true &&
-    String(alternateContactShareConsent?.label || '').includes('Named-vendor') &&
-    String(alternateContactShareConsent?.label || '').toLowerCase().includes('marketing') &&
-    alternateContactShareConsent?.options?.[0]?.value === currentMarketingRulesVersion &&
-    alternateContactShareConsent?.options?.[0]?.label?.includes('share my name, email address, phone number (if provided), wedding date (if provided), and entry/consent evidence with the named vendor to administer this specific draw') &&
-    alternateContactShareConsent?.options?.[0]?.label?.includes('wedding-related offers and promotions') &&
-    alternateContactShareConsent?.options?.[0]?.label?.includes('unsubscribe'),
-  'Form 354 does not require explicit named-vendor draw and marketing consent'
-);
-assert(
-  alternateEntryPage.includes('prizeCount >= 1') &&
-    alternateEntryPage.includes('prizeCount <= 3') &&
-    alternateEntryPage.includes("typeof value.exclude_previous_winners === 'boolean'") &&
-    alternateEntryPage.includes('String(value.eligibility_region || \'\').trim()') &&
-    alternateEntryPage.includes('String(value.odds_basis || \'\').trim()') &&
-    alternateEntryPage.includes('value.skill_testing_question_required === true') &&
-    alternateEntryPage.includes('trustedWeddingWinUrl(value.official_rules_url)') &&
-    alternateEntryPage.includes('Date.parse(entryOpensAt) < Date.parse(entryClosesAt)') &&
-    alternateEntryPage.includes('Date.parse(drawAt) >= Date.parse(entryClosesAt)') &&
-    alternateEntryPage.includes("'Number of winners and prizes'") &&
-    alternateEntryPage.includes("'Repeat-winner rule'") &&
-    alternateEntryPage.includes('A confirmed winner remains eligible for another selection') &&
-    alternateEntryPage.includes("It does not affect another vendor's draw"),
-  'Alternate free-entry offer does not validate and disclose the configured winner count and repeat policy'
+  alternateEntryForm.form_id === 354 &&
+    alternateEntryForm.status === 'retired' &&
+    alternateEntryForm.form_email_on === false &&
+    alternateEntryForm.public_page_contains_form === false &&
+    alternateEntryForm.new_submissions_accepted === false &&
+    (!Array.isArray(alternateEntryForm.fields) || alternateEntryForm.fields.length === 0) &&
+    String(alternateEntryForm.historical_schema_and_submissions || '').includes('Preserved in Brilliant Directories'),
+  'Form 354 source is not an explicit retired tombstone that preserves historical BD records'
 );
 assert(
   vendorDraw.includes('not currently selectable') &&
@@ -951,8 +957,13 @@ for (const [label, source] of [['couple QR function', qrSync], ['vendor QR funct
   );
   assert(!/REVIEW_VENDOR|EARLY_DRAW|PRIVILEGED|38970/.test(source), `${label} contains a production reviewer or early-draw bypass`);
   assert(
-    source.includes(`const CONTACT_SHARING_RULES_VERSION = "${currentMarketingRulesVersion}";`) &&
+    source.includes(`const CONTACT_SHARING_RULES_VERSION = "${currentInPersonRulesVersion}";`) &&
+      source.includes('const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing";') &&
       source.includes('const CONTACT_SHARE_SCOPE = "named_vendor_draw_administration";') &&
+      source.includes('settings.legal_terms_version === config.rules_version') &&
+      source.includes('entry?.consent_version === qrBingoConfig().rules_version') &&
+      source.includes('entry.consent_version === CONTACT_SHARING_RULES_VERSION') &&
+      source.includes('function isPermittedInPersonEntryRulesTransition(') &&
       source.includes('contact_share_scope: CONTACT_SHARE_SCOPE') &&
       source.includes('entry.vendor_marketing_consent === true') &&
       source.includes('entry.vendor_marketing_consented_at') &&
@@ -971,7 +982,20 @@ for (const [label, source] of [['couple QR function', qrSync], ['vendor QR funct
   assert(
     source.includes('action === "vendor_raffle_export"') &&
       source.includes('buildVendorParticipationReport') &&
-      source.includes('entryHasCurrentConsent(entry as RaffleEntry)') &&
+      source.includes('entryHasNamedVendorContactConsent(entry as RaffleEntry)') &&
+      source.includes('.in("consent_version", NAMED_VENDOR_CONTACT_RULES_VERSIONS)') &&
+      source.includes('function entryHasProductionInPersonProof(') &&
+      source.includes('entry?.entry_method === "qr_scan_opt_in"') &&
+      source.includes('entry.in_show_scan_verified === true') &&
+      source.includes('Boolean(entry.in_show_scan_verified_at)') &&
+      source.includes('const selectionEligible = currentConsent &&') &&
+      source.includes('(controlledFixture || productionInPersonProof)') &&
+      source.includes('? "reacceptance_required"') &&
+      source.includes('? "in_person_scan_required"') &&
+      source.includes('in_selection_pool: selectionEligible && poolStatus === "included"') &&
+      source.includes('eligible_entry_count: rows.filter((row) => row.in_selection_pool).length') &&
+      source.includes('historical_entry_count: rows.filter((row) => !row.selection_eligible)') &&
+      source.includes('can_draw: entryPool.eligible_entry_count > 0') &&
       source.includes('contains_contact_data: true') &&
       source.includes('contact_share_scope: CONTACT_SHARE_SCOPE') &&
       source.includes('marketing_consent_included: true') &&
@@ -999,8 +1023,9 @@ for (const [label, source] of [['couple QR function', qrSync], ['vendor QR funct
       source.includes('"Yes - named vendor draw entry and wedding-related marketing"') &&
       source.includes('qr_bingo_participation_report_audit') &&
       source.includes('participationReference') &&
-      source.includes('const pool = await loadVendorEntryPool(vendor, eventKey);') &&
+      source.includes('const pool = await loadVendorEntryPool(') &&
       source.includes('const rows = pool.rows.map((entry) => [') &&
+      source.includes('entry.rules_version,') &&
       source.includes('vendorVisibleDraw('),
     `${label} omits the authenticated named-vendor marketing-consented entrant report or server-side draw redaction`
   );
@@ -1178,7 +1203,8 @@ console.log(JSON.stringify({
   vendorDrawConflictsFailClosed: true,
   stableVendorIds: true,
   eventConfig: 'published-revision',
-  legacyMappings: Object.keys(expectedLegacyMap).length,
+  canonicalInShowQrOnly: true,
+  offsiteEntryRetired: true,
   rsaPublicKeyOnly: true,
   migrationPreflight: true,
   identityCacheFailClosed: true,

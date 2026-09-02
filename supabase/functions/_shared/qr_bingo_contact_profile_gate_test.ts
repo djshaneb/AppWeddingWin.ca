@@ -7,7 +7,7 @@ const syncUrls = [
   new URL("../bd-qr-bingo-vendor-sync/index.ts", import.meta.url),
 ];
 
-const CURRENT_MARKETING_RULES_VERSION = "2026-09-01-vendor-marketing";
+const CURRENT_IN_PERSON_RULES_VERSION = "2026-09-01-in-person-entry";
 
 function extract(source: string, pattern: RegExp, label: string) {
   const value = source.match(pattern)?.[1] || "";
@@ -103,9 +103,9 @@ Deno.test("native, website, and both Edge endpoints use one versioned participat
   );
   assert(
     [appVersion, websiteVersion, ...edgeVersions].every((version) =>
-      version === CURRENT_MARKETING_RULES_VERSION
+      version === CURRENT_IN_PERSON_RULES_VERSION
     ),
-    "app, website, and Edge notice suffixes must match the current marketing rules version",
+    "app, website, and Edge notice suffixes must match the current in-person rules version",
   );
 
   assert(

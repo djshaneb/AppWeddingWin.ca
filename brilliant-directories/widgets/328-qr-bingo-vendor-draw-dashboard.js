@@ -146,7 +146,6 @@
     const entryClose = find('[data-role="entry-close"]');
     const drawAt = find('[data-role="draw-at"]');
     const odds = find('[data-role="odds"]');
-    const freeEntryLink = find('[data-role="free-entry-link"]');
     const saveButton = find('[data-action="save"]');
     const reloadButton = find('[data-action="reload"]');
     const materialLock = find('[data-role="material-lock"]');
@@ -570,16 +569,22 @@
       const previousWinner = poolStatus === 'previous_winner' || entry.previous_winner === true || entry.has_won === true;
       const alreadySelected = poolStatus === 'already_selected';
       const disqualified = poolStatus === 'disqualified';
+      const reacceptanceRequired = poolStatus === 'reacceptance_required';
+      const inPersonScanRequired = poolStatus === 'in_person_scan_required';
       const inSelectionPool = poolStatus
         ? poolStatus === 'included'
         : included && !(previousWinner && excludePreviousWinners.checked);
-      const selectionProtected = disqualified || alreadySelected || (previousWinner && included && excludePreviousWinners.checked);
+      const selectionProtected = disqualified || alreadySelected || reacceptanceRequired || inPersonScanRequired || (previousWinner && included && excludePreviousWinners.checked);
       const statusLabel = inSelectionPool
         ? 'In winner selection'
         : alreadySelected
           ? 'Already selected'
           : disqualified
             ? 'Disqualified — record kept'
+            : reacceptanceRequired
+              ? 'New in-show scan and consent required'
+              : inPersonScanRequired
+                ? 'In-show scan required'
             : previousWinner && included
               ? 'Previous winner — not selectable'
               : 'Removed from winner selection';
@@ -971,9 +976,6 @@
       }
       updateRulesReviewProgress();
 
-      const alternateUrl = trustedWeddingWinUrl(data.alternate_free_entry_url || settings.alternate_free_entry_url);
-      freeEntryLink.classList.toggle('is-hidden', !alternateUrl);
-      if (alternateUrl) freeEntryLink.href = alternateUrl;
 
       eligibility.textContent = text(data.eligibility_region || settings.eligibility_region) || 'See the current official rules';
       entryClose.textContent = formatDate(data.entry_closes_at || settings.entry_closes_at);

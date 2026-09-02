@@ -60,7 +60,7 @@ Deno.test("isolated QR fixtures use their own valid server terms while productio
     for (
       const required of [
         "const fixtureTerms = isolatedFixtureMatchesSettings(",
-        "const scheduleAndAmoeAreValid =",
+        "const scheduleIsValid =",
         "validPromotionTime(entryClosesAt)",
         "validPromotionTime(drawOpensAt)",
         "validPromotionTime(drawAt)",
@@ -68,15 +68,13 @@ Deno.test("isolated QR fixtures use their own valid server terms while productio
         "fixtureTerms && isolatedFixture?.allow_early_draw === true",
         "fixtureAllowsEarlyDraw ||",
         "new Date(drawAt).getTime() >= new Date(entryClosesAt).getTime()",
-        "validHttpsUrl(alternateFreeEntryUrl)",
         "const eventTermsMatch = fixtureTerms",
         "? Boolean(cleanText(settings?.eligibility_region, 300))",
         "settings?.event_key === config.event_key",
         "new Date(config.entry_closes_at).getTime()",
         "new Date(config.draw_opens_at).getTime()",
         "new Date(config.draw_at).getTime()",
-        "alternateFreeEntryUrl === config.alternate_free_entry_url",
-        "scheduleAndAmoeAreValid",
+        "scheduleIsValid",
         "eventTermsMatch",
       ]
     ) {
@@ -85,6 +83,12 @@ Deno.test("isolated QR fixtures use their own valid server terms while productio
         `enterability gate is missing ${required}`,
       );
     }
+    assert(
+      !enterable.includes("alternateFreeEntryUrl") &&
+        !enterable.includes("alternate_free_entry_url") &&
+        !enterable.includes("validHttpsUrl"),
+      "vendor entry must not depend on the retired off-site entry URL",
+    );
     assert(
       /new Date\(drawOpensAt\)\.getTime\(\) >=\s*new Date\(entryClosesAt\)\.getTime\(\)/
         .test(enterable),

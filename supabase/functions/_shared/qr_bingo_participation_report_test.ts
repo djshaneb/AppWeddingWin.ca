@@ -22,13 +22,16 @@ Deno.test("named-vendor entrant report stays authenticated, scoped, and consent-
       "the report must derive its exact live vendor/event scope from the authenticated session",
     );
     assert(
-      source.includes("entryHasCurrentConsent(entry as RaffleEntry)") &&
+      source.includes("entryHasNamedVendorContactConsent(entry as RaffleEntry)") &&
+        source.includes(
+          '.in("consent_version", NAMED_VENDOR_CONTACT_RULES_VERSIONS)',
+        ) &&
         source.includes("archivedLegacyEntryIds(eventKey, vendor.id)") &&
         source.includes("entry_count: entryPool.entry_count") &&
         source.includes(
           "material_terms_locked: activeEntryCount > 0 || offerActivated",
         ),
-      "dashboard counts and report rows must exclude stale or archived QA entries without unlocking activated offer terms",
+      "dashboard and report rows must preserve complete prior/current marketing-consented history, exclude archived QA records, and keep activated offer terms locked",
     );
     assert(
       source.includes("event_key: eventKey") &&
@@ -50,6 +53,8 @@ Deno.test("named-vendor entrant report stays authenticated, scoped, and consent-
         source.includes("contact_share_scope: CONTACT_SHARE_SCOPE") &&
         source.includes("marketing_consent_included: true") &&
         source.includes('report_kind: "named_vendor_draw_contacts"') &&
+        source.includes('rules_version: entry.consent_version || ""') &&
+        source.includes("entry.rules_version,") &&
         source.includes("rules_version: currentConfig.rules_version") &&
         source.includes("event_revision: currentConfig.revision") &&
         source.includes("vendor_bingo_id: vendor.id") &&
@@ -72,7 +77,7 @@ Deno.test("named-vendor entrant report stays authenticated, scoped, and consent-
           '"Yes - named vendor draw entry and wedding-related marketing"',
         ) &&
         !source.includes('"Eligibility Confirmed"'),
-      "the report must include only the current named-vendor consent fields and mark the recorded marketing grant",
+      "the report must include each visible named-vendor contact row with its recorded rules version and marketing grant",
     );
     assert(
       source.includes("/^[\\s]*[=+@-]/") &&

@@ -31,7 +31,7 @@ const marketingMigrationUrl = new URL(
   import.meta.url,
 );
 
-Deno.test("named-vendor contact export is authenticated, scoped, complete, and marketing-consented", async () => {
+Deno.test("named-vendor contact export is authenticated, scoped, complete, marketing-consented, and history-preserving", async () => {
   const sources = await Promise.all(
     endpointUrls.map((url) => Deno.readTextFile(url)),
   );
@@ -39,7 +39,8 @@ Deno.test("named-vendor contact export is authenticated, scoped, complete, and m
   for (const source of sources) {
     for (
       const required of [
-        'const CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing"',
+        'const PREVIOUS_CONTACT_SHARING_RULES_VERSION = "2026-09-01-vendor-marketing"',
+        'const CONTACT_SHARING_RULES_VERSION = "2026-09-01-in-person-entry"',
         'const CONTACT_SHARE_SCOPE = "named_vendor_draw_administration"',
         'action === "vendor_raffle_export"',
         "await resolveVendorForRaffleAction(",
@@ -48,9 +49,10 @@ Deno.test("named-vendor contact export is authenticated, scoped, complete, and m
         '.eq("vendor_bd_user_id", vendorBdUserId)',
         '.eq("consent_share_contact", true)',
         '.eq("contact_share_scope", CONTACT_SHARE_SCOPE)',
-        '.eq("consent_version", CONTACT_SHARING_RULES_VERSION)',
+        '.in("consent_version", NAMED_VENDOR_CONTACT_RULES_VERSIONS)',
         '.eq("vendor_marketing_consent", true)',
-        "entryHasCurrentConsent(entry as RaffleEntry)",
+        "entryHasNamedVendorContactConsent(entry as RaffleEntry)",
+        "entryHasProductionInPersonProof(entry)",
         "archivedLegacyEntryIds(eventKey, vendor.id)",
         '"Name"',
         '"Email"',
@@ -64,6 +66,7 @@ Deno.test("named-vendor contact export is authenticated, scoped, complete, and m
         "contact_share_scope: CONTACT_SHARE_SCOPE",
         "marketing_consent_included: true",
         'report_kind: "named_vendor_draw_contacts"',
+        'rules_version: entry.consent_version || ""',
         "rules_version: currentConfig.rules_version",
         "event_revision: currentConfig.revision",
         "vendor_bingo_id: vendor.id",
@@ -81,7 +84,7 @@ Deno.test("named-vendor contact export is authenticated, scoped, complete, and m
     const completeRead = sourceFunction(source, "collectExactPostgrestRows");
     const exactCount = sourceFunction(
       source,
-      "countVendorCurrentConsentEntries",
+      "countVendorNamedContactEntries",
     );
     const pool = sourceFunction(source, "loadVendorEntryPool");
     const archived = sourceFunction(source, "archivedLegacyEntryIds");
@@ -104,7 +107,7 @@ Deno.test("named-vendor contact export is authenticated, scoped, complete, and m
         archived.includes("collectExactPostgrestRows") &&
         states.includes("collectExactPostgrestRows") &&
         draws.includes("collectExactPostgrestRows") &&
-        report.indexOf("countVendorCurrentConsentEntries") <
+        report.indexOf("countVendorNamedContactEntries") <
           report.indexOf("loadVendorEntryPool") &&
         report.includes("exactConsentEntryCount > 5000") &&
         report.includes("pool.entry_count > 5000") &&
@@ -115,6 +118,7 @@ Deno.test("named-vendor contact export is authenticated, scoped, complete, and m
     );
     assert(
       source.includes("entry.consent_share_contact === true") &&
+        source.includes("NAMED_VENDOR_CONTACT_RULES_VERSIONS.includes(") &&
         source.includes(
           "entry.consent_version === CONTACT_SHARING_RULES_VERSION",
         ) &&
@@ -122,7 +126,7 @@ Deno.test("named-vendor contact export is authenticated, scoped, complete, and m
         source.includes("entry.vendor_marketing_consent === true") &&
         source.includes("entry.vendor_marketing_consented_at") &&
         source.includes("entry.vendor_marketing_consent_text"),
-      "legacy false or incomplete marketing consent must not become exportable",
+      "historical marketing rows must retain their recorded version while false or incomplete consent remains non-exportable",
     );
     assert(
       source.includes("function isolatedFixtureSuppressesOutbound") &&

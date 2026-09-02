@@ -73,11 +73,13 @@ if (!function_exists('ww_qr_bingo_runtime_config')) {
         $historyTimestamp = isset($config['history_starts_at']) && ww_qr_bingo_is_rfc3339_timestamp($config['history_starts_at'])
             ? strtotime($config['history_starts_at'])
             : false;
+        $entryClosesTimestamp = isset($config['entry_closes_at']) && ww_qr_bingo_is_rfc3339_timestamp($config['entry_closes_at'])
+            ? strtotime($config['entry_closes_at'])
+            : false;
         $eventName = isset($config['event_name']) && is_string($config['event_name'])
             ? trim($config['event_name'])
             : '';
         $officialRulesUrl = isset($config['official_rules_url']) ? $config['official_rules_url'] : null;
-        $alternateFreeEntryUrl = isset($config['alternate_free_entry_url']) ? $config['alternate_free_entry_url'] : null;
         $rulesVersion = isset($config['rules_version']) && is_string($config['rules_version'])
             ? trim($config['rules_version'])
             : '';
@@ -88,6 +90,7 @@ if (!function_exists('ww_qr_bingo_runtime_config')) {
             || !ww_qr_bingo_is_positive_json_integer($revision)
             || !ww_qr_bingo_is_event_key($eventKey)
             || $historyTimestamp === false
+            || $entryClosesTimestamp === false
             || !$eventName
             || strlen($eventName) > 160
             || strip_tags($eventName) !== $eventName
@@ -101,8 +104,7 @@ if (!function_exists('ww_qr_bingo_runtime_config')) {
             || !is_bool($config['send_couple_email'])
             || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/D', $rulesVersion) !== 1
             || ($emailDeliveryMode !== 'disabled' && $emailDeliveryMode !== 'production_verified_fulfillment')
-            || !ww_qr_bingo_is_weddingwin_https_url($officialRulesUrl)
-            || !ww_qr_bingo_is_weddingwin_https_url($alternateFreeEntryUrl)) {
+            || !ww_qr_bingo_is_weddingwin_https_url($officialRulesUrl)) {
             return null;
         }
         $config['event_key'] = $eventKey;
@@ -111,6 +113,8 @@ if (!function_exists('ww_qr_bingo_runtime_config')) {
         $config['event_name'] = $eventName;
         $config['rules_version'] = $rulesVersion;
         $config['history_starts_at_sql'] = date('Y-m-d H:i:s', $historyTimestamp);
+        $config['history_starts_at_unix'] = $historyTimestamp;
+        $config['entry_closes_at_unix'] = $entryClosesTimestamp;
         return $config;
     }
 }
@@ -286,11 +290,18 @@ if (user::isUserLogged($_COOKIE)) {
         return;
     }
     $eventTagId = intval($eventConfig['vendor_tag_id']);
-    $eventHistoryStartsAt = $eventConfig['history_starts_at_sql'];
+    // Production progress and draw eligibility count only scans recorded during
+    // the published wedding-show window.
+    // Isolated review fixtures keep their separate service-side scan history.
+    $eventHistoryStartsAt = (string)$eventConfig['history_starts_at_sql'];
+    $eventScanClosesAt = date(
+        'Y-m-d H:i:s',
+        intval($eventConfig['entry_closes_at_unix'])
+    );
     $eventName = $eventConfig['event_name'];
     $eventConfigRevision = intval($eventConfig['revision']);
     $officialRulesUrl = $eventConfig['official_rules_url'];
-    $participationNoticeVersion = (string)$eventConfig['rules_version'] . '|2026-09-01-vendor-marketing';
+    $participationNoticeVersion = (string)$eventConfig['rules_version'] . '|2026-09-01-in-person-entry';
     $rulesNoticeStorageKey = 'wwQrRulesNotice:' . hash(
         'sha256',
         'couple|' . (string)$userId . '|' . $eventConfig['event_key'] . '|' . $participationNoticeVersion
@@ -328,6 +339,12 @@ if (user::isUserLogged($_COOKIE)) {
             isset($_COOKIE['token']) ? (string)$_COOKIE['token'] : ''
         );
         $fixtureContext = ww_qr_bingo_fixture_context($fixtureProbeResponse);
+        $productionScanWindowOpensAt = intval($eventConfig['history_starts_at_unix']);
+        $productionScanWindowClosesAt = intval($eventConfig['entry_closes_at_unix']);
+        $showScanWindowOpen = !empty($fixtureContext)
+            || ($productionScanWindowClosesAt > 0
+                && time() >= $productionScanWindowOpensAt
+                && time() < $productionScanWindowClosesAt);
 
         // Handle AJAX requests for scanning vendors
         if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -539,6 +556,21 @@ if (user::isUserLogged($_COOKIE)) {
                     ));
                     exit();
                 }
+                $scanWindowOpensAt = isset($eventConfig['history_starts_at_unix'])
+                    ? intval($eventConfig['history_starts_at_unix'])
+                    : 0;
+                $scanWindowClosesAt = isset($eventConfig['entry_closes_at_unix'])
+                    ? intval($eventConfig['entry_closes_at_unix'])
+                    : 0;
+                if (!$scanWindowOpensAt || !$scanWindowClosesAt || time() < $scanWindowOpensAt || time() >= $scanWindowClosesAt) {
+                    http_response_code(403);
+                    echo json_encode(array(
+                        'status' => 'error',
+                        'code' => 'show_scan_window_closed',
+                        'message' => 'QR Bingo booth scans are accepted only during the published wedding-show hours.'
+                    ));
+                    exit();
+                }
                 $vendorId = mysql_real_escape_string($vendorId);
 
                 // Stable QR identifiers are Brilliant Directories user IDs.
@@ -591,6 +623,7 @@ if (user::isUserLogged($_COOKIE)) {
                     AND rt.tag_type_id = 1
                     AND u.active = 2
                     AND vv.scan_date >= '$eventHistoryStartsAt'
+                    AND vv.scan_date < '$eventScanClosesAt'
                 ";
                 $result = mysql($w['database'], $scannedQuery);
                 $row = mysql_fetch_assoc($result);
@@ -630,6 +663,7 @@ if (user::isUserLogged($_COOKIE)) {
                     AND rt.tag_type_id = 1
                     AND u.active = 2
                     AND vv.scan_date >= '$eventHistoryStartsAt'
+                    AND vv.scan_date < '$eventScanClosesAt'
                     ORDER BY vv.vendor_id ASC
                 ";
                 $scannedResult = mysql($w['database'], $scannedQuery);
@@ -665,6 +699,7 @@ if (user::isUserLogged($_COOKIE)) {
                 AND rt.tag_type_id = 1
                 AND u.active = 2
                 AND vv.scan_date >= '$eventHistoryStartsAt'
+                AND vv.scan_date < '$eventScanClosesAt'
                 ORDER BY vv.vendor_id ASC
             ";
             $scannedResult = mysql($w['database'], $scannedQuery);
@@ -1195,6 +1230,10 @@ if (user::isUserLogged($_COOKIE)) {
       <div class="alert alert-warning" role="status" style="margin-bottom:16px;">
         QR Bingo scanning is temporarily disabled by the event administrator. Your saved progress is unchanged.
       </div>
+    <?php } elseif (empty($showScanWindowOpen)) { ?>
+      <div class="alert alert-info" role="status" style="margin-bottom:16px;">
+        QR Bingo booth scanning is available only during the published hours for <?php echo htmlspecialchars($eventName, ENT_QUOTES, 'UTF-8'); ?>.
+      </div>
     <?php } ?>
 
     <?php if (!$qrContactComplete) { ?>
@@ -1332,7 +1371,6 @@ if (user::isUserLogged($_COOKIE)) {
       <p class="vendor-draw-copy" id="vendorDrawApple"></p>
       <div class="vendor-draw-terms">
         <a id="vendorDrawRules" href="#" target="_blank" rel="noopener">View draw rules</a>
-        <a id="vendorDrawFreeEntry" href="#" target="_blank" rel="noopener" hidden>Alternate free entry method</a>
         <p class="vendor-draw-status" id="vendorDrawRulesStatus">Open the current rules before choosing to enter.</p>
       </div>
       <label class="vendor-draw-check">
@@ -1351,7 +1389,7 @@ if (user::isUserLogged($_COOKIE)) {
         <input id="vendorDrawResponsibility" type="checkbox">
         <span id="vendorDrawResponsibilityText">Loading the exact participant responsibility agreement…</span>
       </label>
-      <p class="vendor-draw-status" id="vendorDrawStatus" role="status" aria-live="polite">Prize entry is separate and optional. One valid entry is allowed per eligible couple per vendor draw, regardless of method. Declining does not change your saved booth visit.</p>
+      <p class="vendor-draw-status" id="vendorDrawStatus" role="status" aria-live="polite">Prize entry is separate and optional. One valid in-show QR entry is allowed per eligible couple for this vendor draw. Declining does not change your saved booth visit.</p>
       <div class="vendor-draw-actions">
         <button class="vendor-draw-decline" id="vendorDrawDecline" type="button">No Thanks</button>
         <button class="vendor-draw-enter" id="vendorDrawEnter" type="button" disabled>Accept Rules &amp; Enter</button>
@@ -1367,6 +1405,9 @@ if (user::isUserLogged($_COOKIE)) {
       'event_name' => $eventName,
       'vendor_tag_id' => $eventTagId,
       'scan_enabled' => !empty($eventConfig['scan_enabled']),
+      'show_scan_window_open' => !empty($showScanWindowOpen),
+      'history_starts_at' => isset($eventConfig['history_starts_at']) ? (string)$eventConfig['history_starts_at'] : '',
+      'entry_closes_at' => isset($eventConfig['entry_closes_at']) ? (string)$eventConfig['entry_closes_at'] : '',
       'vendor_draws_enabled' => !empty($eventConfig['vendor_draws_enabled'])
     ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const CONTACT_PROFILE_COMPLETE = <?php echo $qrContactComplete ? 'true' : 'false'; ?>;
@@ -1586,7 +1627,6 @@ if (user::isUserLogged($_COOKIE)) {
     const vendorDrawRoles = document.getElementById('vendorDrawRoles');
     const vendorDrawApple = document.getElementById('vendorDrawApple');
     const vendorDrawRules = document.getElementById('vendorDrawRules');
-    const vendorDrawFreeEntry = document.getElementById('vendorDrawFreeEntry');
     const vendorDrawRulesStatus = document.getElementById('vendorDrawRulesStatus');
     const vendorDrawAge = document.getElementById('vendorDrawAge');
     const vendorDrawResidency = document.getElementById('vendorDrawResidency');
@@ -1765,20 +1805,17 @@ if (user::isUserLogged($_COOKIE)) {
         offer.exclude_previous_winners
           ? "Repeat-winner rule: A couple who is confirmed as a winner is excluded only from later selections for this vendor's current prize offer. It does not affect another vendor's draw."
           : "Repeat-winner rule: A confirmed winner remains eligible for another selection in this vendor's current prize offer.",
-        'Eligibility, dates, odds, admission, entry limits, and the equal alternate free-entry method are explained in the Draw Rules.'
+        'No purchase from this vendor is required.',
+        'This in-show QR entry replaces a paper ballot. Eligibility, dates, odds, admission, and entry limits are explained in the Draw Rules.'
       ].join(String.fromCharCode(10));
       vendorDrawPrivacy.textContent = `By entering, I agree that Wedding Win Inc. may share my name, email address, phone number, wedding date, and entry/consent evidence with ${namedVendor}. That vendor may use these details to administer this draw and contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time.`;
       vendorDrawRoles.textContent = `${namedVendor} is responsible for this draw, winner verification, and prize fulfilment. Wedding Win Inc. provides the technical system.`;
       vendorDrawResponsibilityText.textContent = `I agree to share my contact information with ${namedVendor} for this draw and its wedding-related marketing, and I accept the current draw rules.`;
       vendorDrawApple.textContent = cleanPromotionText(offer.apple_non_sponsor_disclaimer) || 'Apple Inc. is not a sponsor of and is not involved in this promotion.';
       vendorDrawRules.href = rulesUrl;
-      const alternateUrl = trustedWeddingWinPromotionUrl(offer.alternate_free_entry_url);
-      vendorDrawFreeEntry.hidden = !alternateUrl;
-      if (alternateUrl) vendorDrawFreeEntry.href = alternateUrl;
-      else vendorDrawFreeEntry.removeAttribute('href');
       vendorDrawRulesStatus.textContent = 'Open the current rules before choosing to enter.';
       vendorDrawStatus.classList.remove('is-error');
-      vendorDrawStatus.textContent = 'Prize entry is separate and optional. One valid entry is allowed per eligible couple per vendor draw, regardless of method. Declining does not change your saved booth visit.';
+      vendorDrawStatus.textContent = 'Prize entry is separate and optional. One valid in-show QR entry is allowed per eligible couple for this vendor draw. Declining does not change your saved booth visit.';
       updateVendorDrawEntryButton();
       vendorDrawModal.hidden = false;
       vendorDrawRules.focus();
@@ -2638,7 +2675,7 @@ if (user::isUserLogged($_COOKIE)) {
       }
     }
 
-    function extractWeddingWinQrVendorToken(value) {
+    function extractWeddingWinQrVendorId(value) {
       try {
         const url = new URL(String(value || '').trim());
         const host = url.hostname.toLowerCase().replace(/^www[.]/, '');
@@ -2646,28 +2683,10 @@ if (user::isUserLogged($_COOKIE)) {
         if (url.protocol !== 'https:' || host !== 'weddingwin.ca' || path !== '/qr') return '';
         if ((url.port && url.port !== '443') || url.username || url.password || url.hash) return '';
 
-        const supportedKeys = ['vendor_id', 'vendor', 'id', 'code', 'qr'];
-        for (const key of supportedKeys) {
-          const token = String(url.searchParams.get(key) || '').trim();
-          if (token && token.length <= 160) return token;
-        }
-      } catch (error) {
-        return '';
-      }
-      return '';
-    }
-
-    function normalizeWeddingWinVendorUrl(value) {
-      try {
-        const url = new URL(String(value || '').trim());
-        const host = url.hostname.toLowerCase().replace(/^www[.]/, '');
-        if (url.protocol !== 'https:' || host !== 'weddingwin.ca') return '';
-        if ((url.port && url.port !== '443') || url.username || url.password || url.hash) return '';
-        url.search = '';
-        while (url.pathname.length > 1 && url.pathname.endsWith('/')) {
-          url.pathname = url.pathname.slice(0, -1);
-        }
-        return `https://www.weddingwin.ca${url.pathname}`;
+        const entries = Array.from(url.searchParams.entries());
+        if (entries.length !== 1 || entries[0][0] !== 'vendor_id') return '';
+        const vendorId = String(entries[0][1] || '').trim();
+        return /^[1-9][0-9]{0,19}$/.test(vendorId) ? vendorId : '';
       } catch (error) {
         return '';
       }
@@ -2683,52 +2702,13 @@ if (user::isUserLogged($_COOKIE)) {
     }
 
     async function handleDecoded(data) {
-      const prefix = 'nws://vendor/';
       const raw = data.trim();
-      const queryVendorToken = extractWeddingWinQrVendorToken(raw);
-      const identityCandidates = queryVendorToken ? [queryVendorToken, raw] : [raw];
-      const normalizedUrl = normalizeWeddingWinVendorUrl(raw);
+      const vendorId = extractWeddingWinQrVendorId(raw);
       console.log('🔍 QR Decoded:', raw);
-      let matched = null;
-
-      // 1) Canonical WeddingWin URLs ignore query strings, fragments and trailing slashes.
-      if (normalizedUrl) {
-        matched = VENDORS.find(v => normalizeWeddingWinVendorUrl(v.full_filename) === normalizedUrl);
-      }
-      console.log('🎯 URL Match:', matched ? `Found ${matched.name}` : 'No direct URL match');
-
-      // Legacy printed event codes are compatibility-only. Persist the matched
-      // vendor's stable BD user ID, never this old sequence number.
-      if (!matched) {
-        for (const candidate of identityCandidates) {
-          const legacyMatch = candidate.match(/^NWS25-([0-9]{3})$/i);
-          if (legacyMatch) {
-            matched = VENDORS.find(v => v.legacy_id === legacyMatch[1]);
-            if (matched) break;
-          }
-        }
-      }
-
-      // 2) ID formats: nws://vendor/<id> or raw numeric id
-      if (!matched) {
-        for (const candidate of identityCandidates) {
-          let id = null;
-          if (candidate.toLowerCase().startsWith(prefix)) id = candidate.slice(prefix.length).trim();
-          else if (/^[0-9]+$/.test(candidate)) id = candidate;
-          console.log('🔢 ID parsed:', id);
-          if (id) {
-            // Match the stable Brilliant Directories vendor ID
-            matched = VENDORS.find(v => v.id === id);
-
-            // Retain the explicit user_id comparison for older payloads
-            if (!matched) {
-              matched = VENDORS.find(v => v.user_id && v.user_id.toString() === id);
-            }
-            if (matched) break;
-          }
-        }
-        console.log('🎯 ID Match:', matched ? `Found ${matched.name}` : 'No ID match');
-      }
+      const matched = vendorId
+        ? VENDORS.find(v => v.id === vendorId || (v.user_id && v.user_id.toString() === vendorId))
+        : null;
+      console.log('🎯 Canonical QR match:', matched ? `Found ${matched.name}` : 'No match');
 
       if (matched) {
         const ok = await markScanned(matched.id);
@@ -2875,6 +2855,19 @@ if (user::isUserLogged($_COOKIE)) {
         cameraLoading.classList.remove('show');
         lastScan.textContent = 'Scanning is temporarily disabled.';
         console.log('QR Bingo scanning disabled by published event configuration.');
+        return;
+      }
+
+      if (!EVENT_CONFIG.show_scan_window_open) {
+        startBtn.disabled = true;
+        startBtn.textContent = 'Opens at the Show';
+        mobileStartBtn.disabled = true;
+        mobileStartBtn.title = 'Scanning opens at the show';
+        stopBtn.disabled = true;
+        mobileStopBtn.disabled = true;
+        cameraLoading.classList.remove('show');
+        lastScan.textContent = `Scanning is available from ${formatPromotionDate(EVENT_CONFIG.history_starts_at)} until ${formatPromotionDate(EVENT_CONFIG.entry_closes_at)}.`;
+        console.log('QR Bingo scanning is outside the configured wedding-show window.');
         return;
       }
 
