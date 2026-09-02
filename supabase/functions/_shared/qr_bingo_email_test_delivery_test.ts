@@ -7,6 +7,14 @@ const endpointUrls = [
   new URL("../bd-qr-bingo-vendor-sync/index.ts", import.meta.url),
 ];
 
+function between(source: string, startMarker: string, endMarker: string) {
+  const start = source.indexOf(startMarker);
+  assert(start >= 0, `${startMarker} is missing`);
+  const end = source.indexOf(endMarker, start);
+  assert(end > start, `${endMarker} is missing after ${startMarker}`);
+  return source.slice(start, end);
+}
+
 Deno.test("isolated email tests use exact fixture identities and a couple-only claim", async () => {
   const sources = await Promise.all(
     endpointUrls.map((url) => Deno.readTextFile(url)),
@@ -132,6 +140,85 @@ Deno.test("website mail boundary independently allowlists the one test mailbox",
         "$incomingCoupleSubject !== 'Your name was selected for a QR Bingo booth draw'",
       ),
     "the website transport must independently enforce test mode, exact mailbox hash, UUIDs, couple-only delivery, and the production subject",
+  );
+});
+
+Deno.test("winner preview matches the friendly couple email delivered by WeddingWin", async () => {
+  const [app, widget, ...endpoints] = await Promise.all([
+    Deno.readTextFile(
+      new URL("../../../app/(tabs)/index.tsx", import.meta.url),
+    ),
+    Deno.readTextFile(
+      new URL(
+        "../../../brilliant-directories/widgets/336-qr-bingo-draw-email-sender.php",
+        import.meta.url,
+      ),
+    ),
+    ...endpointUrls.map((url) => Deno.readTextFile(url)),
+  ]);
+  const preview = between(
+    app,
+    'testID="vendor-draw-email-preview"',
+    'testID="vendor-draw-step-couples"',
+  );
+  const deliveredTemplate = between(
+    widget,
+    "function ww_qbdes_text_body",
+    "function ww_qbdes_vendor_html",
+  );
+  const edgeTemplates = endpoints.map((source) =>
+    between(source, "const coupleText = [", "const claimOutcomes =")
+  );
+  const templates = [preview, deliveredTemplate, ...edgeTemplates];
+
+  for (
+    const phrase of [
+      "Congratulations, your name was selected by",
+      "for their draw.",
+      "Your draw",
+      "Draw item:",
+      "will follow up with the prize details and next steps.",
+      "You opted in after scanning this vendor",
+      "QR code at the wedding show.",
+      "WeddingWin.ca",
+    ]
+  ) {
+    templates.forEach((template, index) =>
+      assert(
+        template.includes(phrase),
+        `winner email template ${index + 1} is missing ${phrase}`,
+      )
+    );
+  }
+  for (
+    const internalCopy of [
+      "saved dated evidence",
+      "Wedding Win recorded the vendor",
+      "You were selected as a potential winner",
+      "This notice does not itself award the prize",
+    ]
+  ) {
+    templates.forEach((template, index) =>
+      assert(
+        !template.includes(internalCopy),
+        `winner email template ${index + 1} still exposes internal copy: ${internalCopy}`,
+      )
+    );
+  }
+  assert(
+    preview.includes("Subject: {vendorDrawEmailSubjectPreview}") &&
+      app.includes(
+        "vendorRaffle?.couple_email_subject?.trim() || 'Your name was selected for a QR Bingo booth draw'",
+      ) &&
+      widget.includes(
+        "$coupleSubject = $incomingCoupleSubject ? $incomingCoupleSubject : 'Your name was selected for a QR Bingo booth draw'",
+      ) &&
+      endpoints.every((source) =>
+        source.includes(
+          "couple_email_subject: qrBingoConfig().couple_email_subject",
+        )
+      ),
+    "the previously restored winner-email subject must remain unchanged",
   );
 });
 

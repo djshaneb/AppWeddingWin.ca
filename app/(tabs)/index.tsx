@@ -385,6 +385,7 @@ type QrBingoVendorRaffleResponse = {
   rules_version?: string;
   rules_current?: boolean;
   vendor_acceptance_current?: boolean;
+  couple_email_subject?: string;
   administrator_name?: string;
   co_sponsor_name?: string;
   prize_provider_name?: string;
@@ -3699,6 +3700,8 @@ function NativeHome({
   const vendorDrawPrizePreview =
     rafflePrizeDescription.trim().split(/\r?\n/)[0]?.trim() || rafflePrizeTitle.trim() || 'Your prize';
   const vendorDrawNamePreview = vendorRaffle?.vendor?.name || displayName || 'your business';
+  const vendorDrawEmailSubjectPreview =
+    vendorRaffle?.couple_email_subject?.trim() || 'Your name was selected for a QR Bingo booth draw';
   const vendorRaffleDrawCount = typeof vendorRaffle?.active_winner_count === 'number'
     ? vendorRaffle.active_winner_count
     : (vendorRaffle?.draws || []).filter((draw) =>
@@ -5052,11 +5055,11 @@ function NativeHome({
                       activeOpacity={0.78}
                       onPress={() => setVendorRaffleEmailPreviewExpanded((value) => !value)}
                       accessibilityRole="button"
-                      accessibilityLabel="Preview winner email"
+                      accessibilityLabel="Preview email sent to the couple"
                       accessibilityState={{ expanded: vendorRaffleEmailPreviewExpanded }}>
                       <View style={styles.vendorRaffleGuideCopy}>
-                        <Text style={styles.vendorRafflePreviewEyebrow}>Preview winner email</Text>
-                        <Text style={styles.vendorRafflePreviewMeta}>Sent only after winner verification</Text>
+                        <Text style={styles.vendorRafflePreviewEyebrow}>Couple email preview</Text>
+                        <Text style={styles.vendorRafflePreviewMeta}>Sent only when you tap Send Winner Email</Text>
                       </View>
                       <ChevronDown
                         size={20}
@@ -5075,14 +5078,11 @@ function NativeHome({
                       />
                       <View style={styles.vendorRafflePreviewDivider} />
                       <Text style={styles.vendorRafflePreviewSubject}>
-                        Subject: Your name was selected for a QR Bingo booth draw
+                        Subject: {vendorDrawEmailSubjectPreview}
                       </Text>
                       <Text style={styles.vendorRafflePreviewBody}>Hi First Name,</Text>
                       <Text style={styles.vendorRafflePreviewBody}>
-                        {vendorDrawNamePreview} confirmed that its required winner-verification steps were completed and saved dated evidence for its prize draw.
-                      </Text>
-                      <Text style={styles.vendorRafflePreviewBody}>
-                        Wedding Win recorded the vendor&apos;s attestation only; it did not perform or certify the vendor&apos;s eligibility, release, or prize-fulfillment work.
+                        Congratulations, your name was selected by {vendorDrawNamePreview} for their draw.
                       </Text>
                       <View style={styles.vendorRafflePreviewBox}>
                         <Text style={styles.vendorRafflePreviewSection}>Your draw</Text>
@@ -5091,14 +5091,14 @@ function NativeHome({
                       </View>
                       <Text style={styles.vendorRafflePreviewSection}>What happens next</Text>
                       <Text style={styles.vendorRafflePreviewBody}>
-                        This WeddingWin.ca notice confirms the saved draw result. {vendorDrawNamePreview} may also contact you with wedding-related offers and promotions under the consent recorded when you entered.
+                        {vendorDrawNamePreview} will follow up with the prize details and next steps.
                       </Text>
                       <View style={styles.vendorRafflePreviewButton}>
                         <Text style={styles.vendorRafflePreviewButtonText}>View vendor profile</Text>
                       </View>
                       <Text style={styles.vendorRafflePreviewSection}>Why you received this</Text>
                       <Text style={styles.vendorRafflePreviewBody}>
-                        You entered this vendor{'\u2019s'} optional prize draw after scanning at the wedding show.
+                        You opted in after scanning this vendor{'’s'} QR code at the wedding show.
                       </Text>
                       <Text style={styles.vendorRafflePreviewFooter}>WeddingWin.ca</Text>
                     </View>

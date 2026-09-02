@@ -100,15 +100,18 @@ if (!function_exists('ww_qbdes_json')) {
         $lines = array(
             'Hi ' . $winner . ',',
             '',
-            'You were selected as a potential winner in ' . $vendor . "'s draw. " . $vendor . ' confirmed that you meet the draw rules, WeddingWin confirmed your answer to the required math question was correct, and the vendor completed any required declaration or release step. WeddingWin recorded the vendor attestation but did not perform or certify the vendor checks.',
+            'Congratulations, your name was selected by ' . $vendor . ' for their draw.',
             '',
+            'Your draw',
             'Vendor: ' . $vendor,
             'Draw item: ' . $prize,
             '',
-            $vendor . ' is responsible for this promotion and prize. They may contact you only to arrange prize fulfillment or address a vendor-administered prize requirement under the official rules. This notice does not itself award the prize.',
+            'What happens next',
+            $vendor . ' will follow up with the prize details and next steps.',
             $profileUrl ? 'Vendor profile: ' . $profileUrl : 'You can connect with them through WeddingWin.ca.',
             '',
-            'You received this because you chose to enter this vendor draw through WeddingWin.',
+            'Why you received this',
+            "You opted in after scanning this vendor's QR code at the wedding show.",
             '',
             'WeddingWin.ca'
         );
@@ -120,10 +123,10 @@ if (!function_exists('ww_qbdes_json')) {
         $prize = ww_qbdes_label($prizeTitle, 'the booth draw item', 500);
         $profile = $profileUrl ? '<p style="margin:14px 0 0;"><a href="' . ww_qbdes_e($profileUrl) . '" target="_blank" style="background-color:#aa565d;border-radius:6px;color:#ffffff;display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;line-height:18px;padding:11px 16px;text-decoration:none;">View vendor profile</a></p>' : '';
         $html = '';
-        $html .= ww_qbdes_section('<p style="margin:0 0 14px;font-size:16px;line-height:1.55;">Hi ' . ww_qbdes_e($winner) . ',</p><p style="margin:0;font-size:16px;line-height:1.55;">You were selected as a potential winner in ' . ww_qbdes_e($vendor) . '&#39;s draw. ' . ww_qbdes_e($vendor) . ' confirmed that you meet the draw rules, WeddingWin confirmed your answer to the required math question was correct, and the vendor completed any required declaration or release step. WeddingWin recorded the vendor attestation but did not perform or certify the vendor checks.</p>');
+        $html .= ww_qbdes_section('<p style="margin:0 0 14px;font-size:16px;line-height:1.55;">Hi ' . ww_qbdes_e($winner) . ',</p><p style="margin:0;font-size:16px;line-height:1.55;"><strong>Congratulations,</strong> your name was selected by ' . ww_qbdes_e($vendor) . ' for their draw.</p>');
         $html .= ww_qbdes_section(ww_qbdes_heading('Your draw') . '<p style="margin:0 0 8px;"><strong>Vendor:</strong> ' . ww_qbdes_e($vendor) . '</p><p style="margin:0;"><strong>Draw item:</strong> ' . ww_qbdes_e($prize) . '</p>', '#fff7f6', '1px solid #efd8d5');
-        $html .= ww_qbdes_section(ww_qbdes_heading('What happens next') . '<p style="margin:0;">' . ww_qbdes_e($vendor) . ' is responsible for this promotion and prize. They may contact you about prize fulfillment and, under the terms you accepted when entering, wedding-related offers and promotions. You may unsubscribe from vendor marketing at any time. This notice does not itself award the prize.</p>' . $profile);
-        $html .= ww_qbdes_section(ww_qbdes_heading('Why you received this') . '<p style="margin:0;">You received this because you chose to enter this vendor draw through WeddingWin.</p>');
+        $html .= ww_qbdes_section(ww_qbdes_heading('What happens next') . '<p style="margin:0;">' . ww_qbdes_e($vendor) . ' will follow up with the prize details and next steps.</p>' . $profile);
+        $html .= ww_qbdes_section(ww_qbdes_heading('Why you received this') . '<p style="margin:0;">You opted in after scanning this vendor&#39;s QR code at the wedding show.</p>');
         $html .= '<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="width:100%;"><tr><td style="padding:4px 20px 0;font-family:Arial,Helvetica,sans-serif;color:#2e2e32;font-size:15px;line-height:1.55;">WeddingWin.ca</td></tr></table>';
         return $html;
     }
@@ -331,6 +334,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
     $winnerPhone = ww_qbdes_line_after($vendorText, 'Phone:');
     $winnerWeddingDate = ww_qbdes_line_after($vendorText, 'Wedding date:');
     $prizeTitle = ww_qbdes_section_after($vendorText, 'Draw item');
+    if (!$prizeTitle) { $prizeTitle = ww_qbdes_line_after($incomingCoupleText, 'Prize:'); }
     if (!$prizeTitle) { $prizeTitle = ww_qbdes_line_after($incomingCoupleText, 'Draw item:'); }
     $vendorName = ww_qbdes_vendor_from_couple_text($incomingCoupleText);
     $profileUrl = ww_qbdes_profile_url_from_text($incomingCoupleText);

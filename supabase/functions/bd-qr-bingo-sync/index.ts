@@ -2563,6 +2563,7 @@ async function getVendorRaffleDashboard(
     rules_version: qrBingoConfig().rules_version,
     vendor_responsibility_disclosure: currentVendorResponsibilityDisclosure,
     vendor_acceptance_current: vendorAcceptanceCurrent,
+    couple_email_subject: qrBingoConfig().couple_email_subject,
     rules_current: isSettingsEnterable(
       { ...settings, enabled: true },
       isolatedFixture,
@@ -2807,10 +2808,11 @@ async function sendDrawEmails(
   const vendorEmail = cleanText(vendorUser?.email, 160);
   const safePrize = cleanText(draw.prize_title, 200);
   const safeVendorName = cleanText(draw.vendor_name, 160);
-  const safePrizeDescription = cleanText(draw.prize_description, 1000) ||
-    "Prize details will be provided by the vendor.";
+  const safePrizeDescription = cleanText(draw.prize_description, 1000);
   const safeDrawItem = safePrizeDescription || safePrize ||
-    "the booth draw item";
+    "Prize details will be provided by the vendor.";
+  const safeEmailDrawItem = safeDrawItem.split(/\r?\n/)[0]?.trim() || safePrize ||
+    "Prize details will be provided by the vendor.";
   const safeWinnerPhone = cleanText(draw.winner_phone, 120) || "Not provided";
   const safeWinnerWeddingDate = cleanText(draw.winner_wedding_date, 120) ||
     "Not provided";
@@ -2842,18 +2844,18 @@ async function sendDrawEmails(
   const coupleText = [
     `Hi ${cleanText(draw.winner_name, 80) || "there"},`,
     "",
-    `You were selected as a potential winner in ${safeVendorName}'s prize draw. ${safeVendorName} confirmed that you meet the draw rules and completed the rules/release step, and Wedding Win confirmed your answer to the required short math question was correct.`,
+    `Congratulations, your name was selected by ${safeVendorName} for their draw.`,
     "",
     "Your draw",
     `Vendor: ${safeVendorName}`,
-    `Draw item: ${safeDrawItem}`,
+    `Draw item: ${safeEmailDrawItem}`,
     "",
     "What happens next",
-    `${safeVendorName} may contact you about this prize and, under the terms you accepted when entering, wedding-related offers and promotions. You may unsubscribe from vendor marketing at any time. This notice does not itself award the prize.`,
+    `${safeVendorName} will follow up with the prize details and next steps.`,
     profileLine,
     "",
     "Why you received this",
-    "You entered this vendor's optional prize draw through one of its permitted entry methods.",
+    "You opted in after scanning this vendor's QR code at the wedding show.",
     "",
     "WeddingWin.ca",
   ].join("\n");
