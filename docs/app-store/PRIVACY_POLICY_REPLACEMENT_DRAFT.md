@@ -55,7 +55,7 @@ Each value must be a finite duration or an objective criterion that production o
 | Release fact | Required sign-off |
 | --- | --- |
 | Camera frames stay on device; only decoded vendor ID is transmitted | **RELEASE OWNER — exact TestFlight/physical QR pass** |
-| Native chat image upload remains disabled; historical/profile media inventory is complete | **RELEASE OWNER** |
+| Backend-gated private-message photo attachment, selected-item system-picker access, validation, app↔website persistence, report/block, and retention behavior match the exact TestFlight build | **RELEASE OWNER — physical iPhone pass pending** |
 | Generic push contains no message text; token lifecycle works on physical TestFlight | **RELEASE OWNER** |
 | Signed-in deletion and physical Apple revocation match this policy | **RELEASE OWNER** |
 | WebView scripts, cookies, redirects, embeds, and recipients match schedule 2 | **RELEASE OWNER** |
@@ -85,9 +85,9 @@ The app and our services also process WeddingWin member identifiers, Supabase pr
 
 When you use private messaging, we process message text, participants, thread and message identifiers, timestamps, read and delivery state, and delivery errors. Conversations synchronize between the iOS app and WeddingWin.ca so participants can see the same text history in either client.
 
-Native chat image selection and upload are disabled in this release. Profile/listing images and historical message media that were previously stored may still be processed according to the retention schedule.
+If the private-message attachment feature is enabled by our backend rollout gate, you can tap Attach and use the iOS system picker to choose a photo. The app receives only the item you select and does not request broad photo-library access for this flow. It resizes and re-encodes the selection as a bounded JPEG before upload. Our backend checks its declared type, strict base64 and full decode, decoded size, image dimensions, and rollout cutoff before accepting it. This technical validation does not perform automated semantic image moderation. Accepted attachments synchronize with the conversation and are processed under the private-message/media retention schedule.
 
-If you report or block a conversation, we process the reporter, participants, reason and moderation state needed to close or review the conversation and protect users. Reporting closes the current conversation and suppresses the reported member in the app. A conversation created through an external website entry point can exist until synchronization discovers and closes it; this is not a promise of preventive website-wide blocking.
+If you report or block a conversation, including one containing a photo attachment, we process the reporter, participants, reason and moderation state needed to close or review the conversation and protect users. Reporting closes the current conversation and suppresses the reported member in the app. A conversation created through an external website entry point can exist until synchronization discovers and closes it; this is not a promise of preventive website-wide blocking. Message text, attachments, delivery state, and moderation evidence follow the approved retention and deletion rules in schedule 3.
 
 ### QR Bingo booth visits and optional vendor draws
 
@@ -125,7 +125,7 @@ We use information to:
 
 - create, authenticate, secure, and support accounts;
 - provide vendor discovery, profiles/listings, wedding-planning tools, and personalized account content;
-- synchronize and deliver private messages and generic notifications;
+- synchronize and deliver private messages, including user-selected photo attachments when the backend gate permits them, and generic notifications;
 - prevent abuse, investigate reports, enforce blocks, and protect the service;
 - record QR Bingo booth-visit and card progress;
 - present and record separate optional vendor-draw entries; provide entry recording, duplicate controls, random potential-winner selection, audit and notice tooling; share current-version entrants' specified contact/profile and consent evidence only with the entered draw's named vendor for draw administration and that vendor's wedding-related offers or promotions; support the named vendor's eligibility/skill-test/rules-release verification; and record notice/fulfilment state;

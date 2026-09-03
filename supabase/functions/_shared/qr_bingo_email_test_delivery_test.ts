@@ -2,6 +2,12 @@ function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
 }
 
+function includesIgnoringWhitespace(source: string, fragment: string) {
+  const normalize = (value: string) =>
+    value.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
+  return normalize(source).includes(normalize(fragment));
+}
+
 const endpointUrls = [
   new URL("../bd-qr-bingo-sync/index.ts", import.meta.url),
   new URL("../bd-qr-bingo-vendor-sync/index.ts", import.meta.url),
@@ -185,7 +191,7 @@ Deno.test("winner preview matches the friendly couple email delivered by Wedding
   ) {
     templates.forEach((template, index) =>
       assert(
-        template.includes(phrase),
+        includesIgnoringWhitespace(template, phrase),
         `winner email template ${index + 1} is missing ${phrase}`,
       )
     );
@@ -207,7 +213,8 @@ Deno.test("winner preview matches the friendly couple email delivered by Wedding
   }
   assert(
     preview.includes("Subject: {vendorDrawEmailSubjectPreview}") &&
-      app.includes(
+      includesIgnoringWhitespace(
+        app,
         "vendorRaffle?.couple_email_subject?.trim() || 'Your name was selected for a QR Bingo booth draw'",
       ) &&
       widget.includes(
@@ -242,11 +249,17 @@ Deno.test("Simulator and website clearly label the no-prize QA fixture", async (
   ]);
 
   assert(
-    app.includes("__DEV__ && (emailTestFixture || appReviewFixture)") &&
+    includesIgnoringWhitespace(
+      app,
+      "__DEV__ && (emailTestFixture || appReviewFixture)",
+    ) &&
       app.includes("Emulate controlled email-test booth QR scan") &&
       app.includes("Test only: Emulate email-test booth QR") &&
       app.includes("Isolated prize-email QA fixture") &&
-      app.includes("one notice is sent only to the allowlisted test mailbox") &&
+      includesIgnoringWhitespace(
+        app,
+        "one notice is sent only to the allowlisted test mailbox",
+      ) &&
       app.includes("does not award a real prize"),
     "the Simulator-only scan emulator and vendor warning must be visibly test-only",
   );

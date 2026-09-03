@@ -1,4 +1,6 @@
 import {
+  CHAT_IMAGE_MAX_DECODED_BYTES,
+  chatImageDeliveryPolicy,
   filterMessagesAtOrBeforeReport,
   containsInlineImagePayload,
   isChatImageSharingEnabled,
@@ -9,7 +11,11 @@ import {
   parseChatTimestamp,
   runDurableClose,
   stripInlineImagePayloads,
+  sumUnreadOwnerCounts,
+  validateChatImageDataUri,
+  validateDecodedChatImageDataUri,
 } from "./chat_moderation.ts";
+import jpeg from "npm:jpeg-js@0.4.4";
 
 function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
@@ -33,6 +39,96 @@ Deno.test("chat image sharing fails closed unless explicitly enabled", () => {
   const payload = "data:image/png;base64,QUJDRA==";
   assert(containsInlineImagePayload(payload), "inline image payload should be detected");
   assert(stripInlineImagePayloads(`before ${payload} after`) === "before  after", "inline image bytes should be stripped from display text");
+});
+
+Deno.test("a paused photo does not block a later text message", () => {
+  const planned = [
+    ...Array.from({ length: 10 }, (_, index) => ({
+      id: `paused-photo-${index + 1}`,
+      policy: chatImageDeliveryPolicy(true, false, true, false),
+    })),
+    {
+      id: "later-text",
+      policy: chatImageDeliveryPolicy(false, true, false, false),
+    },
+  ];
+  const deliverable = planned
+    .filter(({ policy }) => policy === "text" || policy === "image")
+    .map(({ id }) => id);
+
+  assert(
+    planned.slice(0, 10).every(({ policy }) => policy === "pause"),
+    "current photos must remain queued while the gate is paused",
+  );
+  assert(
+    deliverable.length === 1 && deliverable[0] === "later-text",
+    "later text must remain independently deliverable while the photo waits",
+  );
+});
+
+Deno.test("unread aggregation is exact above the three-message preview cap", () => {
+  const count = sumUnreadOwnerCounts(
+    [
+      { owner: "other", unread_count: 8 },
+      { owner: "mine", unread_count: 4 },
+    ],
+    (row) => row.owner === "mine",
+  );
+  assert(count === 8, "content-free unread aggregation must not inherit the preview limit");
+});
+
+Deno.test("chat image uploads require real supported image bytes", () => {
+  const bytes = jpeg.encode({
+    data: Uint8Array.from([198, 106, 106, 255]),
+    width: 1,
+    height: 1,
+  }, 80).data;
+  const tinyJpeg = `data:image/jpeg;base64,${btoa(String.fromCharCode(...bytes))}`;
+  assert(validateChatImageDataUri(tinyJpeg) === tinyJpeg, "a JPEG signature should be accepted");
+
+  for (const [label, payload] of [
+    ["MIME mismatch", "data:image/png;base64,/9j/2Q=="],
+    ["invalid base64", "data:image/jpeg;base64,%%%="],
+    ["unsupported SVG", "data:image/svg+xml;base64,PHN2Zz4="],
+  ] as const) {
+    let rejected = false;
+    try {
+      validateChatImageDataUri(payload);
+    } catch {
+      rejected = true;
+    }
+    assert(rejected, `${label} must be rejected`);
+  }
+
+  let oversizedRejected = false;
+  try {
+    const oversized = btoa(`\xff\xd8\xff${"a".repeat(CHAT_IMAGE_MAX_DECODED_BYTES)}`);
+    validateChatImageDataUri(`data:image/jpeg;base64,${oversized}`);
+  } catch {
+    oversizedRejected = true;
+  }
+  assert(oversizedRejected, "a decoded photo above the bounded chat limit must be rejected");
+});
+
+Deno.test("chat images must decode and remain inside pixel limits", async () => {
+  const bytes = jpeg.encode({
+    data: Uint8Array.from([198, 106, 106, 255]),
+    width: 1,
+    height: 1,
+  }, 80).data;
+  const tinyJpeg = `data:image/jpeg;base64,${btoa(String.fromCharCode(...bytes))}`;
+  assert(
+    await validateDecodedChatImageDataUri(tinyJpeg) === tinyJpeg,
+    "a complete one-pixel JPEG should decode",
+  );
+
+  let rejected = false;
+  try {
+    await validateDecodedChatImageDataUri("data:image/jpeg;base64,/9j/2Q==");
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, "a header-only JPEG must not pass full decoding");
 });
 
 Deno.test("report cutoff preserves history and suppresses later messages", () => {

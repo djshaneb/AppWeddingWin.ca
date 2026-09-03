@@ -305,8 +305,9 @@ if (!function_exists('ww_qrbs_escape')) {
     function ww_qrbs_validate_publish($source) {
         $errors = array();
         $allowed = array(
-            'csrf_token', 'action', 'expected_revision', 'event_name', 'vendor_tag_id',
-            'history_starts_at', 'scan_enabled', 'vendor_draws_enabled',
+            'csrf_token', 'action', 'expected_revision', 'event_name', 'venue_name',
+            'vendor_tag_id', 'history_starts_at', 'app_card_enabled', 'scan_enabled',
+            'vendor_draws_enabled',
             'email_delivery_mode', 'send_vendor_email', 'send_couple_email',
             'vendor_notice_title', 'couple_notice_title', 'rules_version',
             'official_rules_url', 'alternate_free_entry_url', 'eligibility_region',
@@ -338,6 +339,11 @@ if (!function_exists('ww_qrbs_escape')) {
         $eventName = ww_qrbs_normalize_plain_text(ww_qrbs_post_scalar($source, 'event_name', $errors));
         if (!ww_qrbs_is_plain_text($eventName, 1, 120, false)) {
             $errors['event_name'] = 'Use 1–120 plain-text characters.';
+        }
+
+        $venueName = ww_qrbs_normalize_plain_text(ww_qrbs_post_scalar($source, 'venue_name', $errors));
+        if (!ww_qrbs_is_plain_text($venueName, 1, 160, false)) {
+            $errors['venue_name'] = 'Use 1–160 plain-text characters.';
         }
 
         $vendorTagText = trim(ww_qrbs_post_scalar($source, 'vendor_tag_id', $errors));
@@ -424,8 +430,10 @@ if (!function_exists('ww_qrbs_escape')) {
 
         $config = array(
             'event_name' => $eventName,
+            'venue_name' => $venueName,
             'vendor_tag_id' => $vendorTagId,
             'history_starts_at' => $historyStartsAt,
+            'app_card_enabled' => ww_qrbs_post_boolean($source, 'app_card_enabled', $errors),
             'scan_enabled' => ww_qrbs_post_boolean($source, 'scan_enabled', $errors),
             'vendor_draws_enabled' => ww_qrbs_post_boolean($source, 'vendor_draws_enabled', $errors),
             'email_delivery_mode' => $emailMode,
@@ -1364,8 +1372,10 @@ $ww_qrbs_closure_status_label = $ww_qrbs_closure_draw_allowed
 
 $ww_qrbs_defaults = array(
     'event_name' => '',
+    'venue_name' => '',
     'vendor_tag_id' => '',
     'history_starts_at' => '',
+    'app_card_enabled' => false,
     'scan_enabled' => false,
     'vendor_draws_enabled' => false,
     'email_delivery_mode' => 'disabled',
@@ -1588,6 +1598,12 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
           <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'event_name'); ?>
         </div>
         <div class="ww-qrbs-field">
+          <label for="ww-qrbs-venue-name">Venue</label>
+          <input id="ww-qrbs-venue-name" name="venue_name" type="text" maxlength="160" required value="<?php echo ww_qrbs_escape($ww_qrbs_form_config['venue_name']); ?>">
+          <p class="ww-qrbs-help">This venue appears with the wedding show details in the app.</p>
+          <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'venue_name'); ?>
+        </div>
+        <div class="ww-qrbs-field">
           <label for="ww-qrbs-vendor-tag">Vendor group for QR Bingo</label>
           <select id="ww-qrbs-vendor-tag" name="vendor_tag_id" required>
             <option value="">Choose a vendor group</option>
@@ -1613,6 +1629,11 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
     <section class="ww-qrbs-section" aria-labelledby="ww-qrbs-controls-heading">
       <h2 id="ww-qrbs-controls-heading"><span class="ww-qrbs-step">2</span>Choose what couples can do</h2>
       <div class="ww-qrbs-check">
+        <input id="ww-qrbs-app-card-enabled" name="app_card_enabled" type="checkbox" value="1"<?php echo ww_qrbs_truthy($ww_qrbs_form_config['app_card_enabled']) ? ' checked' : ''; ?>>
+        <label for="ww-qrbs-app-card-enabled"><strong>Make the QR Bingo card available on the app home screen</strong><br><span class="ww-qrbs-help">When this is off, the card is grey and says “Available at Wedding Shows”.</span></label>
+      </div>
+      <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'app_card_enabled'); ?>
+      <div class="ww-qrbs-check">
         <input id="ww-qrbs-scan-enabled" name="scan_enabled" type="checkbox" value="1"<?php echo ww_qrbs_truthy($ww_qrbs_form_config['scan_enabled']) ? ' checked' : ''; ?>>
         <label for="ww-qrbs-scan-enabled"><strong>Let couples scan booth QR codes</strong><br><span class="ww-qrbs-help">Turn this off only if you need to pause scanning. Saved booth visits are not deleted.</span></label>
       </div>
@@ -1629,12 +1650,12 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
       <p class="ww-qrbs-help">All times on this page use Toronto time. The system converts them automatically for the app and website.</p>
       <div class="ww-qrbs-fields">
         <div class="ww-qrbs-field">
-          <label for="ww-qrbs-history-start">Start counting booth visits</label>
+          <label for="ww-qrbs-history-start">Wedding show starts</label>
           <input id="ww-qrbs-history-start" name="history_starts_at" type="datetime-local" step="1" required value="<?php echo ww_qrbs_escape(ww_qrbs_toronto_datetime_input_value($ww_qrbs_form_config['history_starts_at'])); ?>">
           <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'history_starts_at'); ?>
         </div>
         <div class="ww-qrbs-field">
-          <label for="ww-qrbs-entry-close">Prize entries close</label>
+          <label for="ww-qrbs-entry-close">Wedding show ends (and prize entries close)</label>
           <input id="ww-qrbs-entry-close" name="entry_closes_at" type="datetime-local" step="1" required value="<?php echo ww_qrbs_escape(ww_qrbs_toronto_datetime_input_value($ww_qrbs_form_config['entry_closes_at'])); ?>">
           <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'entry_closes_at'); ?>
         </div>

@@ -13,8 +13,10 @@ export type QrBingoEventConfig = {
   revision: number;
   published: boolean;
   event_name: string;
+  venue_name: string;
   vendor_tag_id: number;
   history_starts_at: string;
+  app_card_enabled: boolean;
   scan_enabled: boolean;
   vendor_draws_enabled: boolean;
   email_delivery_mode: QrBingoEmailMode;
@@ -39,8 +41,10 @@ export type PublicQrBingoEventConfig = Pick<
   | "revision"
   | "published"
   | "event_name"
+  | "venue_name"
   | "vendor_tag_id"
   | "history_starts_at"
+  | "app_card_enabled"
   | "scan_enabled"
   | "vendor_draws_enabled"
   | "email_delivery_mode"
@@ -70,6 +74,21 @@ function requiredBoolean(row: Record<string, unknown>, key: string) {
     throw new Error(`Published QR Bingo configuration has invalid ${key}.`);
   }
   return row[key] as boolean;
+}
+
+function requiredPlainText(
+  row: Record<string, unknown>,
+  key: string,
+  maxLength: number,
+) {
+  const value = requiredText(row, key);
+  if (
+    [...value].length > maxLength ||
+    /[<>\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error(`Published QR Bingo configuration has invalid ${key}.`);
+  }
+  return value;
 }
 
 function requiredPositiveInteger(row: Record<string, unknown>, key: string) {
@@ -135,8 +154,10 @@ export function parseQrBingoEventConfig(value: unknown): QrBingoEventConfig {
     revision: requiredPositiveInteger(row, "revision"),
     published: requiredBoolean(row, "published"),
     event_name: requiredText(row, "event_name"),
+    venue_name: requiredPlainText(row, "venue_name", 160),
     vendor_tag_id: requiredPositiveInteger(row, "vendor_tag_id"),
     history_starts_at: requiredTimestamp(row, "history_starts_at"),
+    app_card_enabled: requiredBoolean(row, "app_card_enabled"),
     scan_enabled: requiredBoolean(row, "scan_enabled"),
     vendor_draws_enabled: requiredBoolean(row, "vendor_draws_enabled"),
     email_delivery_mode: emailDeliveryMode as QrBingoEmailMode,
@@ -210,8 +231,10 @@ export function publicQrBingoEventConfig(
     revision: config.revision,
     published: config.published,
     event_name: config.event_name,
+    venue_name: config.venue_name,
     vendor_tag_id: config.vendor_tag_id,
     history_starts_at: config.history_starts_at,
+    app_card_enabled: config.app_card_enabled,
     scan_enabled: config.scan_enabled,
     vendor_draws_enabled: config.vendor_draws_enabled,
     email_delivery_mode: config.email_delivery_mode,

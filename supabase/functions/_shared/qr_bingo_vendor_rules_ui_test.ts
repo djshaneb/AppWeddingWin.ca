@@ -2,6 +2,12 @@ function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
 }
 
+function includesIgnoringWhitespace(source: string, fragment: string) {
+  const normalize = (value: string) =>
+    value.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
+  return normalize(source).includes(normalize(fragment));
+}
+
 function sourceSection(source: string, startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker);
   assert(start >= 0, `${startMarker} is missing`);
@@ -69,7 +75,7 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
     ]
   ) {
     assert(
-      rulesSection.includes(required),
+      includesIgnoringWhitespace(rulesSection, required),
       `Vendor Draw Rules section is missing ${required}`,
     );
   }
@@ -83,7 +89,10 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
   assert(
     !app.includes("setVendorRaffleRulesExpanded(true);") &&
       app.includes("setVendorRaffleRulesExpanded(false);") &&
-      app.includes("vendor_responsibility_disclosure: vendorResponsibilityDisclosure"),
+      includesIgnoringWhitespace(
+        app,
+        "vendor_responsibility_disclosure: vendorResponsibilityDisclosure",
+      ),
     "the rules must stay collapsed by default while preserving the exact server disclosure payload",
   );
 
@@ -171,11 +180,14 @@ Deno.test("vendor draw autosave keeps the wizard mounted on partial conflicts", 
   );
   assert(
     app.includes("height: '92%'") &&
-      app.includes("vendorRaffleScroll: {\n    flex: 1") &&
+      includesIgnoringWhitespace(app, "vendorRaffleScroll: { flex: 1") &&
       app.includes("style={styles.vendorRaffleScroll}") &&
       app.includes('testID="vendor-draw-save-retry"') &&
       app.includes("vendorRaffleSaveError || vendorRaffleSaveStatusText") &&
-      app.includes("accessibilityLabel={vendorRaffleSaveError || vendorRaffleSaveMessage || vendorRaffleSaveStatusText}"),
+      includesIgnoringWhitespace(
+        app,
+        "accessibilityLabel={vendorRaffleSaveError || vendorRaffleSaveMessage || vendorRaffleSaveStatusText}",
+      ),
     "the vendor draw sheet must stay stable and show the actionable save error beside a retry control",
   );
 });
@@ -211,16 +223,18 @@ Deno.test("locked prize terms still allow current rules reacceptance without mut
     ]
   ) {
     assert(
-      save.includes(lockedMaterialField),
+      includesIgnoringWhitespace(save, lockedMaterialField),
       `locked save path is missing preserved material value ${lockedMaterialField}`,
     );
   }
   assert(
     save.includes("const requestLegalAccepted = draftLegalAccepted;") &&
-      save.includes(
+      includesIgnoringWhitespace(
+        save,
         "requestLegalAccepted && vendorRaffleRulesViewedVersion === vendorRaffleRulesVersion",
       ) &&
-      save.includes(
+      includesIgnoringWhitespace(
+        save,
         "const combinedAcceptance = Boolean(requestLegalAccepted && draftRulesViewed);",
       ) &&
       save.includes("legal_terms_accepted: combinedAcceptance") &&
@@ -241,7 +255,10 @@ Deno.test("locked prize terms still allow current rules reacceptance without mut
   );
   assert(
     app.includes("vendor_acceptance_current?: boolean") &&
-      app.includes("const acceptancePersisted = data.vendor_acceptance_current") &&
+      includesIgnoringWhitespace(
+        app,
+        "const acceptancePersisted = data.vendor_acceptance_current",
+      ) &&
       app.includes("if (combinedAcceptance && !acceptancePersisted)") &&
       app.includes("Your agreement was not saved") &&
       app.includes("data.settings?.legal_terms_version === data.rules_version"),

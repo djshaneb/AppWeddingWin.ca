@@ -14,6 +14,10 @@ const profileSnapshotMigrationUrl = new URL(
   "../../migrations/20260828213136_stage_deleted_profile_identity_before_auth_purge.sql",
   import.meta.url,
 );
+const outboxReliabilityMigrationUrl = new URL(
+  "../../migrations/20260902070000_chat_send_idempotency_and_outbox_leases.sql",
+  import.meta.url,
+);
 const liveFixtureUrl = new URL(
   "../../tests/account_deletion_privacy_fixture.sql",
   import.meta.url,
@@ -21,6 +25,7 @@ const liveFixtureUrl = new URL(
 
 Deno.test("account deletion preserves the other participant's shared chat history", async () => {
   const sql = await Deno.readTextFile(migrationUrl);
+  const outboxSql = await Deno.readTextFile(outboxReliabilityMigrationUrl);
 
   for (
     const sharedTable of [
@@ -54,6 +59,17 @@ Deno.test("account deletion preserves the other participant's shared chat histor
     /insert into public\.bd_chat_outbox \(kind, thread_token, payload\)[\s\S]*?'close'/i
       .test(sql),
     "website aliases must be queued for closure without deleting their history",
+  );
+  assert(
+    outboxSql.includes("bd_chat_outbox_pending_close_key") &&
+      outboxSql.includes("enqueue_bd_chat_close") &&
+      outboxSql.includes(
+        "lock table public.bd_chat_outbox in share row exclusive mode",
+      ) &&
+      outboxSql.includes(
+        "purge_weddingwin_member_data_without_fixture_participants_v1",
+      ),
+    "account deletion and Edge reporters must share an atomic pending-close invariant",
   );
 
   const outboxDelete = sql.match(

@@ -73,8 +73,8 @@ Deno.test("app never gates access on replacing an Apple relay address", async ()
     new URL("../../../app/(tabs)/index.tsx", import.meta.url),
   );
   const profileGate = source.slice(
-    source.indexOf("function needsContactProfile"),
-    source.indexOf("function normalizeMemberRole"),
+    source.indexOf("const shouldCompleteProfile"),
+    source.indexOf("const usesApplePrivateRelayEmail"),
   );
   const emailValidator = source.slice(
     source.indexOf("function isValidEmail"),
@@ -98,7 +98,7 @@ Deno.test("app never gates access on replacing an Apple relay address", async ()
       "app must not require a personal email in place of Apple relay",
     );
   }
-  if (!source.includes("Keep Apple email forwarding enabled")) {
+  if (!/Keep Apple email forwarding\s+enabled/.test(source)) {
     throw new Error(
       "app must explain how relay users continue receiving contact email",
     );

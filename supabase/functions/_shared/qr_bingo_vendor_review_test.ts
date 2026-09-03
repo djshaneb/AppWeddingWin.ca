@@ -11,6 +11,12 @@ function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
 }
 
+function includesIgnoringWhitespace(source: string, fragment: string) {
+  const normalize = (value: string) =>
+    value.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
+  return normalize(source).includes(normalize(fragment));
+}
+
 function sourceSection(source: string, startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker);
   assert(start >= 0, `${startMarker} is missing`);
@@ -147,7 +153,8 @@ Deno.test("website and iOS show selected-person contact for every draw status", 
       app.includes("Email: {draw.winner_email}") &&
       app.includes("Phone: {draw.winner_phone}") &&
       app.includes("Wedding date: {draw.winner_wedding_date}") &&
-      app.includes(
+      includesIgnoringWhitespace(
+        app,
         "accepted this vendor’s draw and wedding-related marketing terms",
       ) &&
       app.includes("Honour unsubscribe requests"),

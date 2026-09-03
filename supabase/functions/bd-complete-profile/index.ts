@@ -46,6 +46,11 @@ function cleanPlainText(value: unknown, maxLength: number) {
   return text.slice(0, maxLength);
 }
 
+function isReservedQrContactName(value: unknown) {
+  const normalized = String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return ["couple", "weddingwin", "weddingwin couple"].includes(normalized);
+}
+
 function cleanWeddingDate(value: unknown) {
   const text = cleanPlainText(value, 20);
   if (!text) return "";
@@ -197,6 +202,14 @@ Deno.serve(async (req) => {
     const profile = (body.profile || {}) as ProfileInput;
     const existingEmail = String(user?.email || session.email || "").trim().toLowerCase();
     const nextEmail = normalizeContactEmail(profile.email || existingEmail, { allowEmpty: true });
+    const nextFirstName = cleanPlainText(profile.first_name, 80);
+
+    if (nextFirstName && isReservedQrContactName(nextFirstName)) {
+      return jsonResponse(
+        { error: "Enter your full name before continuing." },
+        400,
+      );
+    }
 
     // Resolve the linked GoTrue identity and reject ownership conflicts before
     // changing any provider-side profile fields or sending a confirmation.
@@ -205,7 +218,7 @@ Deno.serve(async (req) => {
     const updateBody = new URLSearchParams({
       user_id: String(session.user_id),
       country_code: "CA",
-      first_name: cleanPlainText(profile.first_name, 80),
+      first_name: nextFirstName,
       email: nextEmail,
       phone_number: cleanPhone(profile.phone),
       wedding_date: cleanWeddingDate(profile.wedding_date),

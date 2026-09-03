@@ -2,6 +2,12 @@ function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
 }
 
+function includesIgnoringWhitespace(source: string, fragment: string) {
+  const normalize = (value: string) =>
+    value.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
+  return normalize(source).includes(normalize(fragment));
+}
+
 const endpointUrls = [
   new URL("../bd-qr-bingo-sync/index.ts", import.meta.url),
   new URL("../bd-qr-bingo-vendor-sync/index.ts", import.meta.url),
@@ -187,7 +193,8 @@ Deno.test("website and iOS request the same real CSV report", async () => {
   assert(
     app.includes("action: 'vendor_raffle_export'") &&
       app.includes("report.contains_contact_data !== true") &&
-      app.includes(
+      includesIgnoringWhitespace(
+        app,
         "report.contact_share_scope !== 'named_vendor_draw_administration'",
       ) &&
       app.includes("report.marketing_consent_included !== true") &&

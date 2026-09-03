@@ -33,12 +33,13 @@ The vendor is intentionally private/nonpublic. Pair-scoped chat access is servic
 
 - [ ] Start with one open, unreported fictional text conversation between the two accounts.
 - [ ] App→website text and the supported active-couple-website→private-vendor-app reply pass on the exact TestFlight build and persist after reload/sync.
-- [ ] Native chat exposes no image-send control; do not ask the reviewer to attach a photo.
+- [ ] The Attach control appears only when the explicit backend rollout gate is enabled. On a physical iPhone, tap Attach, confirm the iOS system picker supports cancel and selection without a broad photo-library permission prompt, choose a fictional non-sensitive photo, and verify the app resizes/re-encodes it as a bounded JPEG and the attachment persists in both app and website after reload/sync.
+- [ ] Confirm the backend rejects invalid type/base64/full decode, decoded-size, image-dimension, and rollout-cutoff cases. Do not describe this technical validation as automated semantic image moderation.
 - [ ] Seed a separate disposable thread for Report because reporting closes the current conversation and removes the composer.
-- [ ] Describe the moderation boundary accurately: the current thread closes, the app suppresses the reported member, and a thread created through an external website entry point may exist until synchronization discovers and closes it.
+- [ ] Describe the moderation boundary accurately for text and photos: the current thread closes, the app suppresses the reported member, retained conversation/media follows the approved finite schedule, and a thread created through an external website entry point may exist until synchronization discovers and closes it.
 - [ ] Staff can see/respond to a report, reset the disposable state, and monitor the published safety contact during review.
 
-Current evidence: a controlled Simulator/live-backend text round trip passed, including active couple website→private vendor app. The inactive vendor's website send was correctly rejected. Treat this as preparation evidence, not a substitute for the exact physical TestFlight pass.
+Current evidence: a controlled Simulator/live-backend text round trip passed, including active couple website→private vendor app. The inactive vendor's website send was correctly rejected. Simulator testing also confirmed system-picker selection without a broad permission prompt plus captioned and photo-only delivery. The physical TestFlight/iPhone picker and attachment matrix remains pending; treat Simulator evidence as preparation only.
 
 ## QR Bingo booth-visit and vendor-draw state
 

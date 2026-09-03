@@ -5,6 +5,7 @@
 import {
   activeChatBlocksForMember,
   admin,
+  appUnreadCountsForThreads,
   assertChatMemberPairAllowed,
   avatarUrlFromBdUser,
   BD_API_BASE_URL,
@@ -16,6 +17,7 @@ import {
   cachedUsersByIds,
   cachedUserTitle,
   callBd,
+  chatImageAllowedAt,
   CHAT_IMAGES_DISABLED_NOTICE,
   CHAT_IMAGES_ENABLED,
   ChatImageSharingDisabledError,
@@ -35,6 +37,7 @@ import {
   type MirrorMessage,
   type MirrorThread,
   mirrorMessagesForThreads,
+  mirrorUnreadOwnerCountsForThreads,
   mirrorThreadByToken,
   mirrorThreadsForUser,
   type NativeSession,
@@ -70,6 +73,9 @@ import {
   containsInlineImagePayload,
   filterMessagesAtOrBeforeReport,
   matchingParticipantIdentity,
+  sumUnreadOwnerCounts,
+  validateChatImageDataUri,
+  validateDecodedChatImageDataUri,
 } from "../_shared/chat_moderation.ts";
 import { recipientCanReceiveChat } from "../_shared/chat_membership.ts";
 
@@ -113,6 +119,7 @@ type AppNativeMessage = {
   read_at?: string | null;
   bd_synced_at?: string | null;
   bd_sync_error?: string | null;
+  client_message_id?: string | null;
   created_at: string;
 };
 type AppChatThreadReport = {
@@ -264,6 +271,30 @@ function appImageUrls(value: unknown) {
   return Array.isArray(value) ? value.map((url) => String(url || "").trim()).filter(Boolean) : [];
 }
 
+function safeChatImageUrls(value: unknown, createdAt: unknown) {
+  if (!chatImageAllowedAt(createdAt)) return [];
+  return appImageUrls(value).filter((url) => {
+    if (/^data:image\//i.test(url)) {
+      try {
+        validateChatImageDataUri(url);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === "https:" &&
+        (parsed.hostname === "weddingwin.ca" ||
+          parsed.hostname.endsWith(".weddingwin.ca") ||
+          parsed.hostname === "managemydirectory.com" ||
+          parsed.hostname.endsWith(".managemydirectory.com"));
+    } catch {
+      return false;
+    }
+  });
+}
+
 function sortedMemberIds(a: unknown, b: unknown) {
   const ids = [String(a || "").trim(), String(b || "").trim()];
   if (!ids[0] || !ids[1]) throw new Error("Both members are required before a conversation can be opened.");
@@ -347,10 +378,10 @@ async function listAppMessages(token: string) {
     .from("app_native_chat_messages")
     .select("*")
     .eq("thread_token", token)
-    .order("created_at", { ascending: true })
-    .limit(100);
+    .order("created_at", { ascending: false })
+    .limit(12);
   if (error) throw new Error(error.message);
-  return (data || []) as AppNativeMessage[];
+  return ((data || []) as AppNativeMessage[]).reverse();
 }
 
 async function markAppRead(token: string, userId: unknown) {
@@ -363,58 +394,87 @@ async function markAppRead(token: string, userId: unknown) {
   if (error) throw new Error(error.message);
 }
 
-async function countUnreadAppMessages(threads: AppNativeThread[], userId: unknown) {
-  const tokens = threads
-    .filter((thread) => !String(thread.bd_thread_token || "").trim())
-    .map((thread) => thread.thread_token)
-    .filter(Boolean);
-  if (!tokens.length) return 0;
-  const { data, error } = await admin
-    .from("app_native_chat_messages")
-    .select("id,message_content,image_urls")
-    .in("thread_token", tokens)
-    .neq("sender_bd_user_id", String(userId || ""))
-    .is("read_at", null)
-    .is("bd_synced_at", null);
-  if (error || !Array.isArray(data)) return 0;
-  return CHAT_IMAGES_ENABLED
-    ? data.length
-    : data.filter((message) => {
-      const rawText = String(message.message_content || "").trim();
-      const hasImage = appImageUrls(message.image_urls).length > 0 || containsInlineImagePayload(rawText);
-      return !!filterChatTextForDisplay(rawText) || !hasImage;
-    }).length;
+function normalizedClientMessageId(value: unknown) {
+  const clientMessageId = String(value || "").trim();
+  if (!clientMessageId) return "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/.test(clientMessageId)) {
+    throw new ChatPolicyError("Invalid client message identifier.", 400);
+  }
+  return clientMessageId;
 }
 
-async function sendAppMessage(token: string, userId: unknown, content: string, imageDataUri = "") {
+async function existingAppClientMessage(
+  token: string,
+  userId: unknown,
+  clientMessageId: string,
+) {
+  if (!clientMessageId) return undefined;
+  const { data, error } = await admin
+    .from("app_native_chat_messages")
+    .select("*")
+    .eq("thread_token", token)
+    .eq("sender_bd_user_id", String(userId || ""))
+    .eq("client_message_id", clientMessageId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as AppNativeMessage | undefined;
+}
+
+async function sendAppMessage(
+  token: string,
+  userId: unknown,
+  content: string,
+  imageDataUri = "",
+  clientMessageId = "",
+) {
   const { clean, image } = validateMessage(content, imageDataUri);
+  const existing = await existingAppClientMessage(token, userId, clientMessageId);
+  if (existing) return existing;
   const { data, error } = await admin.from("app_native_chat_messages").insert({
     thread_token: token,
     sender_bd_user_id: String(userId || ""),
     message_content: clean,
     image_urls: image ? [image] : [],
+    client_message_id: clientMessageId || null,
   }).select("*").single();
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (clientMessageId && String(error.code || "") === "23505") {
+      const raced = await existingAppClientMessage(token, userId, clientMessageId);
+      if (raced) return raced;
+    }
+    throw new Error(error.message);
+  }
   await admin.from("app_native_chat_threads").update({ updated_at: new Date().toISOString() }).eq("thread_token", token);
   return data as AppNativeMessage;
 }
 
-async function enqueueAppThreadMirror(appThread: AppNativeThread, senderId: unknown) {
-  const { data, error } = await admin
-    .from("bd_chat_outbox")
-    .select("*")
-    .eq("kind", "mirror_app_thread")
-    .eq("app_thread_token", appThread.thread_token)
-    .is("sent_at", null)
-    .limit(1);
-  if (error) throw new Error(error.message);
-  if (Array.isArray(data) && data.length) return data[0] as OutboxRow;
-  return await enqueueOutbox({
-    kind: "mirror_app_thread",
-    thread_token: appThread.thread_token,
-    app_thread_token: appThread.thread_token,
-    sender_bd_user_id: String(senderId || ""),
-  });
+async function enqueueIdempotentSend(row: Partial<OutboxRow>, clientMessageId: string) {
+  const findExisting = async () => {
+    const { data, error } = await admin
+      .from("bd_chat_outbox")
+      .select("*")
+      .eq("kind", "send")
+      .eq("message_token", clientMessageId)
+      .eq("thread_token", String(row.thread_token || ""))
+      .eq("sender_bd_user_id", String(row.sender_bd_user_id || ""))
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data as OutboxRow | undefined;
+  };
+
+  const existing = await findExisting();
+  if (existing) return existing;
+  try {
+    return await enqueueOutbox({
+      ...row,
+      kind: "send",
+      message_token: clientMessageId,
+    });
+  } catch (error) {
+    const raced = await findExisting();
+    if (raced) return raced;
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +577,7 @@ function mirrorMessageDto(
     is_mine: mine,
     status: Number(message.message_status || 0),
     content: filterChatTextForDisplay(stripHtml(message.message_content)),
-    image_urls: CHAT_IMAGES_ENABLED ? imageUrlsFromHtml(message.message_content) : [],
+    image_urls: safeChatImageUrls(imageUrlsFromHtml(message.message_content), message.bd_created_at),
     avatar_url: mine ? ownAvatar : otherAvatar,
     created_at: String(message.bd_created_at || ""),
     delivery_state: "delivered",
@@ -526,7 +586,9 @@ function mirrorMessageDto(
 }
 
 function pendingMessageDto(row: OutboxRow, userId: unknown, ownAvatar = "") {
-  const failed = Number(row.attempts || 0) >= 10;
+  const deliveryError = String(row.last_error || "");
+  const paused = /^Delivery paused:/i.test(deliveryError);
+  const failed = Number(row.attempts || 0) >= 10 && !paused;
   return {
     id: `pending:${row.id}`,
     thread_token: String(row.thread_token || ""),
@@ -534,18 +596,18 @@ function pendingMessageDto(row: OutboxRow, userId: unknown, ownAvatar = "") {
     is_mine: String(row.sender_bd_user_id || "") === String(userId || ""),
     status: 0,
     content: filterChatTextForDisplay(String(row.content || "")),
-    image_urls: CHAT_IMAGES_ENABLED && row.image_data_uri ? [String(row.image_data_uri)] : [],
+    image_urls: safeChatImageUrls(row.image_data_uri ? [String(row.image_data_uri)] : [], row.created_at),
     avatar_url: ownAvatar,
     created_at: String(row.created_at || ""),
     delivery_state: failed ? "failed" : "queued",
-    delivery_error: String(row.last_error || ""),
+    delivery_error: deliveryError,
   };
 }
 
 function appMessageDto(message: AppNativeMessage, userId: unknown, ownAvatar = "", otherAvatar = "") {
   const mine = String(message.sender_bd_user_id || "") === String(userId || "");
   const deliveryError = String(message.bd_sync_error || "");
-  const failed = /^Delivery stopped after \d+ attempts:/i.test(deliveryError);
+  const failed = /^Delivery stopped(?: after \d+ attempts)?:/i.test(deliveryError);
   return {
     id: String(message.id || ""),
     thread_token: String(message.thread_token || ""),
@@ -553,7 +615,7 @@ function appMessageDto(message: AppNativeMessage, userId: unknown, ownAvatar = "
     is_mine: mine,
     status: message.read_at ? 1 : 0,
     content: filterChatTextForDisplay(String(message.message_content || "")),
-    image_urls: CHAT_IMAGES_ENABLED ? appImageUrls(message.image_urls) : [],
+    image_urls: safeChatImageUrls(message.image_urls, message.created_at),
     avatar_url: mine ? ownAvatar : otherAvatar,
     created_at: String(message.created_at || ""),
     delivery_state: message.bd_synced_at ? "delivered" : failed ? "failed" : "stored",
@@ -567,12 +629,12 @@ function visibleMirrorMessages(messages: MirrorMessage[], report?: AppChatThread
     (message) => message.bd_created_at,
     report?.reported_at,
   );
-  if (CHAT_IMAGES_ENABLED) return beforeCutoff;
   return beforeCutoff.filter((message) => {
     const rawContent = String(message.message_content || "");
     const rawText = stripHtml(message.message_content);
     const hasImage = /<img\b/i.test(rawContent) || containsInlineImagePayload(rawContent);
-    return !!filterChatTextForDisplay(rawText) || !hasImage;
+    const visibleImages = safeChatImageUrls(imageUrlsFromHtml(rawContent), message.bd_created_at);
+    return !!filterChatTextForDisplay(rawText) || !hasImage || visibleImages.length > 0;
   });
 }
 
@@ -582,11 +644,11 @@ function visiblePendingMessages(messages: OutboxRow[], report?: AppChatThreadRep
     (message) => message.created_at,
     report?.reported_at,
   );
-  if (CHAT_IMAGES_ENABLED) return beforeCutoff;
   return beforeCutoff.filter((message) => {
     const rawText = String(message.content || "").trim();
     const hasImage = !!String(message.image_data_uri || "").trim() || containsInlineImagePayload(rawText);
-    return !!filterChatTextForDisplay(rawText) || !hasImage;
+    const visibleImages = safeChatImageUrls(message.image_data_uri ? [message.image_data_uri] : [], message.created_at);
+    return !!filterChatTextForDisplay(rawText) || !hasImage || visibleImages.length > 0;
   });
 }
 
@@ -596,11 +658,10 @@ function visibleAppMessages(messages: AppNativeMessage[], report?: AppChatThread
     (message) => message.created_at,
     report?.reported_at,
   );
-  if (CHAT_IMAGES_ENABLED) return beforeCutoff;
   return beforeCutoff.filter((message) => {
     const rawText = String(message.message_content || "").trim();
     const hasImage = appImageUrls(message.image_urls).length > 0 || containsInlineImagePayload(rawText);
-    return !!filterChatTextForDisplay(rawText) || !hasImage;
+    return !!filterChatTextForDisplay(rawText) || !hasImage || safeChatImageUrls(message.image_urls, message.created_at).length > 0;
   });
 }
 
@@ -698,7 +759,14 @@ async function buildChatPayload(
 
   const visibleBdThreads = bdThreads.slice(0, 50);
   const threadTokens = visibleBdThreads.map((thread) => thread.thread_token);
-  const messagesByThread = await mirrorMessagesForThreads(threadTokens);
+  const [messagesByThread, unreadOwnersByThread, appUnreadByThread] = await Promise.all([
+    mirrorMessagesForThreads(threadTokens),
+    mirrorUnreadOwnerCountsForThreads(threadTokens),
+    appUnreadCountsForThreads(
+      visibleAppThreads.map((thread) => thread.thread_token),
+      userId,
+    ),
+  ]);
 
   const mirrorMessageTokens = new Set<string>();
   for (const list of messagesByThread.values()) {
@@ -812,12 +880,12 @@ async function buildChatPayload(
       const last = mirrorMessages[mirrorMessages.length - 1];
       const lastPending = pending[pending.length - 1];
       const lastContent = lastPending
-        ? filterChatTextForDisplay(String(lastPending.content || "")) || (CHAT_IMAGES_ENABLED ? "[Image]" : "Tap to start the conversation")
-        : filterChatTextForDisplay(stripHtml(last?.message_content)) || (CHAT_IMAGES_ENABLED && imageUrlsFromHtml(last?.message_content).length ? "[Image]" : "Tap to start the conversation");
-      const unread = closed ? 0 : mirrorMessages.filter((message) =>
-        !messageIsMineInThread(message, thread, userTokens, userId) &&
-        String(message.message_status || "0") === "0"
-      ).length;
+        ? filterChatTextForDisplay(String(lastPending.content || "")) || (safeChatImageUrls(lastPending.image_data_uri ? [lastPending.image_data_uri] : [], lastPending.created_at).length ? "[Image]" : "Tap to start the conversation")
+        : filterChatTextForDisplay(stripHtml(last?.message_content)) || (safeChatImageUrls(imageUrlsFromHtml(last?.message_content), last?.bd_created_at).length ? "[Image]" : "Tap to start the conversation");
+      const unread = closed ? 0 : sumUnreadOwnerCounts(
+        unreadOwnersByThread.get(token) || [],
+        (row) => messageIsMineInThread(row, thread, userTokens, userId),
+      );
       return {
         id: String(thread.thread_id || token),
         token,
@@ -841,10 +909,8 @@ async function buildChatPayload(
     const otherUser = usersById.get(otherAppMemberId(thread, userId));
     const messages = visibleAppMessages(await listAppMessages(thread.thread_token), report);
     const last = messages[messages.length - 1];
-    const images = CHAT_IMAGES_ENABLED ? appImageUrls(last?.image_urls) : [];
-    const unread = closed ? 0 : messages.filter((message) =>
-      String(message.sender_bd_user_id) !== userId && !message.read_at
-    ).length;
+    const images = safeChatImageUrls(last?.image_urls, last?.created_at);
+    const unread = closed ? 0 : appUnreadByThread.get(thread.thread_token) || 0;
     return {
       id: String(thread.thread_token || ""),
       token: String(thread.thread_token || ""),
@@ -892,10 +958,8 @@ async function buildChatPayload(
     if (thread) {
       // One-time history pull when a thread is opened the first time.
       await ensureThreadBackfilled(thread);
-      const refreshed = thread.backfilled_at ? messagesByThread.get(selectedToken) : undefined;
-      const allMirrorMessages = refreshed && refreshed.length
-        ? refreshed
-        : (await mirrorMessagesForThreads([selectedToken])).get(selectedToken) || [];
+      const allMirrorMessages =
+        (await mirrorMessagesForThreads([selectedToken], 12)).get(selectedToken) || [];
       const mirrorMessages = visibleMirrorMessages(allMirrorMessages, selectedReport);
       const otherId = otherUserIdForThread(thread, userTokens, userId);
       const otherUser = otherId ? (usersById.get(otherId) || (await cachedUsersByIds([otherId])).get(otherId)) : undefined;
@@ -929,10 +993,7 @@ async function buildChatPayload(
 
   const unreadTotal =
     bdSummaries.reduce((sum, summary) => sum + (summary.closed ? 0 : summary.unread_count), 0) +
-    await countUnreadAppMessages(
-      visibleAppThreads.filter((thread) => !reportMap.get(thread.thread_token)),
-      userId,
-    );
+    appSummaries.reduce((sum, summary) => sum + (summary.closed ? 0 : summary.unread_count), 0);
 
   return [{
     ok: true,
@@ -940,7 +1001,10 @@ async function buildChatPayload(
     selected_thread_token: selectedToken,
     selected_thread_reported: selectedClosed,
     report_notice: selectedClosed ? selectedReport?.notice || CHAT_REPORTED_NOTICE : "",
-    messages: messageDtos,
+    // Bound every response even when a mirrored website conversation has a
+    // long photo history. The current native UI intentionally shows the most
+    // recent messages rather than returning an unbounded inline-media payload.
+    messages: messageDtos.slice(-12),
     unread_count: unreadTotal,
     chat_images_enabled: CHAT_IMAGES_ENABLED,
     chat_images_notice: CHAT_IMAGES_ENABLED ? "" : CHAT_IMAGES_DISABLED_NOTICE,
@@ -1030,10 +1094,7 @@ Deno.serve(async (request) => {
         selectedThread = existing.thread_token;
       } else {
         const appThread = await ensureAppThread(user, { user_id: vendorId }, profilePath);
-        await enqueueAppThreadMirror(appThread, userId);
-        if (!rateLimitedNow()) await flushOutbox(6).catch(() => 0);
-        const refreshed = await getAppThread(appThread.thread_token, userId);
-        selectedThread = String(refreshed.bd_thread_token || "").trim() || appThread.thread_token;
+        selectedThread = appThread.thread_token;
       }
     }
 
@@ -1089,7 +1150,23 @@ Deno.serve(async (request) => {
       if (!token) return jsonResponse({ ok: false, error: "Conversation token required" }, 400);
       const content = String(body?.message || "");
       const imageDataUri = String(body?.image_data_uri || "");
-      validateMessage(content, imageDataUri);
+      let clientMessageId = "";
+      try {
+        clientMessageId = normalizedClientMessageId(body?.client_message_id);
+        if (imageDataUri) await validateDecodedChatImageDataUri(imageDataUri);
+        validateMessage(content, imageDataUri);
+      } catch (error) {
+        if (
+          error instanceof ChatPolicyError ||
+          error instanceof ChatImageSharingDisabledError ||
+          error instanceof ObjectionableChatContentError
+        ) throw error;
+        throw new ChatPolicyError(
+          error instanceof Error ? error.message : "The photo could not be validated.",
+          400,
+        );
+      }
+      const effectiveClientMessageId = clientMessageId || randomToken();
 
       if (isAppThread(token)) {
         const appThread = await getAppThread(token, userId);
@@ -1099,12 +1176,15 @@ Deno.serve(async (request) => {
         const reportMap = await listThreadReportsByTokens([token, String(appThread.bd_thread_token || "").trim()]);
         const report = reportMap.get(token) || reportMap.get(String(appThread.bd_thread_token || "").trim());
         if (report) return jsonResponse(chatReportedPayload(report), 423);
-        // Queue the website mirror before committing the app-native message.
-        // If queue persistence fails the request fails with the draft intact;
-        // it can never report a failure after already storing a duplicateable
-        // message. The mirror worker sends all unsynced app messages in order.
-        await enqueueAppThreadMirror(appThread, userId);
-        await sendAppMessage(token, userId, content, imageDataUri);
+        // The database trigger commits a per-message website-delivery outbox
+        // row in the same transaction as this message insert.
+        await sendAppMessage(
+          token,
+          userId,
+          content,
+          imageDataUri,
+          effectiveClientMessageId,
+        );
         selectedThread = token;
         // App-native messages are durable and visible to the recipient as soon
         // as this insert commits, even if the website mirror is still queued.
@@ -1132,15 +1212,13 @@ Deno.serve(async (request) => {
           const firstIdentity = String(sideSource || "").split(",").map((part) => part.trim()).find(Boolean);
           return tokenMatch || firstIdentity || String(session.token || session.cookie || userId);
         })();
-        const queuedSend = await enqueueOutbox({
-          kind: "send",
+        const queuedSend = await enqueueIdempotentSend({
           thread_token: token,
           sender_bd_user_id: userId,
           owner_identity: ownerIdentity,
-          message_token: randomToken(),
           content,
           image_data_uri: imageDataUri || null,
-        });
+        }, effectiveClientMessageId);
         selectedThread = token;
 
         // Try to push to BD right away; if BD is busy the message stays queued
@@ -1151,9 +1229,10 @@ Deno.serve(async (request) => {
           .select("sent_at,attempts,last_error")
           .eq("id", queuedSend.id)
           .maybeSingle();
+        const deliveryPaused = /^Delivery paused:/i.test(String(deliveryRow?.last_error || ""));
         sendDeliveryState = deliveryRow?.sent_at
           ? "delivered"
-          : Number(deliveryRow?.attempts || 0) >= 10
+          : Number(deliveryRow?.attempts || 0) >= 10 && !deliveryPaused
             ? "failed"
             : "queued";
         sendDeliveryError = String(deliveryRow?.last_error || "");

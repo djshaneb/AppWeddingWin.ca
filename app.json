@@ -48,6 +48,7 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "WeddingWin uses the camera to scan QR bingo codes at wedding shows.",
+        "NSPhotoLibraryUsageDescription": "WeddingWin accesses your photo library only when you choose a photo to send in a private message.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false,
           "NSExceptionDomains": {
@@ -90,6 +91,14 @@
         {
           "microphonePermission": false,
           "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "WeddingWin accesses your photo library only when you choose a photo to send in a private message.",
+          "cameraPermission": "WeddingWin uses the camera to scan QR bingo codes at wedding shows.",
+          "microphonePermission": false
         }
       ],
       "@react-native-community/datetimepicker",

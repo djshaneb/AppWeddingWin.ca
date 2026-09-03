@@ -2,6 +2,12 @@ function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
 }
 
+function includesIgnoringWhitespace(source: string, fragment: string) {
+  const normalize = (value: string) =>
+    value.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
+  return normalize(source).includes(normalize(fragment));
+}
+
 function functionBody(source: string, functionName: string) {
   const marker = `function ${functionName}`;
   const start = source.indexOf(marker);
@@ -254,7 +260,8 @@ Deno.test("a QR check-in can offer a separate optional vendor draw entry", async
   );
 
   assert(
-    app.includes(
+    includesIgnoringWhitespace(
+      app,
       "if (nextEventConfig?.vendor_draws_enabled && data.raffle_offer)",
     ) &&
       app.includes("setRaffleOffer(data.raffle_offer)") &&
@@ -264,7 +271,8 @@ Deno.test("a QR check-in can offer a separate optional vendor draw entry", async
       app.includes(
         "raffleRulesViewedVersion !== raffleOffer.consent_version",
       ) &&
-      app.includes(
+      includesIgnoringWhitespace(
+        app,
         "!ageOfMajorityAttested || !residencyAttested || !exclusionsAttested",
       ) &&
       app.includes("Open QR Bingo vendor draw settings"),

@@ -2,6 +2,12 @@ function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
 }
 
+function includesIgnoringWhitespace(source: string, fragment: string) {
+  const normalize = (value: string) =>
+    value.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
+  return normalize(source).includes(normalize(fragment));
+}
+
 const syncUrls = [
   new URL("../bd-qr-bingo-sync/index.ts", import.meta.url),
   new URL("../bd-qr-bingo-vendor-sync/index.ts", import.meta.url),
@@ -91,6 +97,66 @@ Deno.test("website records production visits only inside the published show wind
   );
 });
 
+Deno.test("website refreshes its full event snapshot once after an exact stale-config conflict", async () => {
+  const website = await Deno.readTextFile(websiteUrl);
+  const saveScan = section(
+    website,
+    "async function saveVendorScan(vendorId)",
+    "async function loadScannedVendors()",
+  );
+  const loadScans = section(
+    website,
+    "async function loadScannedVendors()",
+    "// --- UI Build ---",
+  );
+  const staleHandler = section(
+    website,
+    "function refreshPageAfterStaleEventConfig(response, data)",
+    "function trustedWeddingWinPromotionUrl(value)",
+  );
+  const drawRequest = section(
+    website,
+    "async function requestVendorDraw(action, extra)",
+    "function resetVendorDrawAcknowledgements()",
+  );
+
+  assert(
+    website.includes("http_response_code(409);") &&
+      website.includes("'code' => 'stale_event_config'") &&
+      website.includes("'event_key' => $eventConfig['event_key']") &&
+      website.includes("'revision' => $eventConfigRevision"),
+    "the server must return its current trusted event identity on a stale request",
+  );
+  assert(
+    staleHandler.includes("response.status !== 409") &&
+      staleHandler.includes(
+        "cleanPromotionText(data && data.code) !== 'stale_event_config'",
+      ) &&
+      staleHandler.includes("if (eventConfigRefreshStarted) return true;") &&
+      staleHandler.includes("Number.isSafeInteger(nextRevision)") &&
+      staleHandler.includes("eventConfigRefreshStarted = true;") &&
+      staleHandler.includes("stopScanner();") &&
+      staleHandler.includes(
+        "refreshUrl.searchParams.set('ww_qr_config_revision', String(nextRevision))",
+      ) &&
+      staleHandler.includes("window.location.replace(refreshUrl.toString())"),
+    "an exact stale conflict must stop interaction and perform one cache-busted full-page refresh",
+  );
+  assert(
+    saveScan.includes("refreshPageAfterStaleEventConfig(response, data)") &&
+      loadScans.includes("refreshPageAfterStaleEventConfig(response, data)") &&
+      drawRequest.includes("refreshPageAfterStaleEventConfig(response, data)"),
+    "scan saves, progress loads, and vendor draw requests must share stale-config recovery",
+  );
+  assert(
+    !staleHandler.includes("saveVendorScan(") &&
+      !staleHandler.includes("loadScannedVendors(") &&
+      !staleHandler.includes("requestVendorDraw(") &&
+      !website.includes("EVENT_CONFIG.revision ="),
+    "stale recovery must not replay a write or combine a fresh revision with a stale roster",
+  );
+});
+
 Deno.test("Edge scan, offer review, and opt-in share the published show-window gate while isolated fixtures remain usable", async () => {
   const sources = await Promise.all(syncUrls.map((url) => Deno.readTextFile(url)));
   for (const source of sources) {
@@ -175,10 +241,12 @@ Deno.test("native scanner preserves and enforces both published show-window boun
     "native event configuration must retain both published show-window boundaries",
   );
   assert(
-    app.includes(
+    includesIgnoringWhitespace(
+      app,
       "new Date(String(eventConfig?.history_starts_at || '')).getTime()",
     ) &&
-      app.includes(
+      includesIgnoringWhitespace(
+        app,
         "new Date(String(eventConfig?.entry_closes_at || '')).getTime()",
       ) &&
       app.includes("scanWindowNow >= scanOpensAt") &&
@@ -291,7 +359,10 @@ Deno.test("vendor contact history stays visible while only current proven QR ent
     Deno.readTextFile(vendorDashboardScriptUrl),
   ]);
   assert(
-    app.includes("'reacceptance_required' | 'in_person_scan_required'") &&
+    includesIgnoringWhitespace(
+      app,
+      "'reacceptance_required' | 'in_person_scan_required'",
+    ) &&
       app.includes("? 'Scan and reaccept required'") &&
       app.includes("? 'In-show scan required'") &&
       dashboard.includes(

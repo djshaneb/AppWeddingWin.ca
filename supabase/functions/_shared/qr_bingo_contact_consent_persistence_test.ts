@@ -2,6 +2,12 @@ function assert(condition: unknown, message: string) {
   if (!condition) throw new Error(message);
 }
 
+function includesIgnoringWhitespace(source: string, fragment: string) {
+  const normalize = (value: string) =>
+    value.replace(/\s+/g, "").replace(/,([)\]}])/g, "$1");
+  return normalize(source).includes(normalize(fragment));
+}
+
 const migrationUrl = new URL(
   "../../migrations/20260830140000_enable_named_vendor_contact_exports.sql",
   import.meta.url,
@@ -182,7 +188,8 @@ Deno.test("current draw opt-in requires and persists complete named-vendor marke
   ]);
 
   assert(
-    app.includes(
+    includesIgnoringWhitespace(
+      app,
       "vendor_marketing_consent_acknowledged: promotionResponsibilityAccepted",
     ) &&
       website.includes(

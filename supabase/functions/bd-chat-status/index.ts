@@ -5,13 +5,14 @@
 import {
   activeChatBlocksForMember,
   admin,
+  appUnreadCountsForThreads,
   BdRateLimitError,
   cachedUsersByIds,
   getSessionUser,
   hasPrivateAppReviewerAccess,
   loadSharedRateLimit,
   messageIsMineInThread,
-  mirrorMessagesForThreads,
+  mirrorUnreadOwnerCountsForThreads,
   mirrorThreadsForUser,
   type NativeSession,
   otherMemberIdFromBlock,
@@ -22,6 +23,7 @@ import {
   threadHasParticipant,
   wasRateLimited,
 } from "../_shared/bd_chat.ts";
+import { sumUnreadOwnerCounts } from "../_shared/chat_moderation.ts";
 
 const CHAT_INBOX_PATH = "/account/chat_messages";
 
@@ -79,28 +81,6 @@ async function listThreadReportsByTokens(tokens: string[]) {
     }
   }
   return byToken;
-}
-
-async function countUnreadAppMessages(
-  threads: AppNativeThread[],
-  currentUserId: string | number,
-  ignoredThreadToken = "",
-) {
-  const threadTokens = threads
-    .filter((thread) => !String(thread.bd_thread_token || "").trim())
-    .map((thread) => thread.thread_token)
-    .filter(Boolean)
-    .filter((token) => token !== ignoredThreadToken);
-  if (!threadTokens.length) return 0;
-  const { data, error } = await admin
-    .from("app_native_chat_messages")
-    .select("id")
-    .in("thread_token", threadTokens)
-    .neq("sender_bd_user_id", String(currentUserId || ""))
-    .is("read_at", null)
-    .is("bd_synced_at", null);
-  if (error) return 0;
-  return Array.isArray(data) ? data.length : 0;
 }
 
 Deno.serve(async (request) => {
@@ -193,16 +173,22 @@ Deno.serve(async (request) => {
         (!mirroredToken || !reportMap.has(mirroredToken));
     });
 
-    const messagesByThread = await mirrorMessagesForThreads(openBdThreads.map((thread) => thread.thread_token));
+    const openBdTokens = openBdThreads.map((thread) => thread.thread_token);
+    const openAppTokens = openAppThreads
+      .map((thread) => thread.thread_token)
+      .filter((token) => token !== activeThreadToken);
+    const [unreadOwnersByThread, appUnreadByThread] = await Promise.all([
+      mirrorUnreadOwnerCountsForThreads(openBdTokens),
+      appUnreadCountsForThreads(openAppTokens, userId),
+    ]);
     let bdUnreadCount = 0;
     for (const thread of openBdThreads) {
-      const messages = messagesByThread.get(thread.thread_token) || [];
-      bdUnreadCount += messages.filter((message) =>
-        !messageIsMineInThread(message, thread, tokens, userId) &&
-        String(message.message_status || "0") === "0"
-      ).length;
+      bdUnreadCount += sumUnreadOwnerCounts(
+        unreadOwnersByThread.get(thread.thread_token) || [],
+        (row) => messageIsMineInThread(row, thread, tokens, userId),
+      );
     }
-    const appUnreadCount = await countUnreadAppMessages(openAppThreads, userId, activeThreadToken);
+    const appUnreadCount = [...appUnreadByThread.values()].reduce((sum, count) => sum + count, 0);
     const unreadCount = bdUnreadCount + appUnreadCount;
 
     return jsonResponse({

@@ -135,6 +135,25 @@ Deno.test("WebView release configuration disables third-party cookies and keeps 
     "the embedded website must not request camera or microphone access",
   );
   assert(
+    !source.includes("styles.browserCloseButton") &&
+      !source.includes(">Back to app</Text>") &&
+      source.includes("couple-bottom-nav-app") &&
+      source.includes("vendor-bottom-nav-app") &&
+      source.includes("browser-bottom-nav-app") &&
+      source.indexOf("couple-bottom-nav-app") < source.indexOf("couple-bottom-nav-website") &&
+      source.indexOf("vendor-bottom-nav-app") < source.indexOf("vendor-bottom-nav-dashboard"),
+    "Back to App must be the bottom-left icon and never cover website controls at the top left",
+  );
+  assert(
+    source.includes("navigationIntentGenerationRef") &&
+      source.includes("bottomNavigationFrameRef.current = requestAnimationFrame") &&
+      source.includes("const navigationIntent = beginNavigationIntent()") &&
+      source.includes("if (navigationIntentGenerationRef.current !== navigationIntent) return") &&
+      /createCoalescedWebsiteLoginBridge\(\s*activeSession,\s*'\/account\/home',?\s*\)[\s\S]*?navigationIntentGenerationRef\.current !== navigationIntent[\s\S]*?startBridgeRedirect\(\)/.test(source) &&
+      /const closeBrowserToApp = useCallback\(\(\) => \{\s*invalidateNavigationIntent\(\)/.test(source),
+    "rapid navigation must cancel queued taps and prevent stale website bridges from reopening the WebView",
+  );
+  assert(
     source.includes("host === backendHost") &&
       source.includes("https://pszcjoyabwvzsxxjtkhs.supabase.co"),
     "OAuth interception and WebView origins must be scoped to this Supabase project",
@@ -153,7 +172,7 @@ Deno.test("WebView release configuration disables third-party cookies and keeps 
     source.includes("blocked signed-in website authentication request") &&
       source.includes("blocked signed-in website authentication window") &&
       source.match(
-        /isBdAppGoogleLoginUrl\((url|target)\) \|\| isOAuthStartUrl\(\1\) \|\| isGoogleIdentityUrl\(\1\)/g,
+        /isBdAppGoogleLoginUrl\((url|target)\)\s*\|\|\s*isOAuthStartUrl\(\1\)\s*\|\|\s*isGoogleIdentityUrl\(\1\)/g,
       )?.length === 2,
     "a signed-in website must not launch app Google, Supabase OAuth, or Google identity flows",
   );
@@ -164,7 +183,7 @@ Deno.test("WebView release configuration disables third-party cookies and keeps 
   );
 });
 
-Deno.test("iOS release metadata declares only the native camera capability", async () => {
+Deno.test("iOS release metadata declares camera and user-initiated photo access", async () => {
   const config = JSON.parse(
     await Deno.readTextFile(new URL("../../../app.json", import.meta.url)),
   ) as {
@@ -176,6 +195,9 @@ Deno.test("iOS release metadata declares only the native camera capability", asy
   const infoPlist = config.expo?.ios?.infoPlist || {};
   const cameraPlugin = config.expo?.plugins?.find((plugin) =>
     Array.isArray(plugin) && plugin[0] === "expo-camera"
+  );
+  const imagePickerPlugin = config.expo?.plugins?.find((plugin) =>
+    Array.isArray(plugin) && plugin[0] === "expo-image-picker"
   );
 
   assert(
@@ -192,7 +214,19 @@ Deno.test("iOS release metadata declares only the native camera capability", asy
       (cameraPlugin[1] as Record<string, unknown>).recordAudioAndroid === false,
     "the camera config plugin must not add microphone permissions during native generation",
   );
-  assert(!("NSPhotoLibraryUsageDescription" in infoPlist), "the app does not access the photo library");
+  assert(
+    typeof infoPlist.NSPhotoLibraryUsageDescription === "string" &&
+      infoPlist.NSPhotoLibraryUsageDescription.length > 0,
+    "private-message photo selection must have a clear photo-library purpose string",
+  );
+  assert(
+    Array.isArray(imagePickerPlugin) &&
+      typeof imagePickerPlugin[1] === "object" &&
+      imagePickerPlugin[1] !== null &&
+      typeof (imagePickerPlugin[1] as Record<string, unknown>).photosPermission === "string" &&
+      (imagePickerPlugin[1] as Record<string, unknown>).microphonePermission === false,
+    "the image picker must explain photo access without adding microphone access",
+  );
   assert(
     !(Array.isArray(infoPlist.UIBackgroundModes) && infoPlist.UIBackgroundModes.length > 0),
     "ordinary push notifications must not declare silent background processing",

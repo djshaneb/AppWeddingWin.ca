@@ -24,8 +24,10 @@ const validConfig = {
   revision: 1,
   published: true,
   event_name: "Niagara Wedding Show",
+  venue_name: "Americana Resort",
   vendor_tag_id: 30,
   history_starts_at: "2026-08-01T00:00:00.000Z",
+  app_card_enabled: true,
   scan_enabled: true,
   vendor_draws_enabled: true,
   email_delivery_mode: "disabled",
@@ -49,6 +51,14 @@ Deno.test("published QR Bingo config is validated and sanitized", () => {
   const publicConfig = publicQrBingoEventConfig(parsed);
   assert(publicConfig.revision === 1, "revision should survive sanitization");
   assert(publicConfig.published === true, "published state should be explicit");
+  assert(
+    publicConfig.venue_name === "Americana Resort",
+    "venue should survive sanitization",
+  );
+  assert(
+    publicConfig.app_card_enabled === true,
+    "app-card availability should survive sanitization",
+  );
   assert(
     publicConfig.vendor_tag_id === 30,
     "vendor tag should survive sanitization",
@@ -100,6 +110,44 @@ Deno.test("unsafe or unusable QR Bingo configs fail closed", () => {
         entry_closes_at: "2026-10-19T19:00:00.000Z",
       }),
     /draw time/,
+  );
+  assertThrows(
+    () =>
+      parseQrBingoEventConfig({
+        ...validConfig,
+        venue_name: "<b>Americana Resort</b>",
+      }),
+    /venue_name/,
+  );
+  assertThrows(
+    () =>
+      parseQrBingoEventConfig({
+        ...validConfig,
+        venue_name: "A".repeat(161),
+      }),
+    /venue_name/,
+  );
+  assertThrows(
+    () =>
+      parseQrBingoEventConfig({
+        ...validConfig,
+        venue_name: null,
+      }),
+    /venue_name/,
+  );
+  const missingVenue = { ...validConfig } as Record<string, unknown>;
+  delete missingVenue.venue_name;
+  assertThrows(
+    () => parseQrBingoEventConfig(missingVenue),
+    /venue_name/,
+  );
+  assertThrows(
+    () =>
+      parseQrBingoEventConfig({
+        ...validConfig,
+        app_card_enabled: "true",
+      }),
+    /app_card_enabled/,
   );
 });
 

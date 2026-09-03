@@ -7,6 +7,16 @@ const migrationUrl = new URL(
   import.meta.url,
 );
 
+const appCardMigrationUrl = new URL(
+  "../../migrations/20260902071500_add_qr_bingo_app_card_controls.sql",
+  import.meta.url,
+);
+
+const requiredVenueMigrationUrl = new URL(
+  "../../migrations/20260902073000_require_published_qr_bingo_venue.sql",
+  import.meta.url,
+);
+
 function functionBody(sql: string, functionName: string) {
   const marker = `create or replace function public.${functionName}`;
   const start = sql.toLowerCase().indexOf(marker.toLowerCase());
@@ -311,5 +321,119 @@ Deno.test("QR Bingo acceptance triggers use the published rules revision and con
       "No published QR Bingo event configuration is available.",
     ),
     "unknown or unpublished events must fail closed",
+  );
+});
+
+Deno.test("QR Bingo app-card controls are history-safe, inherited, and audited", async () => {
+  const sql = await Deno.readTextFile(appCardMigrationUrl);
+
+  assert(
+    /add column if not exists venue_name text/i.test(sql) &&
+      /add column if not exists app_card_enabled boolean not null default true/i
+        .test(sql),
+    "the canonical config must add venue and app-card availability controls",
+  );
+  assert(
+    sql.includes("venue_name is null") &&
+      sql.includes("venue_name = btrim(venue_name)") &&
+      sql.includes("char_length(venue_name) <= 160") &&
+      sql.includes("venue_name !~ '[<>]'") &&
+      sql.includes("venue_name !~ '[[:cntrl:]]'"),
+    "historical venue values may be null while new values remain bounded plain text",
+  );
+
+  const inheritTrigger = functionBody(
+    sql,
+    "apply_qr_bingo_app_card_controls",
+  );
+  assert(
+    inheritTrigger.includes(
+      "current_setting(\n    'weddingwin.qr_bingo_app_card_controls'",
+    ) &&
+      inheritTrigger.includes("config.event_key = new.event_key") &&
+      inheritTrigger.includes("config.revision < new.revision") &&
+      inheritTrigger.includes("new.venue_name := previous_config.venue_name") &&
+      inheritTrigger.includes(
+        "new.app_card_enabled := previous_config.app_card_enabled",
+      ),
+    "the insert trigger must consume explicit controls or clone the preceding event revision",
+  );
+  assert(
+    /create trigger apply_qr_bingo_app_card_controls[\s\S]*?before insert on public\.qr_bingo_event_configs/i
+      .test(sql),
+    "app-card inheritance must run before every event-config insert",
+  );
+
+  const publishWrapper = functionBody(sql, "publish_qr_bingo_event_config");
+  assert(
+    publishWrapper.includes("public.publish_qr_bingo_event_config_locked(") &&
+      publishWrapper.includes(
+        "p_config - 'venue_name' - 'app_card_enabled'",
+      ) &&
+      publishWrapper.includes("jsonb_typeof(p_config -> 'venue_name')") &&
+      publishWrapper.includes(
+        "jsonb_typeof(p_config -> 'app_card_enabled')",
+      ) &&
+      publishWrapper.includes("char_length(venue_value) > 160") &&
+      publishWrapper.includes(
+        "'weddingwin.qr_bingo_app_card_controls'",
+      ),
+    "the short wrapper must validate and pass the new keys without changing the locked publisher",
+  );
+  assert(
+    !/create or replace function public\.publish_qr_bingo_event_config_locked/i
+      .test(sql),
+    "the locked publisher must remain unchanged",
+  );
+  assert(
+    publishWrapper.includes("when serialization_failure") &&
+      publishWrapper.includes("'conflict', true") &&
+      publishWrapper.includes("when invalid_parameter_value") &&
+      publishWrapper.includes("'conflict', false"),
+    "the replacement wrapper must preserve completed conflict responses",
+  );
+
+  assert(
+    sql.includes("target_venue_name constant text := 'Americana Resort'") &&
+      sql.includes("'app_card_enabled', true") &&
+      sql.includes("current_config.event_name") &&
+      sql.includes("current_config.vendor_tag_id") &&
+      sql.includes("current_config.rules_version") &&
+      sql.includes("current_config.draw_at") &&
+      sql.includes("to_jsonb(next_config) - array[") &&
+      sql.includes("insert into public.qr_bingo_event_config_audit") &&
+      sql.includes("to_jsonb(next_config)"),
+    "the migration must publish and audit the exact venue/enabled controls while cloning all existing fields",
+  );
+  assert(
+    !/(?:insert into|update|delete from)\s+public\.qr_bingo_raffle_(?:settings|entries|draws)/i
+      .test(sql),
+    "app-card publication must not rewrite vendor settings, entries, or draws",
+  );
+});
+
+Deno.test("future QR Bingo revisions always publish a parser-safe venue without rewriting history", async () => {
+  const sql = await Deno.readTextFile(requiredVenueMigrationUrl);
+  const triggerBody = functionBody(sql, "apply_qr_bingo_app_card_controls");
+
+  assert(
+    triggerBody.includes(
+      "fallback_venue_name constant text := 'Venue to be announced'",
+    ) &&
+      triggerBody.includes("new.venue_name := previous_config.venue_name") &&
+      triggerBody.includes(
+        "if new.venue_name is null then\n    new.venue_name := fallback_venue_name;",
+      ),
+    "a legacy publication must inherit its event venue or receive a safe first-revision placeholder",
+  );
+  assert(
+    /add constraint qr_bingo_event_configs_published_venue_present\s+check \(not published or venue_name is not null\)/i
+      .test(sql),
+    "the database must reject any published row that still has a null venue",
+  );
+  assert(
+    !/(?:insert into|update|delete from)\s+public\.qr_bingo_event_configs/i
+      .test(sql),
+    "the hardening migration must not rewrite immutable configuration history",
   );
 });

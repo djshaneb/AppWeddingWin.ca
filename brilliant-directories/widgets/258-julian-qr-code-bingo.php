@@ -182,7 +182,7 @@ if (!function_exists('ww_qr_bingo_contact_profile')) {
         }
         $phoneDigits = preg_replace('/[^0-9]/', '', $phone);
         $missing = array();
-        if ($name === '' || $normalizedName === 'weddingwin couple' || $normalizedName === 'couple') {
+        if ($name === '' || in_array($normalizedName, array('couple', 'weddingwin', 'weddingwin couple'), true)) {
             $missing[] = 'name';
         }
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -1527,6 +1527,7 @@ if (user::isUserLogged($_COOKIE)) {
     let vendorDrawReturnFocus = null;
     let qrRulesNoticeAccepted = false;
     let appInitialized = false;
+    let eventConfigRefreshStarted = false;
 
     const qrRulesNotice = document.getElementById('qrRulesNotice');
     const qrRulesNoticeAcknowledged = document.getElementById('qrRulesNoticeAcknowledged');
@@ -1572,10 +1573,13 @@ if (user::isUserLogged($_COOKIE)) {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: `action=scan_vendor&vendor_id=${encodeURIComponent(vendorId)}&participation_notice_version=${encodeURIComponent(PARTICIPATION_NOTICE_VERSION)}&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`
+          body: `action=scan_vendor&vendor_id=${encodeURIComponent(vendorId)}&participation_notice_version=${encodeURIComponent(PARTICIPATION_NOTICE_VERSION)}&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`,
+          credentials: 'same-origin',
+          cache: 'no-store'
         });
 
         const data = await response.json();
+        if (refreshPageAfterStaleEventConfig(response, data)) return false;
         if (!response.ok || data.status !== 'success') {
           throw new Error(data.message || 'Vendor scan could not be saved');
         }
@@ -1585,6 +1589,7 @@ if (user::isUserLogged($_COOKIE)) {
         }
         return true;
       } catch (error) {
+        if (eventConfigRefreshStarted) return false;
         console.error('Error saving vendor scan:', error);
         return false;
       }
@@ -1597,15 +1602,19 @@ if (user::isUserLogged($_COOKIE)) {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: `action=get_scanned&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`
+          body: `action=get_scanned&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`,
+          credentials: 'same-origin',
+          cache: 'no-store'
         });
 
         const data = await response.json();
+        if (refreshPageAfterStaleEventConfig(response, data)) return;
         if (data.status === 'success') {
           scanned = new Set(data.scanned);
           hydrateTiles();
         }
       } catch (error) {
+        if (eventConfigRefreshStarted) return;
         console.error('Error loading scanned vendors:', error);
       }
     }
@@ -1639,6 +1648,37 @@ if (user::isUserLogged($_COOKIE)) {
 
     function cleanPromotionText(value) {
       return String(value == null ? '' : value).trim();
+    }
+
+    function refreshPageAfterStaleEventConfig(response, data) {
+      if (!response || response.status !== 409 || cleanPromotionText(data && data.code) !== 'stale_event_config') {
+        return false;
+      }
+      if (eventConfigRefreshStarted) return true;
+
+      const nextConfig = data && typeof data.event_config === 'object' && data.event_config
+        ? data.event_config
+        : {};
+      const nextEventKey = cleanPromotionText(nextConfig.event_key);
+      const nextRevision = Number(nextConfig.revision);
+      if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(nextEventKey)
+          || !Number.isSafeInteger(nextRevision)
+          || nextRevision < 1) {
+        return false;
+      }
+
+      // Refresh the entire page instead of trusting a new revision alongside
+      // the old event roster. The revision query value bypasses stale page
+      // caches; the user's scan or draw choice is never replayed automatically.
+      eventConfigRefreshStarted = true;
+      stopScanner();
+      startBtn.disabled = true;
+      mobileStartBtn.disabled = true;
+      lastScanEl.textContent = 'Wedding show settings changed. Refreshing QR Bingo — please scan again.';
+      const refreshUrl = new URL(window.location.href);
+      refreshUrl.searchParams.set('ww_qr_config_revision', String(nextRevision));
+      window.location.replace(refreshUrl.toString());
+      return true;
     }
 
     function trustedWeddingWinPromotionUrl(value) {
@@ -1704,6 +1744,7 @@ if (user::isUserLogged($_COOKIE)) {
           },
           body: form.toString(),
           credentials: 'same-origin',
+          cache: 'no-store',
           signal: controller.signal
         });
         const responseText = await response.text();
@@ -1713,6 +1754,12 @@ if (user::isUserLogged($_COOKIE)) {
         } catch (error) {
           throw new Error('Vendor draw tools returned an unreadable response.');
         }
+        if (refreshPageAfterStaleEventConfig(response, data)) {
+          const staleError = new Error('Wedding show settings changed. Refreshing QR Bingo.');
+          staleError.code = 'stale_event_config';
+          staleError.httpStatus = 409;
+          throw staleError;
+        }
         if (!response.ok || data.ok === false) {
           const failure = new Error(cleanPromotionText(data.detail || data.error || data.message) || 'Vendor draw tools are unavailable.');
           failure.code = cleanPromotionText(data.code);
@@ -1721,6 +1768,7 @@ if (user::isUserLogged($_COOKIE)) {
         }
         return data;
       } catch (error) {
+        if (eventConfigRefreshStarted) throw error;
         if (error && error.name === 'AbortError') {
           throw new Error('Vendor draw tools timed out. Your booth visit remains saved.');
         }
@@ -2719,9 +2767,11 @@ if (user::isUserLogged($_COOKIE)) {
           console.log('✅ Successfully marked vendor:', matched.name);
           await openVendorDrawOffer(matched);
         } else {
-          lastScanEl.textContent = 'Scan could not be saved. Please try again.';
-          resetLastDecodedForRetry(raw);
-          console.log('❌ Vendor scan was not saved:', matched.name);
+          if (!eventConfigRefreshStarted) {
+            lastScanEl.textContent = 'Scan could not be saved. Please try again.';
+            resetLastDecodedForRetry(raw);
+            console.log('❌ Vendor scan was not saved:', matched.name);
+          }
         }
       } else {
         lastScanEl.textContent = 'Unrecognized QR';

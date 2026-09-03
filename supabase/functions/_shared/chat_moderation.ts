@@ -1,7 +1,26 @@
+import jpeg from "npm:jpeg-js@0.4.4";
+
 const DEFAULT_BD_TIME_ZONE = "America/Toronto";
 
 export function isChatImageSharingEnabled(value: unknown) {
   return /^(?:1|true)$/i.test(String(value || "").trim());
+}
+
+export type ChatImageDeliveryPolicy =
+  | "text"
+  | "image"
+  | "pause"
+  | "quarantine";
+
+export function chatImageDeliveryPolicy(
+  hasImage: boolean,
+  hasText: boolean,
+  createdAfterCutoff: boolean,
+  imagesEnabled: boolean,
+): ChatImageDeliveryPolicy {
+  if (!hasImage) return "text";
+  if (!createdAfterCutoff) return hasText ? "text" : "quarantine";
+  return imagesEnabled ? "image" : "pause";
 }
 
 const INLINE_IMAGE_DATA_PATTERN = /data:image\/[^\s<>"']+/gi;
@@ -12,6 +31,91 @@ export function containsInlineImagePayload(value: unknown) {
 
 export function stripInlineImagePayloads(value: unknown) {
   return String(value || "").replace(INLINE_IMAGE_DATA_PATTERN, "").trim();
+}
+
+export function sumUnreadOwnerCounts<T extends { unread_count: unknown }>(
+  rows: T[],
+  isMine: (row: T) => boolean,
+) {
+  return rows
+    .filter((row) => !isMine(row))
+    .reduce((sum, row) => sum + Math.max(0, Number(row.unread_count || 0)), 0);
+}
+
+export const CHAT_IMAGE_MAX_DECODED_BYTES = 240_000;
+export const CHAT_IMAGE_MAX_DIMENSION = 1_600;
+export const CHAT_IMAGE_MAX_PIXELS = 2_560_000;
+
+function chatImageHasExpectedSignature(mimeType: string, bytes: Uint8Array) {
+  if (mimeType === "image/jpeg" || mimeType === "image/jpg") {
+    return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+  return false;
+}
+
+export function validateChatImageDataUri(value: unknown) {
+  const image = String(value || "").trim();
+  if (!image) return "";
+
+  const match = image.match(/^data:(image\/jpe?g);base64,([A-Za-z0-9+/]+={0,2})$/i);
+  if (!match) throw new Error("Unsupported image format");
+
+  const mimeType = match[1].toLowerCase();
+  const encoded = match[2];
+  const maxEncodedLength = Math.ceil(CHAT_IMAGE_MAX_DECODED_BYTES / 3) * 4;
+  if (encoded.length > maxEncodedLength || encoded.length % 4 !== 0) {
+    throw new Error("Image is too large or invalid. Please choose a smaller image.");
+  }
+
+  let decoded = "";
+  try {
+    decoded = atob(encoded);
+  } catch {
+    throw new Error("Unsupported image format");
+  }
+  if (!decoded || decoded.length > CHAT_IMAGE_MAX_DECODED_BYTES) {
+    throw new Error("Image is too large or invalid. Please choose a smaller image.");
+  }
+
+  const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+  if (!chatImageHasExpectedSignature(mimeType, bytes)) {
+    throw new Error("The selected file does not match its image type.");
+  }
+  return image;
+}
+
+export async function validateDecodedChatImageDataUri(value: unknown) {
+  const image = validateChatImageDataUri(value);
+  if (!image) return "";
+
+  const match = image.match(/^data:(image\/jpe?g);base64,([A-Za-z0-9+/]+={0,2})$/i);
+  if (!match) throw new Error("Unsupported image format");
+  const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
+
+  try {
+    const decoded = jpeg.decode(bytes, {
+      useTArray: true,
+      formatAsRGBA: false,
+      tolerantDecoding: false,
+      maxResolutionInMP: CHAT_IMAGE_MAX_PIXELS / 1_000_000,
+      maxMemoryUsageInMB: 32,
+    });
+    const width = Number(decoded.width || 0);
+    const height = Number(decoded.height || 0);
+    if (
+      width < 1 ||
+      height < 1 ||
+      width > CHAT_IMAGE_MAX_DIMENSION ||
+      height > CHAT_IMAGE_MAX_DIMENSION ||
+      width * height > CHAT_IMAGE_MAX_PIXELS
+    ) {
+      throw new Error("Photo dimensions are too large. Please choose a smaller photo.");
+    }
+  } catch (error) {
+    if (error instanceof Error && /dimensions are too large/i.test(error.message)) throw error;
+    throw new Error("The selected file could not be decoded as a supported photo.");
+  }
+  return image;
 }
 
 export function normalizeParticipantIdentity(value: unknown) {

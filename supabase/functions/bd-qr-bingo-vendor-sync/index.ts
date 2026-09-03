@@ -969,8 +969,9 @@ function qrContactProfile(user: BdRow | undefined) {
   const phoneDigits = phone.replace(/\D/g, "");
   const missingFields: string[] = [];
   if (
-    !name || normalizedName === "weddingwin couple" ||
-    normalizedName === "couple"
+    !name || ["couple", "weddingwin", "weddingwin couple"].includes(
+      normalizedName,
+    )
   ) {
     missingFields.push("name");
   }
