@@ -2,6 +2,7 @@
 // Runs the actual PHP test-delivery policy with synthetic payloads only.
 // Offline cached PHP.wasm; no credentials, database, network or mail transport.
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
