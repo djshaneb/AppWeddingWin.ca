@@ -16,7 +16,7 @@ function sourceSection(source: string, startMarker: string, endMarker: string) {
   return source.slice(start, end);
 }
 
-Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in Rules & Open", async () => {
+Deno.test("iOS prize setup is a four-step wizard with one short agreement and expandable responsibilities", async () => {
   const app = await Deno.readTextFile(
     new URL("../../../app/(tabs)/index.tsx", import.meta.url),
   );
@@ -36,7 +36,7 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
       !prizeIntro.includes("Vendor responsibilities"),
     "the responsibility disclosure must not appear in the main prize-setup introduction",
   );
-  for (const [step, label] of [[1, "Prize"], [2, "Rules & Open"], [3, "Couples"], [4, "Winner"]] as const) {
+  for (const [step, label] of [[1, "Prize"], [2, "Open"], [3, "Couples"], [4, "Winner"]] as const) {
     assert(
       app.includes(`{ id: ${step}, label: '${label}' }`),
       `vendor draw wizard is missing step ${step}`,
@@ -45,7 +45,7 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
   for (
     const required of [
       "Prize",
-      "Rules & Open",
+      "Open",
       "Couples",
       "Winner",
       'testID={`vendor-draw-wizard-step-${step.id}`}',
@@ -71,7 +71,7 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
       "{vendorResponsibilityDisclosure ||",
       'testID="vendor-draw-rules-acceptance"',
       'accessibilityLabel="Confirm the Official Rules and vendor responsibilities were read and accepted"',
-      "I confirm I have read and accept the current Official Rules and vendor responsibilities",
+      "I have read and agree to the rules above.",
     ]
   ) {
     assert(
@@ -85,6 +85,28 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
   assert(
     detailsStart >= 0 && detailsClose > detailsStart && acceptance > detailsClose,
     "the legal details must collapse independently while the required acceptance remains visible",
+  );
+  const expandedDetails = rulesSection.slice(detailsStart, detailsClose);
+  assert(
+    includesIgnoringWhitespace(
+      expandedDetails,
+      "By agreeing, you confirm you are authorized to accept the current Official Rules and vendor responsibilities for this business.",
+    ) && expandedDetails.includes("{vendorResponsibilityDisclosure ||"),
+    "the full business-authority statement and exact server responsibilities must remain in the expandable rules",
+  );
+  assert(
+    (rulesSection.match(/accessibilityRole="checkbox"/g) || []).length === 1 &&
+      (rulesSection.match(/testID="vendor-draw-rules-acceptance"/g) || []).length === 1 &&
+      includesIgnoringWhitespace(
+        rulesSection,
+        "!vendorRaffle?.terms_url || !vendorRaffle?.rules_version || !vendorResponsibilityDisclosure",
+      ) &&
+      includesIgnoringWhitespace(
+        rulesSection,
+        "setVendorRaffleRulesViewedVersion(nextAccepted ? vendorRaffleRulesVersion : '')",
+      ) &&
+      rulesSection.includes("if (raffleEnabled && raffleLegalAccepted)"),
+    "the single checkbox must bind the current available agreement and must not withdraw acceptance from an open draw",
   );
   assert(
     !app.includes("setVendorRaffleRulesExpanded(true);") &&
@@ -111,9 +133,29 @@ Deno.test("iOS prize setup is a four-step wizard and keeps responsibilities in R
   assert(
     app.includes("vendorRaffleSaveIndicatorSlot") &&
       app.includes("numberOfLines={vendorRaffleSaveHasIssue ? 2 : 1}") &&
-      app.includes("height: 58") &&
       app.includes("Saved automatically"),
-    "the autosave footer must reserve a stable height across save states",
+    "the autosave footer must reserve its indicator slot and bounded status text",
+  );
+  const footerHeight = app.match(
+    /styles\.vendorRaffleAutosaveRow,\s*\{\s*height:\s*([^}]+)\}/,
+  );
+  assert(
+    footerHeight && footerHeight[1].includes("fontScale") &&
+      !/vendorRaffle|Saving|Pending|Issue|Error|\?/.test(footerHeight[1]),
+    "autosave height must scale for accessibility without depending on saved, saving or error state",
+  );
+  const heightForScale = new Function("fontScale", `return (${footerHeight![1]});`);
+  for (const scale of [1, 1.4, 2, 3]) {
+    const height = heightForScale(scale);
+    assert(
+      height >= 44 && height >= Math.ceil(30 * scale) + 12,
+      "the stable footer must fit two scaled 15-point lines and padding",
+    );
+  }
+  assert(
+    includesIgnoringWhitespace(app, "vendorRaffleSaveRetry: { minHeight: 44") &&
+      includesIgnoringWhitespace(app, "vendorRaffleAgreementToggle: { minHeight: 44"),
+    "retry and the single vendor agreement must retain accessible tap targets",
   );
 });
 
@@ -133,9 +175,15 @@ Deno.test("vendor draw autosave signature tracks the accepted rules version", as
     "autosave must distinguish old and current rules acceptance",
   );
   assert(
-    app.includes("data.settings?.legal_terms_version || ''") &&
-      app.includes("vendorRaffleRulesViewedVersion"),
-    "hydrated and edited autosave signatures must carry their exact rules version",
+    includesIgnoringWhitespace(
+      sourceSection(app, "const applyVendorRaffle = useCallback", "const fetchVendorRaffle = useCallback"),
+      "currentRulesAccepted, currentRulesAccepted ? data.rules_version || '' : ''",
+    ) &&
+      includesIgnoringWhitespace(
+        sourceSection(app, "const saveVendorRaffle = useCallback", "const runVendorRaffleSave = useCallback"),
+        "acceptancePersisted, acceptancePersisted ? data.rules_version || '' : ''",
+      ) && app.includes("vendorRaffleRulesViewedVersion"),
+    "hydration and successful-save baselines must use verified current acceptance, never a stale stored acceptance version",
   );
 });
 

@@ -133,16 +133,16 @@ Deno.test("review vendor dashboard skips the website session but requires the li
     );
     assert(
       fastPath.includes(
-        "await loadAppReviewRaffleFixture(nativeSession.user_id)",
+        "await loadAppReviewRaffleFixture(authenticatedMemberId)",
       ) &&
         fastPath.includes(
-          "await loadEmailTestRaffleFixture(nativeSession.user_id)",
+          "await loadEmailTestRaffleFixture(authenticatedMemberId)",
         ) &&
         fastPath.includes(
           "reviewFixture && isReviewVendor && isVendorRaffleAction",
         ) &&
         fastPath.includes(
-          "const user = await fetchFullBdUserById(nativeSession.user_id)",
+          "const user = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)",
         ) &&
         !fastPath.includes("? ({ user_id: nativeSession.user_id } as BdRow)") &&
         source.includes("function hasCurrentQrBingoVendorTag") &&
@@ -151,17 +151,17 @@ Deno.test("review vendor dashboard skips the website session but requires the li
       "the reviewer-vendor path must load current BD tags and fail closed when its event tag is removed",
     );
     assert(
-      fastPath.includes("const cookieJar = isIsolatedReviewVendorAction") &&
+      fastPath.includes("const cookieJar = skipWebsiteTransport") &&
         fastPath.includes("? new Map<string, string>()") &&
-        fastPath.includes("const page = isIsolatedReviewVendorAction") &&
+        fastPath.includes("const page = skipWebsiteTransport") &&
         fastPath.includes("? ({ vendors: [], scanned: [] } as QrPage)"),
       "review vendor raffle actions must use the verified BD identity and an empty page without a website session",
     );
     assert(
-      fastPath.indexOf("await fetchFullBdUserById(nativeSession.user_id)") <
-          fastPath.indexOf("const cookieJar = isIsolatedReviewVendorAction") &&
+      fastPath.indexOf("await fetchFullBdUserById(authenticatedMemberId)") <
+          fastPath.indexOf("const cookieJar = skipWebsiteTransport") &&
         fastPath.indexOf("? new Map<string, string>()") <
-          fastPath.indexOf("await loginWebsiteSession(nativeSession)") &&
+          fastPath.indexOf("await loginWebsiteSession(transportSession)") &&
         fastPath.indexOf("? ({ vendors: [], scanned: [] } as QrPage)") <
           fastPath.indexOf("await getQrPage(cookieJar)"),
       "the reviewer path must verify the live tag before bypassing only the website session and QR page",
@@ -265,7 +265,10 @@ Deno.test("a QR check-in can offer a separate optional vendor draw entry", async
       "if (nextEventConfig?.vendor_draws_enabled && data.raffle_offer)",
     ) &&
       app.includes("setRaffleOffer(data.raffle_offer)") &&
-      app.includes("visible={vendorDrawsEnabled && !!raffleOffer}") &&
+      includesIgnoringWhitespace(
+        app,
+        "visible={vendorDrawsEnabled && participationNoticeAccepted && !!raffleOffer}",
+      ) &&
       app.includes("action: 'raffle_opt_in'") &&
       app.includes("action: 'raffle_offer'") &&
       app.includes(

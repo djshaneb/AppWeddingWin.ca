@@ -1,0 +1,8 @@
+.ww-account-wrapper .ww-vendor-bingo-link[hidden] { display: none !important; }
+.ww-account-wrapper .ww-vendor-bingo-link { min-height: 64px; background: #aa565d; color: #fff; text-decoration: none; }
+.ww-account-wrapper .ww-vendor-bingo-link:hover { background: #884149; color: #fff; }
+.ww-account-wrapper .ww-vendor-bingo-link:focus-visible { outline: 3px solid #884149; outline-offset: 3px; }
+.ww-account-wrapper .ww-vendor-bingo-link svg { flex: 0 0 24px; }
+.ww-account-wrapper .ww-vendor-bingo-link strong { display: block; font-size: 17px; }
+.ww-account-wrapper .ww-vendor-bingo-link small { display: block; font-size: 13px; font-weight: 400; line-height: 1.4; margin-top: 3px; }
+.ww-account-wrapper .ww-vendor-bingo-link .ww-vendor-bingo-arrow { flex: 0 0 auto; font-size: 24px; }

@@ -369,16 +369,16 @@ Deno.test(
     );
     assert(
       appSource.includes('vendorRaffleSettingsMutationBusy') &&
-        appSource.includes('editable={!vendorRafflePrizeControlsDisabled}') &&
+        appSource.includes('editable={!vendorRafflePrizeTextDisabled}') &&
         appSource.includes('disabled={vendorRaffleSettingsMutationBusy}') &&
         appSource.includes('disabled={vendorRafflePrizeControlsDisabled}'),
-      'settings controls must remain read-only while an action response can replace the dashboard',
+      'draft text must use its autosave-safe guard while agreement and discrete settings retain their mutation guards',
     );
     for (const action of [
       'entry:${participantReference}',
       'draw-winner',
       'send-winner:${draw.id}',
-      'review:${drawId}:${decision}',
+      'replace:${drawId}',
       'export-entrants',
     ]) {
       const actionIndex = appSource.indexOf(action);
@@ -394,20 +394,45 @@ Deno.test(
 );
 
 Deno.test(
-  'a deferred vendor action makes every settings control read-only until its dashboard response settles',
+  'autosave preserves typing while deferred vendor actions still lock all settings controls',
   () => {
+    const start = appSource.indexOf('const vendorRaffleMaterialLocked =');
+    const end = appSource.indexOf('const vendorRaffleSaveMessageLower =', start);
+    assert(start >= 0 && end > start, 'settings guard definitions must exist');
+    const flags = [
+      'vendorRaffleSaving', 'vendorRaffleDrawing', 'vendorRaffleSendingDrawId',
+      'vendorRaffleReviewing', 'vendorRaffleExporting', 'vendorRaffleEntryUpdatingReference',
+    ];
+    const evaluate = new Function(
+      'vendorRaffle', 'raffleEnabled', ...flags,
+      appSource.slice(start, end) +
+        '\nreturn { busy: vendorRaffleSettingsMutationBusy, choices: vendorRafflePrizeControlsDisabled, text: vendorRafflePrizeTextDisabled };',
+    );
+    const autosaving = evaluate({ material_terms_locked: false }, false, true, false, false, false, false, false);
     assert(
-      /vendorRaffleSettingsMutationBusy = Boolean\([\s\S]*?vendorRaffleDrawing[\s\S]*?vendorRaffleSendingDrawId[\s\S]*?vendorRaffleReviewing[\s\S]*?vendorRaffleExporting[\s\S]*?vendorRaffleEntryUpdatingReference/.test(
-        appSource,
-      ),
-      'each slow full-dashboard mutation must participate in the settings read-only state',
+      autosaving.busy && autosaving.choices && !autosaving.text,
+      'autosave must keep prize text editable without enabling agreement, open/close, winner-count or no-repeat mutations',
+    );
+    for (let flag = 1; flag < flags.length; flag += 1) {
+      const values = flags.map((_, index) => index === flag);
+      const pending = evaluate({ material_terms_locked: false }, false, ...values);
+      assert(
+        pending.busy && pending.choices && pending.text,
+        `all settings must remain locked during ${flags[flag]}`,
+      );
+    }
+    const locked = evaluate({ material_terms_locked: true }, false, ...flags.map(() => false));
+    const opening = evaluate({ material_terms_locked: false }, true, ...flags.map(() => false));
+    assert(
+      locked.choices && locked.text && opening.text,
+      'material locks and a locally opening draw must still prevent prize text edits',
     );
     assert(
       (appSource.match(/disabled=\{vendorRaffleSettingsMutationBusy\}/g) || [])
         .length >= 2 &&
-        (appSource.match(/vendorRafflePrizeControlsDisabled/g) || []).length >=
-          8,
-      'acceptance, open/close, prize, winner-count, and no-repeat controls must be disabled',
+        (appSource.match(/disabled=\{vendorRafflePrizeControlsDisabled\}/g) || []).length >= 2 &&
+        (appSource.match(/editable=\{!vendorRafflePrizeTextDisabled\}/g) || []).length === 2,
+      'both prize inputs and the agreement, open/close, winner-count and no-repeat controls must use their correct split guards',
     );
   },
 );

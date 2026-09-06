@@ -117,7 +117,7 @@ Deno.test("website refreshes its full event snapshot once after an exact stale-c
   const drawRequest = section(
     website,
     "async function requestVendorDraw(action, extra)",
-    "function resetVendorDrawAcknowledgements()",
+    "function resetVendorDrawChoice()",
   );
 
   assert(
@@ -363,8 +363,9 @@ Deno.test("vendor contact history stays visible while only current proven QR ent
       app,
       "'reacceptance_required' | 'in_person_scan_required'",
     ) &&
-      app.includes("? 'Scan and reaccept required'") &&
-      app.includes("? 'In-show scan required'") &&
+      app.includes("? 'Needs to enter again'") &&
+      app.includes("? 'Needs a show scan'") &&
+      app.includes("const canRestoreToPool = poolStatus === 'excluded';") &&
       dashboard.includes(
         "const reacceptanceRequired = poolStatus === 'reacceptance_required';",
       ) &&
@@ -372,10 +373,10 @@ Deno.test("vendor contact history stays visible while only current proven QR ent
         "const inPersonScanRequired = poolStatus === 'in_person_scan_required';",
       ) &&
       dashboard.includes(
-        "selectionProtected = disqualified || alreadySelected || reacceptanceRequired || inPersonScanRequired",
+        "selectionProtected = disqualified || alreadySelected || replaced || reacceptanceRequired || inPersonScanRequired",
       ) &&
-      dashboard.includes("'New in-show scan and consent required'") &&
-      dashboard.includes("'In-show scan required'"),
+      dashboard.includes("'Needs to scan and agree again'") &&
+      dashboard.includes("'Needs a show scan'"),
     "native and website vendor UIs must label historical rows clearly and keep them protected from manual pool restoration",
   );
 });

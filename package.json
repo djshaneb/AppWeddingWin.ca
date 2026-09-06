@@ -16,8 +16,10 @@
     "doctor": "expo-doctor .",
     "test": "deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts",
     "test:edge": "deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts",
+    "test:video": "node scripts/test-webview-video-playback.mjs && node scripts/test-home-video-player.mjs",
+    "test:google-login": "node scripts/test-native-google-login.mjs",
     "audit:production": "node scripts/check-production-audit.mjs",
-    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs",
+    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs && npm run test:video && npm run test:google-login",
     "android": "expo run:android",
     "ios": "expo run:ios"
   },

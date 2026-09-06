@@ -7,6 +7,7 @@ result by fetching the widget source again after its automatic cache refresh.
 
 | Source file | Live widget | Page / purpose |
 |---|---:|---|
+| `widgets/220-vendor-dashboard-menu.php` + `.css` + `.js` | 220 | Vendor account dashboard; current-roster Vendor Bingo button uses the website URL, intercepted by the app to open its native wizard |
 | `widgets/258-julian-qr-code-bingo.php` | 258 | `/qr`; October 18, 2026 vendor list and scan persistence |
 | `widgets/262-qr-bingo-results.php` + `.css` + `.js` | 262 | `/qr_results`; anonymized current-event progress scoreboard |
 | `widgets/328-qr-bingo-vendor-draw-dashboard.php` + `.css` + `.js` | 328 | `/qr-bingo-vendor-draw`; vendor prize settings, entry count, potential-winner selection, and verified-fulfillment controls |

@@ -111,15 +111,19 @@ Deno.test(
       'disabled scanning must not request permission, mount CameraView, or process barcodes, and must explain the paused state',
     );
     assert(
-      source.includes(
-        'const canReviewVendorDraw = isScanned && vendorDrawsEnabled;',
+      includesIgnoringWhitespace(
+        source,
+        'const canReviewVendorDraw = isScanned && vendorDrawsEnabled && participationNoticeAccepted;',
       ) &&
         source.includes('disabled={!canReviewVendorDraw || savingBingo}') &&
         includesIgnoringWhitespace(
           source,
           'onPress={canReviewVendorDraw ? () => reopenVendorDrawOffer(vendor) : undefined}',
         ) &&
-        source.includes('visible={vendorDrawsEnabled && !!raffleOffer}') &&
+        includesIgnoringWhitespace(
+          source,
+          'visible={vendorDrawsEnabled && participationNoticeAccepted && !!raffleOffer}',
+        ) &&
         source.includes('if (eventVendorDrawsEnabled !== true)') &&
         source.includes('Optional vendor draws are temporarily unavailable.'),
       'disabled vendor draws must remove repeat-scan, visited-card, and modal entry affordances',
@@ -311,7 +315,7 @@ Deno.test(
           'Saving your vendor draw took too long. Check your connection and try again.',
         ) &&
         source.includes(
-          'Loading the entrant selection list took too long. Check your connection and try again.',
+          'Loading your contacts took too long. Check your connection and try again.',
         ) &&
         source.includes(
           'Sending the winner email took too long. Check your connection and try again.',
@@ -359,7 +363,9 @@ Deno.test(
         source.includes("action: 'vendor_raffle_entry_update'") &&
         source.includes('participant_reference: participantReference') &&
         source.includes('exclusion_reason: reason') &&
-        source.includes('Every contact stays in your CSV.'),
+        source.includes('Their contact details stay in your list.') &&
+        source.includes('Download all contacts, including couples removed from') &&
+        source.includes('Download vendor draw entrant list CSV'),
       'the app must manage entrant inclusion by protected reference while retaining every opted-in CSV row',
     );
     assert(

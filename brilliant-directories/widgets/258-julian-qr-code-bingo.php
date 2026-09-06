@@ -120,49 +120,116 @@ if (!function_exists('ww_qr_bingo_runtime_config')) {
 }
 
 if (!function_exists('ww_qr_bingo_vendor_draw_request')) {
-    function ww_qr_bingo_vendor_draw_request($action, $payload, $userId, $token) {
-        $publishableKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzemNqb3lhYnd2enN4eGp0a2hzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2OTMxMTYsImV4cCI6MjA5NDI2OTExNn0.QLCEmNcn1WAks0IHkCLmI3iY5K4GnRxZ9Sfy89GYrLo';
-        if (!function_exists('curl_init') || !$userId || !$token) {
-            return array(
-                'status_code' => !$userId || !$token ? 401 : 503,
-                'body' => array('ok' => false, 'error' => !$userId || !$token
-                    ? 'Sign in again before reviewing a vendor draw.'
-                    : 'Vendor draw tools are temporarily unavailable.')
-            );
+    function ww_qrb_secure_hex($bytes) {
+        if (function_exists('random_bytes')) {
+            try { return bin2hex(random_bytes($bytes)); } catch (Exception $e) { return ''; }
         }
+        if (function_exists('openssl_random_pseudo_bytes')) {
+            $strong = false; $value = openssl_random_pseudo_bytes($bytes, $strong);
+            if ($strong && is_string($value) && strlen($value) === $bytes) return bin2hex($value);
+        }
+        return '';
+    }
+    function ww_qrb_request_error($status, $message) {
+        return array('status_code' => $status, 'body' => array('ok' => false, 'error' => $message));
+    }
+    function ww_qr_bingo_vendor_draw_request($action, $payload) {
+        global $w;
+        // A website couple is authenticated only by BD's current member session.
+        if (!user::isUserLogged($_COOKIE) || !isset($_COOKIE['userid']) || !is_string($_COOKIE['userid'])
+            || !ctype_digit($_COOKIE['userid']) || (int)$_COOKIE['userid'] < 1) {
+            return ww_qrb_request_error(401, 'Sign in again before reviewing a vendor draw.');
+        }
+        $member = getUser($_COOKIE['userid'], $w);
+        if (!is_array($member) || !isset($member['user_id'], $member['subscription_id'])
+            || (string)$member['user_id'] !== (string)$_COOKIE['userid']
+            || !in_array((string)$member['subscription_id'], array('4', '18'), true)) {
+            return ww_qrb_request_error(403, 'Sign in with a couple account to use QR Bingo.');
+        }
+        if (!in_array($action, array('fixture_context', 'scan', 'raffle_offer', 'raffle_opt_in'), true)) {
+            return ww_qrb_request_error(400, 'This couple action is not available.');
+        }
+        if ($action !== 'fixture_context') {
+            $saved = isset($_SESSION['ww_qr_couple_website_csrf']) ? $_SESSION['ww_qr_couple_website_csrf'] : null;
+            if (!isset($_SERVER['REQUEST_METHOD'], $_SERVER['HTTP_ORIGIN']) || $_SERVER['REQUEST_METHOD'] !== 'POST'
+                || $_SERVER['HTTP_ORIGIN'] !== 'https://www.weddingwin.ca' || !is_array($saved)
+                || !isset($saved['member_id'], $saved['token'], $_POST['qr_csrf'])
+                || $saved['member_id'] !== (string)$member['user_id']
+                || !is_string($_POST['qr_csrf']) || !is_string($saved['token'])
+                || strlen($saved['token']) !== 64 || !hash_equals($saved['token'], $_POST['qr_csrf'])) {
+                return ww_qrb_request_error(403, 'Refresh QR Bingo before continuing.');
+            }
+        }
+        if (!function_exists('curl_init') || !function_exists('hash_hmac') || !isset($w['database'])) {
+            return ww_qrb_request_error(503, 'Website sign-in verification is temporarily unavailable.');
+        }
+        $secret = '';
+        $secretRows = mysql($w['database'], 'SELECT secret_text FROM ww_qr_bingo_admin_credentials WHERE active = 1 LIMIT 20');
+        if ($secretRows) {
+            while ($row = mysql_fetch_assoc($secretRows)) {
+                $candidate = is_array($row) && isset($row['secret_text']) && is_string($row['secret_text']) ? $row['secret_text'] : '';
+                if (strlen($candidate) >= 32 && strlen($candidate) <= 4096 && strpos($candidate, chr(0)) === false) {
+                    $secret = $candidate; break;
+                }
+            }
+        }
+        unset($candidate, $row);
+        if ($secret === '') return ww_qrb_request_error(503, 'Website sign-in verification is temporarily unavailable.');
         $requestBody = is_array($payload) ? $payload : array();
+        foreach (array('native_session', 'website_member_id', 'website_session_token', 'user_id', 'userid', 'token', 'cookie') as $forbidden) {
+            if (array_key_exists($forbidden, $requestBody)) return ww_qrb_request_error(400, 'An unsupported identity was provided.');
+        }
+        $memberId = (string)$member['user_id'];
         $requestBody['action'] = (string)$action;
-        $requestBody['native_session'] = array(
-            'user_id' => (string)$userId,
-            'token' => (string)$token
-        );
+        $requestBody['website_member_id'] = $memberId;
+        $requestBody['client_platform'] = 'website';
+        // Existing canonical token is used only for server-to-server BD history
+        // transport. Website proof is the sole authentication; never cache or emit it.
+        $transportToken = isset($member['token']) && is_string($member['token']) ? $member['token'] : '';
+        if (strlen($transportToken) >= 16 && strlen($transportToken) <= 512) {
+            $requestBody['website_session_token'] = $transportToken;
+        }
+        unset($member, $transportToken);
+        $rawBody = json_encode($requestBody);
+        if (!is_string($rawBody) || json_last_error() !== JSON_ERROR_NONE || strlen($rawBody) > 131072) {
+            return ww_qrb_request_error(400, 'The request could not be prepared.');
+        }
+        $scope = 'weddingwin:qr-bingo:couple-website:v1';
+        $expires = (string)(time() + 30);
+        $nonce = ww_qrb_secure_hex(16);
+        if (strlen($nonce) !== 32) return ww_qrb_request_error(503, 'Website sign-in verification is temporarily unavailable.');
+        $bodyHash = hash('sha256', $rawBody);
+        $key = hash_hmac('sha256', 'weddingwin:qr-bingo:website-key:v1', $secret);
+        $signature = hash_hmac('sha256', implode(chr(10), array($scope, $memberId, $action, $expires, $nonce, $bodyHash)), $key);
+        unset($secret, $key, $requestBody);
+        $responseBody = ''; $tooLarge = false;
         $curl = curl_init('https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-vendor-sync');
-        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl, CURLOPT_FOLLOWLOCATION, false);
-        curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 5);
-        curl_setopt($curl, CURLOPT_TIMEOUT, 15);
-        curl_setopt($curl, CURLOPT_POST, true);
-        curl_setopt($curl, CURLOPT_POSTFIELDS, json_encode($requestBody));
-        curl_setopt($curl, CURLOPT_HTTPHEADER, array(
-            'Accept: application/json',
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $publishableKey,
-            'apikey: ' . $publishableKey
+        if ($curl === false) return ww_qrb_request_error(503, 'Vendor draw tools are temporarily unavailable.');
+        curl_setopt_array($curl, array(
+            CURLOPT_POST => true, CURLOPT_POSTFIELDS => $rawBody,
+            CURLOPT_HTTPHEADER => array('Accept: application/json', 'Content-Type: application/json',
+                'x-ww-website-scope: ' . $scope, 'x-ww-website-member: ' . $memberId,
+                'x-ww-website-expires: ' . $expires, 'x-ww-website-nonce: ' . $nonce,
+                'x-ww-website-body-sha256: ' . $bodyHash, 'x-ww-website-signature: ' . $signature),
+            CURLOPT_FOLLOWLOCATION => false, CURLOPT_MAXREDIRS => 0,
+            CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => 15,
+            CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_RETURNTRANSFER => false, CURLOPT_HEADER => false,
+            CURLOPT_WRITEFUNCTION => function($handle, $chunk) use (&$responseBody, &$tooLarge) {
+                if (strlen($responseBody) + strlen($chunk) > 4194304) { $tooLarge = true; return 0; }
+                $responseBody .= $chunk; return strlen($chunk);
+            }
         ));
-        $responseBody = (string)curl_exec($curl);
+        $transportOk = curl_exec($curl);
         $statusCode = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE);
         curl_close($curl);
-        $decoded = $responseBody ? json_decode($responseBody, true) : null;
-        if (!is_array($decoded)) {
-            return array(
-                'status_code' => $statusCode >= 400 ? $statusCode : 502,
-                'body' => array('ok' => false, 'error' => 'Vendor draw tools returned an unreadable response.')
-            );
+        unset($signature, $rawBody);
+        $decoded = json_decode($responseBody, true);
+        if ($transportOk === false || $tooLarge || $statusCode < 200 || $statusCode >= 600
+            || !is_array($decoded) || !isset($decoded['ok']) || !is_bool($decoded['ok'])) {
+            return ww_qrb_request_error(502, 'Vendor draw tools returned an unreadable response.');
         }
-        return array(
-            'status_code' => $statusCode >= 100 ? $statusCode : 502,
-            'body' => $decoded
-        );
+        return array('status_code' => $statusCode, 'body' => $decoded);
     }
 }
 
@@ -272,9 +339,39 @@ if (!function_exists('ww_qr_bingo_fixture_context')) {
 }
 
 // Check if user is logged in
-if (user::isUserLogged($_COOKIE)) {
+if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COOKIE['userid'])
+    && ctype_digit($_COOKIE['userid']) && (int)$_COOKIE['userid'] > 0) {
     $loggedInUser = getUser($_COOKIE['userid'], $w);
-    $userId = $loggedInUser['user_id'];
+    if (!is_array($loggedInUser) || !isset($loggedInUser['user_id'])
+        || (string)$loggedInUser['user_id'] !== (string)$_COOKIE['userid']) {
+        http_response_code(401); echo '<p>Sign in again to use QR Bingo.</p>'; return;
+    }
+    $userId = (string)$loggedInUser['user_id'];
+    $qrWebsiteCsrf = '';
+    if (function_exists('session_status')) {
+        if (session_status() !== PHP_SESSION_ACTIVE) { @session_start(); }
+    } elseif (session_id() === '') { @session_start(); }
+    if (session_id() !== '' && function_exists('hash_equals')) {
+        if (!isset($_SESSION['ww_qr_couple_website_csrf']) || !is_array($_SESSION['ww_qr_couple_website_csrf'])
+            || !isset($_SESSION['ww_qr_couple_website_csrf']['member_id'], $_SESSION['ww_qr_couple_website_csrf']['token'])
+            || $_SESSION['ww_qr_couple_website_csrf']['member_id'] !== $userId
+            || !is_string($_SESSION['ww_qr_couple_website_csrf']['token'])
+            || !ctype_xdigit($_SESSION['ww_qr_couple_website_csrf']['token'])
+            || strlen($_SESSION['ww_qr_couple_website_csrf']['token']) !== 64) {
+            $_SESSION['ww_qr_couple_website_csrf'] = array('member_id' => $userId, 'token' => ww_qrb_secure_hex(32));
+        }
+        $qrWebsiteCsrf = (string)$_SESSION['ww_qr_couple_website_csrf']['token'];
+    }
+    if (strlen($qrWebsiteCsrf) !== 64) {
+        http_response_code(503); echo '<p>A secure QR Bingo session is unavailable. Please refresh.</p>'; return;
+    }
+    if (!headers_sent()) {
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+    }
+    // Release the PHP lock before read-only fixture/Edge calls; the scoped
+    // CSRF remains in this request's session snapshot.
+    if (function_exists('session_write_close')) { session_write_close(); }
 
     // The website and native app consume this same published, versioned event
     // configuration. Fail closed rather than silently reverting to an old tag.
@@ -301,7 +398,7 @@ if (user::isUserLogged($_COOKIE)) {
     $eventName = $eventConfig['event_name'];
     $eventConfigRevision = intval($eventConfig['revision']);
     $officialRulesUrl = $eventConfig['official_rules_url'];
-    $participationNoticeVersion = (string)$eventConfig['rules_version'] . '|2026-09-01-in-person-entry';
+    $participationNoticeVersion = (string)$eventConfig['rules_version'] . '|2026-09-04-pre-scan-draw-consent';
     $rulesNoticeStorageKey = 'wwQrRulesNotice:' . hash(
         'sha256',
         'couple|' . (string)$userId . '|' . $eventConfig['event_key'] . '|' . $participationNoticeVersion
@@ -334,9 +431,7 @@ if (user::isUserLogged($_COOKIE)) {
         // and therefore stays on the existing active-tag production path.
         $fixtureProbeResponse = ww_qr_bingo_vendor_draw_request(
             'fixture_context',
-            array(),
-            isset($loggedInUser['user_id']) ? (string)$loggedInUser['user_id'] : '',
-            isset($_COOKIE['token']) ? (string)$_COOKIE['token'] : ''
+            array()
         );
         $fixtureContext = ww_qr_bingo_fixture_context($fixtureProbeResponse);
         $productionScanWindowOpensAt = intval($eventConfig['history_starts_at_unix']);
@@ -349,6 +444,13 @@ if (user::isUserLogged($_COOKIE)) {
         // Handle AJAX requests for scanning vendors
         if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Content-Type: application/json');
+            if (!isset($_SERVER['HTTP_ORIGIN']) || $_SERVER['HTTP_ORIGIN'] !== 'https://www.weddingwin.ca'
+                || !isset($_POST['qr_csrf']) || !is_string($_POST['qr_csrf']) || !hash_equals($qrWebsiteCsrf, $_POST['qr_csrf'])) {
+                http_response_code(403);
+                echo json_encode(array('ok' => false, 'status' => 'error', 'error' => 'Refresh QR Bingo before continuing.',
+                    'message' => 'Refresh QR Bingo before continuing.'));
+                exit();
+            }
 
             $expectedEventKey = isset($_POST['expected_event_key']) && is_string($_POST['expected_event_key'])
                 ? $_POST['expected_event_key']
@@ -384,6 +486,31 @@ if (user::isUserLogged($_COOKIE)) {
                     'profile_edit_url' => $qrContactProfile['profile_edit_url']
                 ));
                 exit();
+            }
+
+            if (in_array($_POST['action'], array('scan_vendor', 'raffle_offer', 'raffle_opt_in'), true)) {
+                $submittedNoticeVersion = isset($_POST['participation_notice_version']) && is_string($_POST['participation_notice_version'])
+                    ? trim($_POST['participation_notice_version'])
+                    : '';
+                // Released native builds still send the previous notice on
+                // scan only. Preserve that exact evidence without relabelling
+                // it as the expanded pre-scan agreement used by this website.
+                $legacyScanNoticeAccepted = $_POST['action'] === 'scan_vendor'
+                    && hash_equals(
+                        (string)$eventConfig['rules_version'] . '|2026-09-01-in-person-entry',
+                        $submittedNoticeVersion
+                    );
+                if (!hash_equals($participationNoticeVersion, $submittedNoticeVersion)
+                    && !$legacyScanNoticeAccepted) {
+                    http_response_code(428);
+                    echo json_encode(array(
+                        'ok' => false,
+                        'status' => 'error',
+                        'code' => 'participation_notice_required',
+                        'message' => 'Read and accept the current QR Bingo agreement before continuing.'
+                    ));
+                    exit();
+                }
             }
 
             if ($_POST['action'] === 'raffle_offer' || $_POST['action'] === 'raffle_opt_in') {
@@ -427,7 +554,10 @@ if (user::isUserLogged($_COOKIE)) {
                     }
                 }
 
-                $drawPayload = array('vendor_id' => $drawVendorId);
+                $drawPayload = array(
+                    'vendor_id' => $drawVendorId,
+                    'participation_notice_version' => $submittedNoticeVersion
+                );
                 if ($_POST['action'] === 'raffle_opt_in') {
                     $consentVersion = isset($_POST['consent_version']) && is_string($_POST['consent_version'])
                         ? trim($_POST['consent_version'])
@@ -483,9 +613,7 @@ if (user::isUserLogged($_COOKIE)) {
                 }
                 $drawResponse = ww_qr_bingo_vendor_draw_request(
                     $_POST['action'],
-                    $drawPayload,
-                    isset($loggedInUser['user_id']) ? (string)$loggedInUser['user_id'] : '',
-                    isset($_COOKIE['token']) ? (string)$_COOKIE['token'] : ''
+                    $drawPayload
                 );
                 http_response_code((int)$drawResponse['status_code']);
                 echo json_encode($drawResponse['body']);
@@ -496,18 +624,6 @@ if (user::isUserLogged($_COOKIE)) {
                 if (empty($eventConfig['scan_enabled'])) {
                     http_response_code(503);
                     echo json_encode(array('status' => 'error', 'message' => 'QR Bingo scanning is temporarily disabled.'));
-                    exit();
-                }
-                $submittedNoticeVersion = isset($_POST['participation_notice_version']) && is_string($_POST['participation_notice_version'])
-                    ? trim($_POST['participation_notice_version'])
-                    : '';
-                if (!hash_equals($participationNoticeVersion, $submittedNoticeVersion)) {
-                    http_response_code(428);
-                    echo json_encode(array(
-                        'status' => 'error',
-                        'code' => 'participation_notice_required',
-                        'message' => 'Read and accept the current QR Bingo participation notice before scanning.'
-                    ));
                     exit();
                 }
                 $vendorId = isset($_POST['vendor_id']) && is_string($_POST['vendor_id'])
@@ -524,10 +640,8 @@ if (user::isUserLogged($_COOKIE)) {
                         'scan',
                         array(
                             'vendor_id' => $fixtureVendorId,
-                            'participation_notice_version' => $participationNoticeVersion
-                        ),
-                        isset($loggedInUser['user_id']) ? (string)$loggedInUser['user_id'] : '',
-                        isset($_COOKIE['token']) ? (string)$_COOKIE['token'] : ''
+                            'participation_notice_version' => $submittedNoticeVersion
+                        )
                     );
                     $freshFixtureContext = ww_qr_bingo_fixture_context($fixtureScanResponse);
                     if (!$freshFixtureContext
@@ -1180,16 +1294,23 @@ if (user::isUserLogged($_COOKIE)) {
     }
     .qr-rules-notice-row{ align-items:flex-start; display:flex; gap:9px; }
     .qr-rules-notice input{ flex:0 0 auto; height:18px; margin:1px 0 0; width:18px; }
+    .qr-rules-notice h2{ color:#3f393f; font-size:20px; line-height:1.25; margin:0 0 12px; }
     .qr-rules-notice label{ cursor:pointer; margin:0; }
     .qr-rules-notice strong{ color:#3f393f; display:block; }
     .qr-rules-notice a{ color:#aa565d; font-weight:800; }
-    .qr-rules-notice-apple{ color:#6b646b; font-size:11px; margin:7px 0 0 27px; }
+    .qr-rules-notice-links{ color:#6b646b; font-size:12px; margin:8px 0 0 27px; }
+    .qr-fixture-scan{ background:#fff7f6; border:1px dashed #aa565d; border-radius:12px; margin:0 0 16px; padding:16px; }
+    .qr-fixture-scan strong{ color:#88464d; display:block; }
+    .qr-fixture-scan p{ color:#625b62; font-size:14px; line-height:1.5; margin:6px 0 12px; }
+    .qr-fixture-scan button{ background:#aa565d; border:0; border-radius:9px; color:#fff; cursor:pointer; font-weight:800; min-height:44px; padding:10px 16px; }
+    .qr-fixture-scan button:disabled{ cursor:not-allowed; opacity:.5; }
     .qr-contact-gate{ background:#fff; border:2px solid #efd8d5; border-radius:16px; box-shadow:0 10px 30px rgba(91,50,54,.08); margin:18px 0; padding:22px; text-align:center; }
     .qr-contact-gate h2{ color:#3f393f; font-size:24px; margin:0 0 9px; }
     .qr-contact-gate p{ color:#625b62; font-size:15px; line-height:1.55; margin:7px auto; max-width:620px; }
     .qr-contact-gate a{ background:#aa565d; border-radius:10px; color:#fff; display:inline-block; font-weight:800; margin-top:12px; min-height:44px; padding:12px 18px; text-decoration:none; }
     .vendor-draw-modal{ align-items:flex-start; background:rgba(20,20,24,.68); display:flex; inset:0; justify-content:center; overflow-y:auto; padding:24px 14px; position:fixed; z-index:10020; }
     .vendor-draw-dialog{ background:#fff; border-radius:16px; box-shadow:0 24px 70px rgba(0,0,0,.28); color:#292929; max-width:620px; padding:22px; width:100%; }
+    .vendor-draw-dialog [hidden]{ display:none !important; }
     .vendor-draw-eyebrow{ color:#aa565d; font-size:12px; font-weight:800; letter-spacing:.06em; margin:0 0 6px; text-transform:uppercase; }
     .vendor-draw-dialog h2{ font-size:26px; line-height:1.2; margin:0 0 4px; }
     .vendor-draw-vendor{ color:#666168; font-weight:700; margin:0 0 14px; }
@@ -1253,18 +1374,23 @@ if (user::isUserLogged($_COOKIE)) {
 	      aria-label="QR Bingo terms acknowledgement"
 	      data-storage-key="<?php echo htmlspecialchars($rulesNoticeStorageKey, ENT_QUOTES, 'UTF-8'); ?>"
 	    >
+	      <h2>Before you scan</h2>
 	      <div class="qr-rules-notice-row">
 	        <input id="qrRulesNoticeAcknowledged" type="checkbox">
 	        <label for="qrRulesNoticeAcknowledged">
-	          <strong>I agree to the QR Bingo Terms.</strong>
+	          <strong>I have read and agree to the <a href="/about/terms#qr-bingo" target="_blank" rel="noopener">QR Bingo Terms</a> and <a href="<?php echo htmlspecialchars($officialRulesUrl, ENT_QUOTES, 'UTF-8'); ?>" target="_blank" rel="noopener">Draw Rules</a>.</strong>
 	        </label>
 	      </div>
-	      <p class="qr-rules-notice-apple">
-	        <a href="/about/terms" target="_blank" rel="noopener">Read QR Bingo Terms</a>
-	        &nbsp;·&nbsp;
-	        <a href="/about/privacy" target="_blank" rel="noopener">View Privacy Policy</a>
-	      </p>
+	      <p class="qr-rules-notice-links"><a href="/about/privacy" target="_blank" rel="noopener">Privacy Policy</a></p>
 	    </section>
+
+    <?php if ($fixtureContext && $qrContactComplete && !empty($eventConfig['scan_enabled']) && $showScanWindowOpen) { ?>
+      <section class="qr-fixture-scan" aria-labelledby="qrFixtureScanTitle">
+        <strong id="qrFixtureScanTitle">Private test booth</strong>
+        <p>Test the scan and optional draw for <?php echo htmlspecialchars($fixtureContext['vendor']['name'], ENT_QUOTES, 'UTF-8'); ?> without a camera. Accept the agreement above first. This records test progress only, not a real show visit.</p>
+        <button id="qrFixtureScanButton" type="button" data-vendor-id="<?php echo htmlspecialchars($fixtureContext['vendor']['id'], ENT_QUOTES, 'UTF-8'); ?>" disabled>Scan test booth</button>
+      </section>
+    <?php } ?>
 
 	    <section class="controls" aria-label="Scanner controls">
       <div>
@@ -1367,32 +1493,13 @@ if (user::isUserLogged($_COOKIE)) {
       <p class="vendor-draw-copy" id="vendorDrawDescription"></p>
       <p class="vendor-draw-copy" id="vendorDrawDisclosure"></p>
       <p class="vendor-draw-copy" id="vendorDrawPrivacy"></p>
-      <p class="vendor-draw-copy" id="vendorDrawRoles"></p>
-      <p class="vendor-draw-copy" id="vendorDrawApple"></p>
-      <div class="vendor-draw-terms">
-        <a id="vendorDrawRules" href="#" target="_blank" rel="noopener">View draw rules</a>
-        <p class="vendor-draw-status" id="vendorDrawRulesStatus">Open the current rules before choosing to enter.</p>
+      <div class="vendor-draw-terms" id="vendorDrawTerms" hidden>
+        <a id="vendorDrawRules" target="_blank" rel="noopener" hidden>View draw rules</a>
       </div>
-      <label class="vendor-draw-check">
-        <input id="vendorDrawAge" type="checkbox">
-        <span>I have reached the age of majority.</span>
-      </label>
-      <label class="vendor-draw-check">
-        <input id="vendorDrawResidency" type="checkbox">
-        <span>I reside in the eligible region shown above.</span>
-      </label>
-      <label class="vendor-draw-check">
-        <input id="vendorDrawExclusions" type="checkbox">
-        <span>I am not Wedding Win Inc., the named vendor or prize provider, an employee of either, or a member of an excluded employee's immediate household under the Official Rules.</span>
-      </label>
-      <label class="vendor-draw-check">
-        <input id="vendorDrawResponsibility" type="checkbox">
-        <span id="vendorDrawResponsibilityText">Loading the exact participant responsibility agreement…</span>
-      </label>
       <p class="vendor-draw-status" id="vendorDrawStatus" role="status" aria-live="polite">Prize entry is separate and optional. One valid in-show QR entry is allowed per eligible couple for this vendor draw. Declining does not change your saved booth visit.</p>
       <div class="vendor-draw-actions">
         <button class="vendor-draw-decline" id="vendorDrawDecline" type="button">No Thanks</button>
-        <button class="vendor-draw-enter" id="vendorDrawEnter" type="button" disabled>Accept Rules &amp; Enter</button>
+        <button class="vendor-draw-enter" id="vendorDrawEnter" type="button" disabled>Enter Draw</button>
       </div>
     </section>
   </div>
@@ -1403,6 +1510,7 @@ if (user::isUserLogged($_COOKIE)) {
       'event_key' => isset($eventConfig['event_key']) ? (string)$eventConfig['event_key'] : '',
       'revision' => $eventConfigRevision,
       'event_name' => $eventName,
+      'rules_version' => (string)$eventConfig['rules_version'],
       'vendor_tag_id' => $eventTagId,
       'scan_enabled' => !empty($eventConfig['scan_enabled']),
       'show_scan_window_open' => !empty($showScanWindowOpen),
@@ -1507,6 +1615,8 @@ if (user::isUserLogged($_COOKIE)) {
     ?>;
 
     // Initialize with server data
+    const QR_AUTHENTICATED_MEMBER_ID = <?php echo json_encode((string)$userId, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
+    const QR_WEBSITE_CSRF = <?php echo json_encode($qrWebsiteCsrf, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const INITIAL_SCANNED = <?php echo json_encode($scannedVendors, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
   </script>
 
@@ -1523,42 +1633,94 @@ if (user::isUserLogged($_COOKIE)) {
     let lastDecoded = '';
     let currentVendorDrawOffer = null;
     let currentVendorDrawVendor = null;
-    let vendorDrawRulesViewedVersion = '';
+    let vendorDrawOfferInFlight = false;
+    let vendorDrawEntryInFlight = false;
+    let vendorDrawEntryRecorded = false;
     let vendorDrawReturnFocus = null;
     let qrRulesNoticeAccepted = false;
+    let qrRulesNoticeAcceptedScope = '';
     let appInitialized = false;
     let eventConfigRefreshStarted = false;
+    let qrFixtureScanInFlight = false;
 
     const qrRulesNotice = document.getElementById('qrRulesNotice');
     const qrRulesNoticeAcknowledged = document.getElementById('qrRulesNoticeAcknowledged');
+    // Only the authenticated fixture response renders this control and its ID.
+    // The server revalidates that same fixture on the ordinary scan request.
+    const qrFixtureScanButton = document.getElementById('qrFixtureScanButton');
+
+    function canScanFixtureBooth() {
+      if (!qrFixtureScanButton || qrFixtureScanInFlight || !hasCurrentParticipationNotice() ||
+          EVENT_CONFIG.scan_enabled !== true || EVENT_CONFIG.show_scan_window_open !== true ||
+          VENDORS.length !== 1) return false;
+      const vendorId = qrFixtureScanButton.dataset.vendorId || '';
+      return Boolean(vendorId && VENDORS[0].id === vendorId && VENDORS[0].user_id === vendorId);
+    }
+
+    function updateFixtureScanButton() {
+      if (qrFixtureScanButton) qrFixtureScanButton.disabled = !canScanFixtureBooth();
+    }
+
+    function currentParticipationNoticeScope() {
+      const storageKey = qrRulesNotice && qrRulesNotice.dataset.storageKey || '';
+      const eventKey = String(EVENT_CONFIG.event_key || '').trim();
+      const rulesVersion = String(EVENT_CONFIG.rules_version || '').trim();
+      if (!storageKey || !eventKey || !rulesVersion ||
+          PARTICIPATION_NOTICE_VERSION !== rulesVersion + '|2026-09-04-pre-scan-draw-consent') return '';
+      // The server-generated key includes the signed-in account. The stored
+      // value also binds event and both versions; old generic '1' values never
+      // stand in for the expanded pre-scan eligibility/rules agreement.
+      return JSON.stringify([storageKey, eventKey, rulesVersion, PARTICIPATION_NOTICE_VERSION]);
+    }
+
+    function hasCurrentParticipationNotice() {
+      const scope = currentParticipationNoticeScope();
+      return Boolean(CONTACT_PROFILE_COMPLETE && !eventConfigRefreshStarted &&
+        scope && qrRulesNoticeAccepted && qrRulesNoticeAcceptedScope === scope);
+    }
 
     function initializeRulesNotice() {
       if (!qrRulesNotice || !qrRulesNoticeAcknowledged) return;
       const storageKey = qrRulesNotice.dataset.storageKey || '';
+      const scope = currentParticipationNoticeScope();
       let alreadyAcknowledged = false;
-      if (storageKey) {
+      if (storageKey && scope) {
         try {
-          alreadyAcknowledged = window.localStorage.getItem(storageKey) === '1';
+          alreadyAcknowledged = window.localStorage.getItem(storageKey) === scope;
         } catch (error) {
           alreadyAcknowledged = false;
         }
       }
       if (alreadyAcknowledged) {
         qrRulesNoticeAccepted = true;
+        qrRulesNoticeAcceptedScope = scope;
+        qrRulesNoticeAcknowledged.checked = true;
         qrRulesNotice.hidden = true;
-        return;
       }
       qrRulesNoticeAcknowledged.addEventListener('change', () => {
-        if (!qrRulesNoticeAcknowledged.checked) return;
+        const acceptedScope = currentParticipationNoticeScope();
+        if (!qrRulesNoticeAcknowledged.checked || !acceptedScope || !CONTACT_PROFILE_COMPLETE) {
+          qrRulesNoticeAccepted = false;
+          qrRulesNoticeAcceptedScope = '';
+          qrRulesNotice.hidden = false;
+          try { window.localStorage.removeItem(storageKey); } catch (error) {}
+          stopScanner();
+          appInitialized = false;
+          updateVendorDrawEntryButton();
+          updateFixtureScanButton();
+          return;
+        }
         qrRulesNoticeAccepted = true;
+        qrRulesNoticeAcceptedScope = acceptedScope;
         if (storageKey) {
           try {
-            window.localStorage.setItem(storageKey, '1');
+            window.localStorage.setItem(storageKey, acceptedScope);
           } catch (error) {
             // The notice still dismisses for this page when storage is unavailable.
           }
         }
         qrRulesNotice.hidden = true;
+        updateVendorDrawEntryButton();
         initApp();
       });
     }
@@ -1567,13 +1729,14 @@ if (user::isUserLogged($_COOKIE)) {
 
     // --- Server Communication ---
     async function saveVendorScan(vendorId) {
+      if (!hasCurrentParticipationNotice()) return false;
       try {
         const response = await fetch('', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: `action=scan_vendor&vendor_id=${encodeURIComponent(vendorId)}&participation_notice_version=${encodeURIComponent(PARTICIPATION_NOTICE_VERSION)}&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`,
+          body: `qr_csrf=${encodeURIComponent(QR_WEBSITE_CSRF)}&action=scan_vendor&vendor_id=${encodeURIComponent(vendorId)}&participation_notice_version=${encodeURIComponent(PARTICIPATION_NOTICE_VERSION)}&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`,
           credentials: 'same-origin',
           cache: 'no-store'
         });
@@ -1602,7 +1765,7 @@ if (user::isUserLogged($_COOKIE)) {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: `action=get_scanned&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`,
+          body: `qr_csrf=${encodeURIComponent(QR_WEBSITE_CSRF)}&action=get_scanned&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`,
           credentials: 'same-origin',
           cache: 'no-store'
         });
@@ -1633,15 +1796,8 @@ if (user::isUserLogged($_COOKIE)) {
     const vendorDrawDescription = document.getElementById('vendorDrawDescription');
     const vendorDrawDisclosure = document.getElementById('vendorDrawDisclosure');
     const vendorDrawPrivacy = document.getElementById('vendorDrawPrivacy');
-    const vendorDrawRoles = document.getElementById('vendorDrawRoles');
-    const vendorDrawApple = document.getElementById('vendorDrawApple');
+    const vendorDrawTerms = document.getElementById('vendorDrawTerms');
     const vendorDrawRules = document.getElementById('vendorDrawRules');
-    const vendorDrawRulesStatus = document.getElementById('vendorDrawRulesStatus');
-    const vendorDrawAge = document.getElementById('vendorDrawAge');
-    const vendorDrawResidency = document.getElementById('vendorDrawResidency');
-    const vendorDrawExclusions = document.getElementById('vendorDrawExclusions');
-    const vendorDrawResponsibility = document.getElementById('vendorDrawResponsibility');
-    const vendorDrawResponsibilityText = document.getElementById('vendorDrawResponsibilityText');
     const vendorDrawStatus = document.getElementById('vendorDrawStatus');
     const vendorDrawDecline = document.getElementById('vendorDrawDecline');
     const vendorDrawEnter = document.getElementById('vendorDrawEnter');
@@ -1726,17 +1882,22 @@ if (user::isUserLogged($_COOKIE)) {
     }
 
     async function requestVendorDraw(action, extra) {
+      if (!hasCurrentParticipationNotice()) {
+        throw new Error('Read and accept the current QR Bingo agreement before continuing.');
+      }
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 15000);
       try {
         const form = new URLSearchParams({
           action,
+          participation_notice_version: PARTICIPATION_NOTICE_VERSION,
           expected_event_key: EVENT_CONFIG.event_key,
           expected_config_revision: String(EVENT_CONFIG.revision)
         });
         Object.entries(extra || {}).forEach(([key, value]) => {
           form.set(key, typeof value === 'boolean' ? (value ? '1' : '0') : cleanPromotionText(value));
         });
+        form.set('qr_csrf', QR_WEBSITE_CSRF);
         const response = await fetch('', {
           method: 'POST',
           headers: {
@@ -1778,12 +1939,8 @@ if (user::isUserLogged($_COOKIE)) {
       }
     }
 
-    function resetVendorDrawAcknowledgements() {
-      vendorDrawRulesViewedVersion = '';
-      vendorDrawAge.checked = false;
-      vendorDrawResidency.checked = false;
-      vendorDrawExclusions.checked = false;
-      vendorDrawResponsibility.checked = false;
+    function resetVendorDrawChoice() {
+      vendorDrawEntryRecorded = false;
     }
 
     function vendorDrawEntryReady() {
@@ -1791,14 +1948,12 @@ if (user::isUserLogged($_COOKIE)) {
       const offerVersion = trustedVendorOfferVersion(currentVendorDrawOffer && currentVendorDrawOffer.vendor_offer_version);
       const participantDisclosure = cleanPromotionText(currentVendorDrawOffer && currentVendorDrawOffer.participant_responsibility_disclosure);
       return Boolean(
-        version &&
+        !vendorDrawEntryInFlight &&
+        !vendorDrawEntryRecorded &&
+        hasCurrentParticipationNotice() &&
+        version === String(EVENT_CONFIG.rules_version || '').trim() &&
         offerVersion &&
-        participantDisclosure &&
-        vendorDrawRulesViewedVersion === version &&
-        vendorDrawAge.checked &&
-        vendorDrawResidency.checked &&
-        vendorDrawExclusions.checked &&
-        vendorDrawResponsibility.checked
+        participantDisclosure
       );
     }
 
@@ -1807,12 +1962,13 @@ if (user::isUserLogged($_COOKIE)) {
     }
 
     function closeVendorDraw() {
+      if (vendorDrawEntryInFlight) return;
       const returnFocus = vendorDrawReturnFocus;
       vendorDrawModal.hidden = true;
       currentVendorDrawOffer = null;
       currentVendorDrawVendor = null;
       vendorDrawReturnFocus = null;
-      resetVendorDrawAcknowledgements();
+      resetVendorDrawChoice();
       vendorDrawDecline.disabled = false;
       updateVendorDrawEntryButton();
       if (returnFocus && returnFocus.isConnected && typeof returnFocus.focus === 'function') {
@@ -1826,7 +1982,9 @@ if (user::isUserLogged($_COOKIE)) {
       const participantDisclosure = cleanPromotionText(offer && offer.participant_responsibility_disclosure);
       const offeredWinnerCount = Number(offer && offer.prize_count);
       if (
+        !hasCurrentParticipationNotice() ||
         !offer ||
+        cleanPromotionText(offer.consent_version) !== String(EVENT_CONFIG.rules_version || '').trim() ||
         !rulesUrl ||
         !offerVersion ||
         !participantDisclosure ||
@@ -1840,8 +1998,14 @@ if (user::isUserLogged($_COOKIE)) {
         prize_count: offeredWinnerCount
       });
       currentVendorDrawVendor = vendor;
-      resetVendorDrawAcknowledgements();
+      resetVendorDrawChoice();
       vendorDrawDecline.disabled = false;
+      vendorDrawDecline.textContent = 'No Thanks';
+      vendorDrawEnter.hidden = false;
+      vendorDrawDisclosure.hidden = false;
+      vendorDrawPrivacy.hidden = false;
+      vendorDrawTerms.hidden = false;
+      vendorDrawRules.hidden = false;
       vendorDrawTitle.textContent = cleanPromotionText(offer.prize_title) || 'Vendor prize';
       const namedVendor = cleanPromotionText(offer.vendor_business_name) || cleanPromotionText(offer.vendor_name) || cleanPromotionText(vendor && vendor.name) || 'the named vendor';
       vendorDrawVendor.textContent = namedVendor;
@@ -1850,18 +2014,18 @@ if (user::isUserLogged($_COOKIE)) {
       vendorDrawDisclosure.textContent = [
         `Approximate prize value / maximum savings: $${Number.isFinite(value) ? value.toFixed(2) : '0.00'} CAD`,
         `Number of winners and prizes: ${offeredWinnerCount}`,
+        cleanPromotionText(offer.eligibility_region) ? `Eligibility: ${cleanPromotionText(offer.eligibility_region)}` : '',
+        cleanPromotionText(offer.entry_closes_at) ? `Entries close: ${formatPromotionDate(offer.entry_closes_at)}` : '',
+        cleanPromotionText(offer.draw_at) ? `Scheduled draw: ${formatPromotionDate(offer.draw_at)}` : '',
+        cleanPromotionText(offer.odds_basis) ? `Odds: ${cleanPromotionText(offer.odds_basis)}` : '',
         offer.exclude_previous_winners
           ? "Repeat-winner rule: A couple who is confirmed as a winner is excluded only from later selections for this vendor's current prize offer. It does not affect another vendor's draw."
           : "Repeat-winner rule: A confirmed winner remains eligible for another selection in this vendor's current prize offer.",
         'No purchase from this vendor is required.',
         'This in-show QR entry replaces a paper ballot. Eligibility, dates, odds, admission, and entry limits are explained in the Draw Rules.'
-      ].join(String.fromCharCode(10));
-      vendorDrawPrivacy.textContent = `By entering, I agree that Wedding Win Inc. may share my name, email address, phone number, wedding date, and entry/consent evidence with ${namedVendor}. That vendor may use these details to administer this draw and contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time.`;
-      vendorDrawRoles.textContent = `${namedVendor} is responsible for this draw, winner verification, and prize fulfilment. Wedding Win Inc. provides the technical system.`;
-      vendorDrawResponsibilityText.textContent = `I agree to share my contact information with ${namedVendor} for this draw and its wedding-related marketing, and I accept the current draw rules.`;
-      vendorDrawApple.textContent = cleanPromotionText(offer.apple_non_sponsor_disclaimer) || 'Apple Inc. is not a sponsor of and is not involved in this promotion.';
+      ].filter(Boolean).join(String.fromCharCode(10));
+      vendorDrawPrivacy.textContent = `Enter Draw confirms you meet this vendor's eligibility requirements and accept its prize details and Draw Rules. Your contact details will be shared with ${namedVendor} for this draw and wedding-related marketing.`;
       vendorDrawRules.href = rulesUrl;
-      vendorDrawRulesStatus.textContent = 'Open the current rules before choosing to enter.';
       vendorDrawStatus.classList.remove('is-error');
       vendorDrawStatus.textContent = 'Prize entry is separate and optional. One valid in-show QR entry is allowed per eligible couple for this vendor draw. Declining does not change your saved booth visit.';
       updateVendorDrawEntryButton();
@@ -1870,26 +2034,64 @@ if (user::isUserLogged($_COOKIE)) {
       return true;
     }
 
-    async function openVendorDrawOffer(vendor) {
-      if (!EVENT_CONFIG.vendor_draws_enabled || !vendor) return;
+    function showVendorDrawStatus(vendor, message, isError) {
+      if (!hasCurrentParticipationNotice()) return false;
+      currentVendorDrawOffer = null;
+      currentVendorDrawVendor = vendor;
+      resetVendorDrawChoice();
+      vendorDrawTitle.textContent = 'Draw status';
+      vendorDrawVendor.textContent = cleanPromotionText(vendor && vendor.name);
+      vendorDrawDescription.textContent = 'Your QR Bingo progress is unchanged.';
+      vendorDrawDisclosure.hidden = true;
+      vendorDrawPrivacy.hidden = true;
+      vendorDrawTerms.hidden = true;
+      vendorDrawRules.hidden = true;
+      vendorDrawRules.removeAttribute('href');
+      vendorDrawEnter.hidden = true;
+      vendorDrawDecline.disabled = false;
+      vendorDrawDecline.textContent = 'Close';
+      vendorDrawStatus.textContent = cleanPromotionText(message) || 'This draw is not accepting new entries right now.';
+      if (isError) vendorDrawStatus.classList.add('is-error');
+      else vendorDrawStatus.classList.remove('is-error');
+      updateVendorDrawEntryButton();
+      vendorDrawModal.hidden = false;
+      vendorDrawDecline.focus();
+      return true;
+    }
+
+    async function openVendorDrawOffer(vendor, showUnavailable = false) {
+      if (!hasCurrentParticipationNotice() || !EVENT_CONFIG.vendor_draws_enabled || !vendor ||
+          vendorDrawOfferInFlight || vendorDrawEntryInFlight || !vendorDrawModal.hidden) return;
+      vendorDrawOfferInFlight = true;
       vendorDrawReturnFocus = document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
       try {
         const data = await requestVendorDraw('raffle_offer', { vendor_id: vendor.id });
+        if (data.ok === true && data.raffle_offer === null) {
+          // An absent offer can mean already entered OR closed. Display the
+          // server's status on an explicit review, without guessing which.
+          if (!showUnavailable || !showVendorDrawStatus(vendor, data.message, false)) vendorDrawReturnFocus = null;
+          return;
+        }
         if (!data.raffle_offer || !showVendorDrawOffer(vendor, data.raffle_offer)) {
           throw new Error('The current vendor offer did not include a valid version. No entry can be submitted.');
         }
       } catch (error) {
-        vendorDrawReturnFocus = null;
+        if (!showUnavailable || eventConfigRefreshStarted ||
+            !showVendorDrawStatus(vendor, 'We could not load this draw. Close this message and try again.', true)) {
+          vendorDrawReturnFocus = null;
+        }
         console.error('Optional vendor draw could not be loaded:', error);
+      } finally {
+        vendorDrawOfferInFlight = false;
       }
     }
 
     async function refreshVendorDrawAfterStale(vendor) {
       currentVendorDrawOffer = null;
       currentVendorDrawVendor = vendor;
-      resetVendorDrawAcknowledgements();
+      resetVendorDrawChoice();
       updateVendorDrawEntryButton();
       vendorDrawDecline.disabled = false;
       vendorDrawStatus.classList.add('is-error');
@@ -1900,10 +2102,10 @@ if (user::isUserLogged($_COOKIE)) {
           throw new Error('The refreshed vendor offer was unavailable or invalid.');
         }
         vendorDrawStatus.classList.add('is-error');
-        vendorDrawStatus.textContent = 'The vendor offer changed. Review the current prize disclosure, reopen the Official Rules, and confirm every item again before entering.';
+        vendorDrawStatus.textContent = 'The vendor offer changed. Review the updated prize and Draw Rules, then choose Enter Draw or No Thanks.';
       } catch (refreshError) {
         currentVendorDrawOffer = null;
-        resetVendorDrawAcknowledgements();
+        resetVendorDrawChoice();
         updateVendorDrawEntryButton();
         vendorDrawStatus.classList.add('is-error');
         vendorDrawStatus.textContent = refreshError instanceof Error
@@ -1914,27 +2116,36 @@ if (user::isUserLogged($_COOKIE)) {
 
     async function enterVendorDraw() {
       if (!vendorDrawEntryReady() || !currentVendorDrawOffer || !currentVendorDrawVendor) return;
+      vendorDrawEntryInFlight = true;
       vendorDrawEnter.disabled = true;
       vendorDrawDecline.disabled = true;
       vendorDrawStatus.classList.remove('is-error');
       vendorDrawStatus.textContent = 'Recording your optional draw entry…';
+      const participationAccepted = hasCurrentParticipationNotice();
       try {
         const data = await requestVendorDraw('raffle_opt_in', {
           vendor_id: currentVendorDrawVendor.id,
-          rules_viewed: true,
-          apple_non_sponsor_acknowledged: true,
+          rules_viewed: participationAccepted,
+          apple_non_sponsor_acknowledged: participationAccepted,
           consent_version: cleanPromotionText(currentVendorDrawOffer.consent_version),
           vendor_offer_version: trustedVendorOfferVersion(currentVendorDrawOffer.vendor_offer_version),
-          age_of_majority_attested: true,
-          residency_attested: true,
-          exclusions_attested: true,
-          promotion_responsibility_acknowledged: Boolean(vendorDrawResponsibility.checked),
-          draw_administration_contact_share_acknowledged: Boolean(vendorDrawResponsibility.checked),
-          vendor_marketing_consent_acknowledged: Boolean(vendorDrawResponsibility.checked),
+          age_of_majority_attested: participationAccepted,
+          residency_attested: participationAccepted,
+          exclusions_attested: participationAccepted,
+          promotion_responsibility_acknowledged: participationAccepted,
+          draw_administration_contact_share_acknowledged: participationAccepted,
+          vendor_marketing_consent_acknowledged: participationAccepted,
           participant_responsibility_disclosure: cleanPromotionText(currentVendorDrawOffer.participant_responsibility_disclosure)
         });
+        vendorDrawEntryRecorded = true;
         vendorDrawStatus.textContent = cleanPromotionText(data.message) || 'Your optional vendor draw entry is confirmed.';
-        window.setTimeout(closeVendorDraw, 1600);
+        const confirmedOffer = currentVendorDrawOffer;
+        const confirmedVendor = currentVendorDrawVendor;
+        window.setTimeout(() => {
+          if (vendorDrawEntryRecorded && currentVendorDrawOffer === confirmedOffer && currentVendorDrawVendor === confirmedVendor) {
+            closeVendorDraw();
+          }
+        }, 1600);
       } catch (error) {
         if (error && error.httpStatus === 409 && error.code === 'stale_vendor_offer') {
           await refreshVendorDrawAfterStale(currentVendorDrawVendor);
@@ -1944,19 +2155,13 @@ if (user::isUserLogged($_COOKIE)) {
         vendorDrawStatus.textContent = error instanceof Error ? error.message : 'The draw entry could not be recorded.';
         vendorDrawDecline.disabled = false;
         updateVendorDrawEntryButton();
+      } finally {
+        vendorDrawEntryInFlight = false;
+        vendorDrawDecline.disabled = false;
+        updateVendorDrawEntryButton();
       }
     }
 
-    vendorDrawRules.addEventListener('click', () => {
-      vendorDrawRulesViewedVersion = cleanPromotionText(currentVendorDrawOffer && currentVendorDrawOffer.consent_version);
-      vendorDrawRulesStatus.textContent = vendorDrawRulesViewedVersion
-        ? `Current rules opened: ${vendorDrawRulesViewedVersion}`
-        : 'The current rules version is unavailable. Do not enter this draw.';
-      updateVendorDrawEntryButton();
-    });
-    [vendorDrawAge, vendorDrawResidency, vendorDrawExclusions, vendorDrawResponsibility].forEach(input => {
-      input.addEventListener('change', updateVendorDrawEntryButton);
-    });
     vendorDrawDecline.addEventListener('click', closeVendorDraw);
     vendorDrawEnter.addEventListener('click', enterVendorDraw);
     vendorDrawModal.addEventListener('click', event => {
@@ -2036,7 +2241,7 @@ if (user::isUserLogged($_COOKIE)) {
           drawButton.hidden = !scanned.has(v.id);
           drawButton.addEventListener('click', event => {
             event.stopPropagation();
-            openVendorDrawOffer(v);
+            openVendorDrawOffer(v, true);
           });
           tile.appendChild(drawButton);
         }
@@ -2047,6 +2252,7 @@ if (user::isUserLogged($_COOKIE)) {
     }
 
     async function markScanned(id) {
+      if (!hasCurrentParticipationNotice()) return false;
       if (!VENDORS.find(v => v.id === id)) return false;
       if (scanned.has(id)) return true;
 
@@ -2451,9 +2657,13 @@ if (user::isUserLogged($_COOKIE)) {
         window.location.assign('/account/contact');
         return;
       }
-      if (!qrRulesNoticeAccepted) {
+      if (!hasCurrentParticipationNotice()) {
         lastScanEl.textContent = 'Read and accept the participation notice before scanning.';
         qrRulesNoticeAcknowledged.focus();
+        return;
+      }
+      if (!EVENT_CONFIG.scan_enabled || !EVENT_CONFIG.show_scan_window_open) {
+        lastScanEl.textContent = 'Scanning is available only during the wedding show while the scanner is enabled.';
         return;
       }
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -2780,6 +2990,22 @@ if (user::isUserLogged($_COOKIE)) {
       }
     }
 
+    async function scanFixtureBooth() {
+      if (!canScanFixtureBooth() || vendorDrawEntryInFlight || !vendorDrawModal.hidden) return;
+      qrFixtureScanInFlight = true;
+      qrFixtureScanButton.textContent = 'Saving test scan...';
+      updateFixtureScanButton();
+      try {
+        await handleDecoded('https://www.weddingwin.ca/qr?vendor_id=' + encodeURIComponent(qrFixtureScanButton.dataset.vendorId));
+      } finally {
+        qrFixtureScanInFlight = false;
+        qrFixtureScanButton.textContent = 'Scan test booth';
+        updateFixtureScanButton();
+      }
+    }
+
+    if (qrFixtureScanButton) qrFixtureScanButton.addEventListener('click', scanFixtureBooth);
+
     // Event listeners for desktop controls
     startBtn.addEventListener('click', startScanner);
     stopBtn.addEventListener('click', stopScanner);
@@ -2861,8 +3087,9 @@ if (user::isUserLogged($_COOKIE)) {
 
     // Initialize with auto-start functionality
     function initApp() {
+      updateFixtureScanButton();
       if (!CONTACT_PROFILE_COMPLETE) return;
-      if (!qrRulesNoticeAccepted) {
+      if (!hasCurrentParticipationNotice()) {
         startBtn.disabled = true;
         startBtn.textContent = 'Accept Notice First';
         mobileStartBtn.disabled = true;

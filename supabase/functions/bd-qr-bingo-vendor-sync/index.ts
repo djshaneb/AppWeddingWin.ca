@@ -2,12 +2,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import { nativeSessionMatchesCachedBdIdentity } from "../_shared/bd_identity.ts";
 import {
+  hasQrBingoWebsiteProof, verifyQrBingoWebsiteRequest, resolveWebsiteSigningSecret,
+  WebsiteAuthenticationError, type WebsitePrincipal,
+} from "../_shared/qr_bingo_website_auth.ts";
+import {
   loadPublishedQrBingoConfig,
   type PublicQrBingoEventConfig,
   publicQrBingoEventConfig,
   type QrBingoEventConfig,
 } from "../_shared/qr_bingo_config.ts";
 import { parseWinnerVerificationEvidence } from "../_shared/qr_bingo_winner_evidence.ts";
+import {
+  hasQrBingoSkillVerification,
+  hasQrBingoVendorSkillAttestation,
+} from "../_shared/qr_bingo_winner_verification.ts";
 import {
   bdUserHasTag,
   bdUserIsActiveQrBingoVendor,
@@ -42,7 +50,8 @@ const NAMED_VENDOR_CONTACT_RULES_VERSIONS = [
   CONTACT_SHARING_RULES_VERSION,
 ] as const;
 const CONTACT_SHARE_SCOPE = "named_vendor_draw_administration";
-const QR_PARTICIPATION_NOTICE_VERSION = "2026-09-01-in-person-entry";
+const QR_PARTICIPATION_NOTICE_VERSION = "2026-09-04-pre-scan-draw-consent";
+const LEGACY_QR_PARTICIPATION_NOTICE_VERSION = "2026-09-01-in-person-entry";
 const QR_DRAW_EMAIL_SEND_URL = Deno.env.get("QR_DRAW_EMAIL_SEND_URL") ||
   `${BD_API_BASE_URL}/qr-bingo-draw-email-send`;
 const MAX_RAFFLE_WINNERS = 3;
@@ -69,6 +78,30 @@ function qrPublicConfig(): PublicQrBingoEventConfig | null {
 
 function qrParticipationNoticeVersion() {
   return `${qrBingoConfig().rules_version}|${QR_PARTICIPATION_NOTICE_VERSION}`;
+}
+
+function acceptsQrParticipationNotice(
+  action: string,
+  body: Record<string, unknown>,
+) {
+  if (!["scan", "raffle_offer", "raffle_opt_in"].includes(action)) return true;
+  const suppliedVersion = cleanText(body.participation_notice_version, 180);
+  if (suppliedVersion === qrParticipationNoticeVersion()) return true;
+
+  // Released native builds acknowledge the previous pre-scan notice, then
+  // collect all draw-specific attestations separately. Those builds omit the
+  // notice field on offer/entry requests; do not mistake that old contract for
+  // acceptance of the new agreement or accept an arbitrary supplied version.
+  const legacyVersion =
+    `${qrBingoConfig().rules_version}|${LEGACY_QR_PARTICIPATION_NOTICE_VERSION}`;
+  const omittedLegacyField = action !== "scan" &&
+    !Object.prototype.hasOwnProperty.call(body, "participation_notice_version");
+  if (suppliedVersion !== legacyVersion && !omittedLegacyField) return false;
+  if (action !== "raffle_opt_in") return true;
+  return reviewedCurrentRules(body) && eligibilityAttested(body) &&
+    body.promotion_responsibility_acknowledged === true &&
+    body.draw_administration_contact_share_acknowledged === true &&
+    body.vendor_marketing_consent_acknowledged === true;
 }
 
 function productionShowScanWindowOpen() {
@@ -143,6 +176,7 @@ type QrVendor = {
 type QrPage = {
   vendors: QrVendor[];
   scanned: string[];
+  requestCsrf?: string;
 };
 type AppReviewRaffleFixture = {
   id: string;
@@ -305,9 +339,16 @@ type RaffleDraw = {
   winner_wedding_date: string;
   prize_title: string;
   prize_description: string;
-  selection_status?: "legacy" | "potential" | "verified" | "disqualified";
+  selection_status?: "legacy" | "potential" | "verified" | "disqualified" | "replaced";
+  replaced_at?: string | null;
+  replaces_draw_id?: string | null;
   eligibility_verified_at?: string | null;
   skill_question_verified_at?: string | null;
+  skill_question_vendor_attested_at?: string | null;
+  skill_question_vendor_attested_by?: string;
+  skill_question_vendor_attestation?: string;
+  verified_by?: string | null;
+  verification_notes?: string;
   verified_at?: string | null;
   draw_number: number;
   draw_reason: string;
@@ -652,7 +693,12 @@ async function fetchWithCookies(
   cookieJar: Map<string, string>,
   init: RequestInit = {},
 ) {
-  const response = await fetch(url, {
+  const target = new URL(url);
+  if (target.protocol !== "https:" || target.hostname !== "www.weddingwin.ca" ||
+    (target.port && target.port !== "443") || target.username || target.password) {
+    throw new Error("Untrusted WeddingWin session destination.");
+  }
+  const response = await fetch(target.toString(), {
     ...init,
     redirect: "manual",
     headers: {
@@ -719,7 +765,7 @@ function normalizeVendor(value: unknown): QrVendor | null {
   };
 }
 
-async function getQrPage(cookieJar: Map<string, string>) {
+async function getQrPage(cookieJar: Map<string, string>, expectedMemberId?: string) {
   const response = await fetchWithCookies(`${BD_API_BASE_URL}/qr`, cookieJar);
   const html = await response.text();
 
@@ -730,6 +776,11 @@ async function getQrPage(cookieJar: Map<string, string>) {
     throw new Error("Website session expired before QR Bingo loaded.");
   }
 
+  const memberId = extractJsonAssignment<string>(html, "QR_AUTHENTICATED_MEMBER_ID", "");
+  const requestCsrf = extractJsonAssignment<string>(html, "QR_WEBSITE_CSRF", "");
+  if (expectedMemberId && (memberId !== expectedMemberId || !/^[0-9a-f]{64}$/.test(requestCsrf))) {
+    throw new Error("Website scan history does not match the authenticated member.");
+  }
   const vendors = extractJsonAssignment<unknown[]>(html, "VENDORS", [])
     .map(normalizeVendor)
     .filter((vendor): vendor is QrVendor => Boolean(vendor));
@@ -737,19 +788,21 @@ async function getQrPage(cookieJar: Map<string, string>) {
     .map((value) => String(value || "").trim())
     .filter(Boolean);
 
-  return { vendors, scanned };
+  return { vendors, scanned, requestCsrf };
 }
 
 async function postQrAction(
   cookieJar: Map<string, string>,
   params: URLSearchParams,
+  requestCsrf = "",
 ): Promise<Record<string, unknown> & { __http_status: number }> {
   const config = qrBingoConfig();
   params.set("expected_event_key", config.event_key);
   params.set("expected_config_revision", String(config.revision));
+  if (requestCsrf) params.set("qr_csrf", requestCsrf);
   const response = await fetchWithCookies(`${BD_API_BASE_URL}/qr`, cookieJar, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "https://www.weddingwin.ca" },
     body: params.toString(),
   });
   const text = await response.text();
@@ -1056,6 +1109,7 @@ async function getFreshScanned(cookieJar: Map<string, string>, page: QrPage) {
   const serverScanned = await postQrAction(
     cookieJar,
     new URLSearchParams({ action: "get_scanned" }),
+    page.requestCsrf,
   )
     .catch(() => undefined);
   return Array.isArray(serverScanned?.scanned)
@@ -1510,7 +1564,8 @@ function vendorVisibleDraw(
   const noticeComplete = status === "verified" &&
     (!vendorNoticeRequired || Boolean(draw.vendor_email_sent_at)) &&
     (!coupleNoticeRequired || Boolean(draw.couple_email_sent_at));
-  const noticePending = status === "verified" && !noticeComplete;
+  const noticePending = status === "verified" && !noticeComplete &&
+    hasQrBingoSkillVerification(draw);
   const canTestSuppressedNotice = noticePending && suppressOutboundEmail &&
     isolatedFixturePurpose(isolatedFixture) === "app_review";
   return {
@@ -1520,8 +1575,14 @@ function vendorVisibleDraw(
     draw_reason: draw.draw_reason,
     drawn_at: draw.drawn_at,
     selection_status: status,
+    replaced_at: draw.replaced_at,
+    replaces_draw_id: draw.replaces_draw_id,
     eligibility_verified_at: draw.eligibility_verified_at,
     skill_question_verified_at: draw.skill_question_verified_at,
+    skill_question_vendor_attested_at: draw.skill_question_vendor_attested_at,
+    skill_verification_source: hasQrBingoVendorSkillAttestation(draw)
+      ? "vendor_attestation"
+      : draw.skill_question_verified_at ? "platform_answer" : null,
     verified_at: draw.verified_at,
     winner_rules_confirmed_at: draw.winner_rules_confirmed_at,
     skill_question_prompt: status === "potential"
@@ -1534,6 +1595,10 @@ function vendorVisibleDraw(
     notice_complete: noticeComplete,
     can_send_notice: noticePending && !suppressOutboundEmail &&
       qrDrawEmailsEnabled(isolatedFixture),
+    can_confirm_and_send_notice: status === "potential" && !suppressOutboundEmail &&
+      qrDrawEmailsEnabled(isolatedFixture),
+    can_confirm_and_test_suppressed_notice: status === "potential" &&
+      suppressOutboundEmail && isolatedFixturePurpose(isolatedFixture) === "app_review",
     can_test_suppressed_notice: canTestSuppressedNotice,
     winner_name: draw.winner_name,
     winner_email: draw.winner_email,
@@ -1711,6 +1776,8 @@ async function loadVendorEntryPool(
       ? "already_selected"
       : selectionStatus === "disqualified"
       ? "disqualified"
+      : selectionStatus === "replaced"
+      ? "replaced"
       : previousWinner
       ? "previous_winner"
       : "included";
@@ -1724,6 +1791,8 @@ async function loadVendorEntryPool(
       ? "This entrant is the potential winner currently awaiting review."
       : poolStatus === "disqualified"
       ? "This entrant has a preserved disqualification record and cannot be selected again."
+      : poolStatus === "replaced"
+      ? "Another potential winner was requested. This couple stays in your contact list but will not be selected again."
       : poolStatus === "previous_winner"
       ? "This couple already has a verified winner record for this vendor promotion."
       : "";
@@ -1749,7 +1818,7 @@ async function loadVendorEntryPool(
       selection_eligible: selectionEligible,
       in_selection_pool: selectionEligible && poolStatus === "included",
       can_update: selectionEligible && !selectionInProgress &&
-        selectionStatus !== "disqualified",
+        selectionStatus !== "disqualified" && selectionStatus !== "replaced",
       _entry_id: entry.id,
       _couple_bd_user_id: entry.couple_bd_user_id,
     };
@@ -2505,6 +2574,7 @@ async function getVendorRaffleDashboard(
   );
 
   return {
+    vendor,
     event_key: eventKey,
     event_revision: qrBingoConfig().revision,
     settings: {
@@ -2760,11 +2830,13 @@ async function sendDrawEmails(
   if (
     draw.selection_status !== "verified" ||
     !draw.eligibility_verified_at ||
-    !draw.skill_question_verified_at ||
+    !hasQrBingoSkillVerification(draw) ||
+    !draw.winner_rules_confirmed_at ||
+    !cleanText(draw.verification_notes, 1100) ||
     !draw.verified_at
   ) {
     throw new Error(
-      "Potential-winner notices are blocked until the vendor confirms the couple meets the draw rules, Wedding Win confirms the answer to the required short math question is correct, and the vendor records the rules/release confirmation.",
+      "Potential-winner notices are blocked until required winner verification, the vendor rules/release confirmation, and dated evidence are recorded.",
     );
   }
   const emailTestRecipient = isolatedEmailTestRecipient(isolatedFixture);
@@ -2824,7 +2896,9 @@ async function sendDrawEmails(
     ? `Connect through WeddingWin.ca: ${vendorProfileUrl}`
     : "You can connect with them through WeddingWin.ca.";
   const vendorText = [
-    `Your business confirmed eligibility and the rules/release step for this potential winner in ${safeVendorName}'s prize draw, and Wedding Win confirmed the couple's answer to the required short math question was correct.`,
+    hasQrBingoVendorSkillAttestation(draw)
+      ? `Your business confirmed it independently completed the required winner verification and rules/release step for this potential winner in ${safeVendorName}'s prize draw. Wedding Win recorded your attestation and did not check the answer.`
+      : `Your business confirmed eligibility and the rules/release step for this potential winner in ${safeVendorName}'s prize draw, and Wedding Win confirmed the couple's answer to the required short math question was correct.`,
     "",
     "Winner details",
     `Name: ${cleanText(draw.winner_name, 160)}`,
@@ -3112,7 +3186,71 @@ async function drawWinner(
     potential_winner_selected: true,
     verification_required: true,
     message:
-      "Potential winner selected. Confirm the couple meets the draw rules, ask them the one short math question shown in the dashboard, enter their answer, and complete the rules/release step before any fulfillment notice or prize claim.",
+      "Potential winner selected. Complete the required winner verification and rules/release step, then record the dated evidence before sending a winner notice.",
+    ...dashboard,
+  });
+}
+
+async function replacePotentialWinner(
+  vendor: QrVendor,
+  user: BdRow | undefined,
+  body: Record<string, unknown>,
+  eventKey: string,
+  allowEarlyDraw: boolean,
+  suppressOutboundEmail: boolean,
+  isolatedFixture?: IsolatedRaffleFixture | null,
+) {
+  const drawId = cleanText(body.draw_id, 80);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(drawId)) {
+    return jsonResponse({ ok: false, error: "A valid potential-winner selection is required." }, 400);
+  }
+  const skillChallenge = await newSkillTestingChallenge();
+  const { data, error } = await requireAdmin().rpc(
+    "replace_qr_bingo_potential_winner_by_vendor",
+    {
+      p_draw_id: drawId,
+      p_event_key: eventKey,
+      p_vendor_bingo_id: vendor.id,
+      p_vendor_bd_user_id: String(vendor.user_id || vendor.id),
+      p_drawn_by_bd_user_id: String(user?.user_id || ""),
+      p_skill_question_prompt: skillChallenge.prompt,
+      p_skill_question_salt: skillChallenge.salt,
+      p_skill_question_answer_hash: skillChallenge.answerHash,
+    },
+  );
+  const dashboard = await getVendorRaffleDashboard(
+    vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture,
+  );
+  if (error) {
+    return jsonResponse({
+      ok: false, conflict: true,
+      error: cleanText(error.message, 500) || "The potential winner could not be changed.",
+      ...dashboard,
+    }, error.code === "42501" ? 403 : error.code === "22023" ? 400 : 409);
+  }
+  const selection = data && typeof data === "object"
+    ? data as Record<string, unknown> : {};
+  if (selection.ok !== true) {
+    return jsonResponse({
+      ok: false, conflict: true,
+      code: cleanText(selection.code, 80) || "replacement_unavailable",
+      error: cleanText(selection.error, 500) || "The potential winner could not be changed.",
+      ...dashboard,
+    }, 409);
+  }
+  const draw = selection.draw && typeof selection.draw === "object"
+    ? selection.draw as RaffleDraw : null;
+  if (!draw?.id || draw.id === drawId || draw.selection_status !== "potential") {
+    throw new Error("Atomic replacement returned an invalid potential-winner selection.");
+  }
+  return jsonResponse({
+    ok: true,
+    replacement_selected: true,
+    replaced_draw_id: drawId,
+    draw: vendorVisibleDraw(draw, isolatedFixture, suppressOutboundEmail),
+    potential_winner_selected: true,
+    verification_required: true,
+    message: "A different potential winner has been selected. No email has been sent.",
     ...dashboard,
   });
 }
@@ -3133,6 +3271,15 @@ async function reviewPotentialWinner(
     : requestedDecision === "disqualify"
     ? "disqualified"
     : "";
+  if (body.skill_testing_completed_externally !== undefined &&
+    typeof body.skill_testing_completed_externally !== "boolean") {
+    return jsonResponse({
+      ok: false,
+      error: "Explicitly confirm whether required skill testing was completed by the vendor.",
+    }, 400);
+  }
+  const externalVerification = decision === "verified" &&
+    body.skill_testing_completed_externally === true;
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(drawId)
@@ -3188,14 +3335,14 @@ async function reviewPotentialWinner(
     (
       body.eligibility_confirmed !== true ||
       body.rules_release_confirmed !== true ||
-      !cleanText(body.skill_question_answer, 80) ||
+      (!externalVerification && !cleanText(body.skill_question_answer, 80)) ||
       !notes
     )
   ) {
     return jsonResponse({
       ok: false,
       error:
-        "Confirm the couple meets the draw rules, enter their answer to the required short math question, confirm the rules/release step, and record valid Date, Method, and Reference evidence.",
+        "Confirm eligibility, completed winner verification and the rules/release step, and record valid Date, Method, and Reference evidence.",
     }, 400);
   }
 
@@ -3203,7 +3350,9 @@ async function reviewPotentialWinner(
     cleanText(vendor.name, 160)
   }`;
   const { error: reviewError } = await requireAdmin().rpc(
-    "review_qr_bingo_potential_winner_by_vendor",
+    externalVerification
+      ? "attest_qr_bingo_potential_winner_by_vendor"
+      : "review_qr_bingo_potential_winner_by_vendor",
     {
       p_draw_id: drawId,
       p_event_key: eventKey,
@@ -3211,7 +3360,9 @@ async function reviewPotentialWinner(
       p_vendor_bd_user_id: String(vendor.user_id || user?.user_id || ""),
       p_decision: decision,
       p_eligibility_confirmed: body.eligibility_confirmed === true,
-      p_skill_question_answer: cleanText(body.skill_question_answer, 80),
+      ...(externalVerification
+        ? { p_skill_testing_completed_externally: true }
+        : { p_skill_question_answer: cleanText(body.skill_question_answer, 80) }),
       p_rules_release_confirmed: body.rules_release_confirmed === true,
       p_reviewed_by: reviewer,
       p_notes: notes,
@@ -3236,7 +3387,6 @@ async function reviewPotentialWinner(
   );
   return jsonResponse({
     ok: true,
-    vendor,
     message: decision === "verified"
       ? "Vendor verification recorded. The potential-winner notices may now be sent for prize fulfillment."
       : "Potential winner disqualified. The audit record was preserved and a replacement may be selected.",
@@ -3254,6 +3404,10 @@ async function sendVerifiedWinnerNotice(
   isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
   const drawId = cleanText(body.draw_id, 80);
+  if (body.winner_checks_confirmed !== undefined &&
+    typeof body.winner_checks_confirmed !== "boolean") {
+    return jsonResponse({ ok: false, error: "An explicit winner-check confirmation is required." }, 400);
+  }
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(drawId)
@@ -3263,7 +3417,7 @@ async function sendVerifiedWinnerNotice(
       error: "A valid verified-winner selection is required.",
     }, 400);
   }
-  const { data: ownedDraw, error: drawError } = await requireAdmin()
+  let { data: ownedDraw, error: drawError } = await requireAdmin()
     .from("qr_bingo_raffle_draws")
     .select("*")
     .eq("id", drawId)
@@ -3278,10 +3432,62 @@ async function sendVerifiedWinnerNotice(
       error: "This selection does not belong to the signed-in vendor.",
     }, 403);
   }
-  if (ownedDraw.selection_status !== "verified") {
+  if (ownedDraw.selection_status === "potential") {
+    if (body.winner_checks_confirmed !== true) {
+      return jsonResponse({
+        ok: false,
+        error: "Confirm that you have completed the checks in the Draw Rules before sending.",
+        ...await getVendorRaffleDashboard(vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture),
+      }, 400);
+    }
+    if ((!suppressOutboundEmail && !qrDrawEmailsEnabled(isolatedFixture)) ||
+      (suppressOutboundEmail && isolatedFixturePurpose(isolatedFixture) !== "app_review")) {
+      return jsonResponse({
+        ok: false, outbound_email_disabled: true,
+        error: "Winner emails are not available for this draw.",
+        ...await getVendorRaffleDashboard(vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture),
+      }, 503);
+    }
+    const { error: confirmationError } = await requireAdmin().rpc(
+      "confirm_qr_bingo_winner_checks_for_notice",
+      {
+        p_draw_id: drawId,
+        p_event_key: eventKey,
+        p_vendor_bingo_id: vendor.id,
+        p_vendor_bd_user_id: String(vendor.user_id || user?.user_id || ""),
+        p_winner_checks_confirmed: true,
+        p_confirmed_by: `vendor:${cleanText(user?.user_id, 80)}:${cleanText(vendor.name, 160)}`,
+      },
+    );
+    if (confirmationError) {
+      return jsonResponse({
+        ok: false, conflict: true,
+        error: cleanText(confirmationError.message, 500) || "Your confirmation could not be recorded.",
+        ...await getVendorRaffleDashboard(vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture),
+      }, confirmationError.code === "42501" ? 403 : 409);
+    }
+    // The send gate reads the committed, vendor-owned verified row, never the
+    // requested boolean or a client-supplied evidence/answer field.
+    const { data: confirmedDraw, error: confirmationReadError } = await requireAdmin()
+      .from("qr_bingo_raffle_draws").select("*")
+      .eq("id", drawId).eq("event_key", eventKey)
+      .eq("vendor_bingo_id", vendor.id)
+      .eq("vendor_bd_user_id", String(vendor.user_id || user?.user_id || ""))
+      .maybeSingle();
+    if (confirmationReadError) throw confirmationReadError;
+    ownedDraw = confirmedDraw;
+  }
+  if (!ownedDraw) {
+    return jsonResponse({ ok: false, error: "The confirmed selection could not be reloaded. Please refresh." }, 409);
+  }
+  if (ownedDraw.selection_status !== "verified" ||
+    !hasQrBingoSkillVerification(ownedDraw) ||
+    !ownedDraw.winner_rules_confirmed_at ||
+    !cleanText(ownedDraw.verification_notes, 1100)) {
     return jsonResponse({
       ok: false,
-      error: "Only a verified potential winner can receive a notice.",
+      error: "Only a potential winner with completed verification and dated evidence can receive a notice.",
+      ...await getVendorRaffleDashboard(vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture),
     }, 409);
   }
   if (suppressOutboundEmail) {
@@ -3320,14 +3526,19 @@ async function sendVerifiedWinnerNotice(
     }, 503);
   }
 
-  const signingKey = await loadQrDrawEmailSigningKey();
-  const emailResult = await sendDrawEmails(
-    user,
-    ownedDraw as RaffleDraw,
-    signingKey,
-    vendor,
-    isolatedFixture,
-  );
+  let emailResult: Awaited<ReturnType<typeof sendDrawEmails>>;
+  try {
+    const signingKey = await loadQrDrawEmailSigningKey();
+    emailResult = await sendDrawEmails(
+      user, ownedDraw as RaffleDraw, signingKey, vendor, isolatedFixture,
+    );
+  } catch (_error) {
+    return jsonResponse({
+      ok: false, partial_delivery: true,
+      error: "Your winner confirmation is saved, but the email delivery was not confirmed. Please try sending again.",
+      ...await getVendorRaffleDashboard(vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture),
+    }, 502);
+  }
   const { data: refreshedDraw, error: refreshedDrawError } =
     await requireAdmin()
       .from("qr_bingo_raffle_draws")
@@ -3384,7 +3595,14 @@ Deno.serve(async (request) => {
   }
 
   try {
-    const body = await request.json().catch(() => ({}));
+    const rawBody = await request.text();
+    let body: Record<string, unknown>;
+    try { body = JSON.parse(rawBody); } catch {
+      return jsonResponse({ ok: false, error: "A valid request is required." }, 400);
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return jsonResponse({ ok: false, error: "A valid request is required." }, 400);
+    }
     const nativeSession = body?.native_session as NativeSession | undefined;
     const action = String(body?.action || "vendor_raffle_get");
     const runtimeConfig = await loadPublishedQrBingoConfig(requireAdmin());
@@ -3416,6 +3634,7 @@ Deno.serve(async (request) => {
           "vendor_raffle_update",
           "vendor_raffle_entry_update",
           "vendor_raffle_draw",
+          "vendor_raffle_replace",
           "vendor_raffle_review",
           "vendor_raffle_send_notice",
         ].includes(action)
@@ -3426,25 +3645,52 @@ Deno.serve(async (request) => {
         }, 503);
       }
 
-      if (!nativeSession?.user_id || !nativeSession?.token) {
-        return jsonResponse(
-          { ok: false, error: "Native session required" },
-          401,
-        );
+      let websitePrincipal: WebsitePrincipal | null = null;
+      if (hasQrBingoWebsiteProof(request, body)) {
+        try {
+          websitePrincipal = await verifyQrBingoWebsiteRequest(request, rawBody, body, {
+            loadSecret: async () => {
+              return await resolveWebsiteSigningSecret(Deno.env.get("QR_BINGO_ADMIN_HMAC_SECRET"), async () => {
+                const { data, error } = await requireAdmin().rpc("get_qr_bingo_admin_hmac_secret");
+                if (error) throw new Error("Website signing key unavailable");
+                return data;
+              });
+            },
+            consumeNonce: async (nonce, expiresAt) => {
+              const { data, error } = await requireAdmin().rpc("consume_qr_bingo_admin_nonce", {
+                p_nonce: nonce, p_expires_at: expiresAt,
+              });
+              if (error) throw new Error("Website replay verification unavailable");
+              return data === true;
+            },
+          });
+        } catch (error) {
+          return jsonResponse({ ok: false, error: error instanceof WebsiteAuthenticationError
+            ? error.message : "Website session could not be verified." },
+            error instanceof WebsiteAuthenticationError ? error.status : 401);
+        }
+      } else {
+        if (!nativeSession?.user_id || !nativeSession?.token) {
+          return jsonResponse({ ok: false, error: "Native session required" }, 401);
+        }
+        if (!await nativeSessionMatchesCachedBdIdentity(nativeSession)) {
+          return jsonResponse({ ok: false, error: "Native session expired" }, 401);
+        }
       }
-
-      if (!await nativeSessionMatchesCachedBdIdentity(nativeSession)) {
-        return jsonResponse(
-          { ok: false, error: "Native session expired" },
-          401,
-        );
+      const authenticatedMemberId = websitePrincipal?.userId || String(nativeSession!.user_id);
+      const websiteCoupleUser = websitePrincipal?.kind === "couple"
+        ? await fetchFullBdUserById(authenticatedMemberId) : undefined;
+      if (websitePrincipal?.kind === "couple" && (!websiteCoupleUser?.user_id ||
+        String(websiteCoupleUser.user_id) !== authenticatedMemberId ||
+        !["4", "18"].includes(String(websiteCoupleUser.subscription_id)))) {
+        return jsonResponse({ ok: false, error: "Sign in with a couple account to use QR Bingo." }, 403);
       }
 
       if (action === "fixture_context") {
-        const fixtureUser = await fetchFullBdUserById(nativeSession.user_id);
+        const fixtureUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);
         if (
           !fixtureUser?.user_id ||
-          String(fixtureUser.user_id) !== String(nativeSession.user_id)
+          String(fixtureUser.user_id) !== String(authenticatedMemberId)
         ) {
           return jsonResponse(
             { ok: false, error: "Native session expired" },
@@ -3452,8 +3698,8 @@ Deno.serve(async (request) => {
           );
         }
         const fixture = await loadAppReviewRaffleFixture(
-          nativeSession.user_id,
-        ) || await loadEmailTestRaffleFixture(nativeSession.user_id);
+          authenticatedMemberId,
+        ) || await loadEmailTestRaffleFixture(authenticatedMemberId);
         return jsonResponse(
           await isolatedFixtureContext(
             fixture,
@@ -3464,17 +3710,18 @@ Deno.serve(async (request) => {
 
       const isVendorRaffleAction = action === "vendor_raffle_get" ||
         action === "vendor_raffle_update" || action === "vendor_raffle_draw" ||
+        action === "vendor_raffle_replace" ||
         action === "vendor_raffle_export" ||
         action === "vendor_raffle_review" ||
         action === "vendor_raffle_entries_get" ||
         action === "vendor_raffle_entry_update" ||
         action === "vendor_raffle_send_notice";
       const reviewFixture =
-        await loadAppReviewRaffleFixture(nativeSession.user_id) ||
-        await loadEmailTestRaffleFixture(nativeSession.user_id);
+        await loadAppReviewRaffleFixture(authenticatedMemberId) ||
+        await loadEmailTestRaffleFixture(authenticatedMemberId);
       const isReviewVendor = Boolean(
         reviewFixture &&
-          String(nativeSession.user_id) === reviewFixture.vendor_bd_user_id,
+          String(authenticatedMemberId) === reviewFixture.vendor_bd_user_id,
       );
       const isIsolatedReviewVendorAction = Boolean(
         reviewFixture && isReviewVendor && isVendorRaffleAction,
@@ -3482,14 +3729,30 @@ Deno.serve(async (request) => {
 
       // Always load the current BD member with tags. Even an isolated fixture
       // vendor must still belong to the currently published QR Bingo roster.
-      const user = await fetchFullBdUserById(nativeSession.user_id);
+      const user = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);
       if (
-        !user?.user_id || String(user.user_id) !== String(nativeSession.user_id)
+        !user?.user_id || String(user.user_id) !== String(authenticatedMemberId)
       ) {
         return jsonResponse(
           { ok: false, error: "Native session expired" },
           401,
         );
+      }
+      if (websitePrincipal?.kind === "vendor" &&
+        (!/^[1-9][0-9]*$/.test(String(user.subscription_id || "")) ||
+          ["4", "18"].includes(String(user.subscription_id)))) {
+        return jsonResponse({ ok: false, error: "Sign in with a participating vendor account." }, 403);
+      }
+      if (action === "vendor_dashboard_access") {
+        const vendor = await resolveVendorForRaffleAction(
+          { vendors: [], scanned: [] }, user, reviewFixture, isReviewVendor,
+        );
+        if (!vendor) return jsonResponse({ ok: false, error: "This account is not on the QR Bingo vendor list." }, 403);
+        // This read-only navigation check never reads or initializes settings,
+        // entrant contact data, selection records, or email delivery state.
+        return jsonResponse({ ok: true, vendor: { id: vendor.id, user_id: vendor.user_id },
+          app_review_fixture: Boolean(reviewFixture && isReviewVendor && !isEmailTestFixture(reviewFixture)),
+          email_test_fixture: Boolean(reviewFixture && isReviewVendor && isEmailTestFixture(reviewFixture)) });
       }
       const isReviewCouple = Boolean(
         reviewFixture &&
@@ -3514,15 +3777,13 @@ Deno.serve(async (request) => {
         }, 422);
       }
       if (
-        action === "scan" &&
-        cleanText(body?.participation_notice_version, 180) !==
-          qrParticipationNoticeVersion()
+        !acceptsQrParticipationNotice(action, body as Record<string, unknown>)
       ) {
         return jsonResponse({
           ok: false,
           code: "participation_notice_required",
           error:
-            "Read and accept the current QR Bingo participation notice before scanning.",
+            "Read and accept the current QR Bingo agreement before continuing.",
           participation_notice_version: qrParticipationNoticeVersion(),
         }, 428);
       }
@@ -3539,14 +3800,23 @@ Deno.serve(async (request) => {
             "The isolated email-test account no longer matches its allowlisted recipient.",
         }, 403);
       }
-      const cookieJar = isIsolatedReviewVendorAction
+      // Website proof is the authentication. Only normal couple requests use
+      // the already-existing canonical BD token for scan-history transport.
+      // Private fixture couples never visit or mutate production scan history.
+      const skipWebsiteTransport = websitePrincipal?.kind === "vendor" ||
+        isIsolatedReviewVendorAction || Boolean(reviewFixture && isReviewCouple);
+      if (websitePrincipal?.kind === "couple" && !skipWebsiteTransport && !websitePrincipal.transportToken) {
+        return jsonResponse({ ok: false, error: "Sign in again before loading QR Bingo." }, 401);
+      }
+      const transportSession: NativeSession = websitePrincipal?.kind === "couple"
+        ? { user_id: authenticatedMemberId, token: websitePrincipal.transportToken || "" }
+        : nativeSession!;
+      const cookieJar = skipWebsiteTransport
         ? new Map<string, string>()
         : isVendorRaffleAction
-        ? await loginWebsiteSession(nativeSession).catch(() =>
-          new Map<string, string>()
-        )
-        : await loginWebsiteSession(nativeSession);
-      const page = isIsolatedReviewVendorAction
+        ? await loginWebsiteSession(transportSession).catch(() => new Map<string, string>())
+        : await loginWebsiteSession(transportSession);
+      const page = skipWebsiteTransport
         ? ({ vendors: [], scanned: [] } as QrPage)
         : isVendorRaffleAction
         ? cookieJar.size
@@ -3554,7 +3824,7 @@ Deno.serve(async (request) => {
             () => ({ vendors: [], scanned: [] } as QrPage),
           )
           : ({ vendors: [], scanned: [] } as QrPage)
-        : await getQrPage(cookieJar);
+        : await getQrPage(cookieJar, authenticatedMemberId);
       let scanned: string[];
       if (reviewFixture && isReviewCouple) {
         // The review account is a self-contained demonstration event. Never
@@ -3635,8 +3905,12 @@ Deno.serve(async (request) => {
           new URLSearchParams({
             action: "scan_vendor",
             vendor_id: vendorId,
-            participation_notice_version: qrParticipationNoticeVersion(),
+            participation_notice_version: cleanText(
+              body?.participation_notice_version,
+              180,
+            ),
           }),
+          page.requestCsrf,
         );
         if (scanResult.status !== "success") {
           const upstreamStatus = Number(scanResult.__http_status || 0);
@@ -3822,7 +4096,7 @@ Deno.serve(async (request) => {
           ),
           reviewFixture && isReviewVendor ? reviewFixture : null,
         );
-        return jsonResponse({ ok: true, vendor, ...dashboard });
+        return jsonResponse({ ok: true, ...dashboard });
       }
 
       if (action === "vendor_raffle_export") {
@@ -3844,7 +4118,7 @@ Deno.serve(async (request) => {
         const result = await buildVendorParticipationReport(
           vendor,
           eventKey,
-          String(user.user_id || nativeSession.user_id),
+          String(user.user_id || authenticatedMemberId),
           cleanText(body?.client_platform, 20).toLowerCase(),
           reviewFixture && isReviewVendor ? reviewFixture : null,
         );
@@ -3938,7 +4212,7 @@ Deno.serve(async (request) => {
           body?.client_platform,
         );
         const acceptingVendorUserId = String(
-          user.user_id || nativeSession.user_id,
+          user.user_id || authenticatedMemberId,
         );
         const rulesReviewed = reviewedCurrentRules(
           body as Record<string, unknown>,
@@ -3976,7 +4250,6 @@ Deno.serve(async (request) => {
             conflict: true,
             error:
               "Reload the current draw settings before saving. This prevents one device from overwriting another.",
-            vendor,
             ...dashboard,
           }, 409);
         }
@@ -3998,7 +4271,6 @@ Deno.serve(async (request) => {
             code: "stale_vendor_responsibility_disclosure",
             error:
               "The vendor responsibility agreement changed. Reload and accept the exact current agreement before saving.",
-            vendor,
             ...dashboard,
           }, 409);
         }
@@ -4215,7 +4487,6 @@ Deno.serve(async (request) => {
                 conflict: true,
                 error:
                   "This draw was updated in another tab or browser. Review the latest settings before saving again.",
-                vendor,
                 ...dashboard,
               }, 409);
             }
@@ -4231,7 +4502,6 @@ Deno.serve(async (request) => {
           );
           return jsonResponse({
             ok: true,
-            vendor,
             ...dashboard,
             material_terms_locked: true,
           });
@@ -4247,7 +4517,6 @@ Deno.serve(async (request) => {
           );
           return jsonResponse({
             ok: false,
-            vendor,
             ...dashboard,
             conflict: true,
             material_terms_locked: true,
@@ -4346,7 +4615,6 @@ Deno.serve(async (request) => {
               conflict: true,
               error:
                 "This draw was updated in another tab or browser. Review the latest settings before saving again.",
-              vendor,
               ...dashboard,
             }, 409);
           }
@@ -4360,7 +4628,7 @@ Deno.serve(async (request) => {
           suppressOutboundEmail,
           reviewFixture,
         );
-        return jsonResponse({ ok: true, vendor, ...dashboard });
+        return jsonResponse({ ok: true, ...dashboard });
       }
 
       if (action === "vendor_raffle_draw") {
@@ -4390,6 +4658,24 @@ Deno.serve(async (request) => {
             reviewFixture && isReviewVendor &&
               isolatedFixtureSuppressesOutbound(reviewFixture),
           ),
+          reviewFixture && isReviewVendor ? reviewFixture : null,
+        );
+      }
+
+      if (action === "vendor_raffle_replace") {
+        const vendor = await resolveVendorForRaffleAction(
+          page, user, reviewFixture, isReviewVendor,
+        );
+        if (!vendor) {
+          return jsonResponse({
+            ok: false, error: "This account is not on the QR Bingo vendor list.",
+          }, 403);
+        }
+        return replacePotentialWinner(
+          vendor, user, body as Record<string, unknown>,
+          reviewFixture && isReviewVendor ? reviewFixture.event_key : qrBingoConfig().event_key,
+          Boolean(reviewFixture && isReviewVendor && reviewFixture.allow_early_draw),
+          Boolean(reviewFixture && isReviewVendor && isolatedFixtureSuppressesOutbound(reviewFixture)),
           reviewFixture && isReviewVendor ? reviewFixture : null,
         );
       }

@@ -395,7 +395,7 @@ Deno.test("fixture context is authenticated, exact-couple, and never fetches the
       source.indexOf("const isVendorRaffleAction"),
     );
     assert(
-      branch.includes("fetchFullBdUserById(nativeSession.user_id)") &&
+      branch.includes("websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)") &&
         branch.includes("loadAppReviewRaffleFixture") &&
         branch.includes("loadEmailTestRaffleFixture") &&
         !branch.includes("loginWebsiteSession") &&

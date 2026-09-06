@@ -297,7 +297,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
         $drawId = ww_qbdes_clean_header(isset($data['draw_id']) ? $data['draw_id'] : '', 80);
         $fixtureId = ww_qbdes_clean_header(isset($data['fixture_id']) ? $data['fixture_id'] : '', 80);
         $emailTestFlag = isset($data['email_test_fixture']) && (string)$data['email_test_fixture'] === '1';
-        $expectedRecipientHash = 'e335ee1d5cd1defcd861262d600a69d823b65811365b4d5ea74ff86c2fd362bb';
+        $expectedRecipientHash = '05d7d3b40670d8471795b130efde1c37d9b391c9561550e5f34b5e07cf92b6fc';
+        $expectedCoupleAliasHash = 'e1375389609977e97e17682cc8e198e88db77ca801f3d2729b73d1473dec19ea';
         $validUuid = '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/Di';
         if (
             !$emailTestFlag
@@ -305,7 +306,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
             || !$sendCouple
             || !preg_match($validUuid, $drawId)
             || !preg_match($validUuid, $fixtureId)
-            || !hash_equals($expectedRecipientHash, hash('sha256', $coupleTo))
+            || !(hash_equals($expectedRecipientHash, hash('sha256', $coupleTo))
+                || hash_equals($expectedCoupleAliasHash, hash('sha256', $coupleTo)))
             || $incomingCoupleSubject !== 'Your name was selected for a QR Bingo booth draw'
         ) {
             ww_qbdes_json(false, 'The isolated email-test request is not allowlisted.');

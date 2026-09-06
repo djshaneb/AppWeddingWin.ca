@@ -114,13 +114,56 @@ Deno.test("isolated email transport cannot be redirected or mistaken for product
   }
 });
 
-Deno.test("website mail boundary independently allowlists the one test mailbox", async () => {
+Deno.test("website mail boundary independently allowlists only the two authorized exact test addresses", async () => {
   const widget = await Deno.readTextFile(
     new URL(
       "../../../brilliant-directories/widgets/336-qr-bingo-draw-email-sender.php",
       import.meta.url,
     ),
   );
+
+  const configuredHashes = [
+    widget.match(/\$expectedRecipientHash\s*=\s*'([a-f0-9]{64})'/)?.[1],
+    widget.match(/\$expectedCoupleAliasHash\s*=\s*'([a-f0-9]{64})'/)?.[1],
+  ];
+  assert(
+    configuredHashes.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) &&
+      new Set(configuredHashes).size === 2,
+    "production must retain exactly two distinct pinned recipient hashes",
+  );
+  const sha256 = async (value: string) =>
+    Array.from(new Uint8Array(await crypto.subtle.digest(
+      "SHA-256", new TextEncoder().encode(value),
+    ))).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  // Use reserved-domain addresses in an isolated in-memory copy. Never publish
+  // private recipient addresses or alter the production allowlist for a test.
+  const syntheticAddresses = [
+    "qa.tester@example.invalid",
+    "qa.tester+couple-test@example.invalid",
+  ];
+  const syntheticHashes = await Promise.all(syntheticAddresses.map(sha256));
+  let fixtureWidget = widget;
+  for (const [index, configured] of configuredHashes.entries()) {
+    fixtureWidget = fixtureWidget.replace(configured!, syntheticHashes[index]);
+  }
+  const fixtureHashes = [
+    fixtureWidget.match(/\$expectedRecipientHash\s*=\s*'([a-f0-9]{64})'/)?.[1],
+    fixtureWidget.match(/\$expectedCoupleAliasHash\s*=\s*'([a-f0-9]{64})'/)?.[1],
+  ];
+  for (const [index, address] of syntheticAddresses.entries()) {
+    assert(fixtureHashes[index] === await sha256(address),
+      "the isolated test copy must pin only its two exact synthetic recipients");
+  }
+  for (const address of [
+    "qa.tester+unapproved@example.invalid",
+    "qa.tester+vendor-test@example.invalid",
+    "qa.tester+different-couple@example.invalid",
+    "qa.tester+couple-test@example.invalid.evil.example",
+    "qatester@example.invalid",
+  ]) {
+    assert(!fixtureHashes.includes(await sha256(address)),
+      "other aliases, dot-normalized spellings and foreign domains must not be implicitly allowlisted");
+  }
 
   assert(
     widget.includes("strpos($eventKey, 'app-review-') === 0") &&
@@ -136,11 +179,10 @@ Deno.test("website mail boundary independently allowlists the one test mailbox",
       widget.includes("!$sendCouple") &&
       widget.includes("!preg_match($validUuid, $drawId)") &&
       widget.includes("!preg_match($validUuid, $fixtureId)") &&
-      widget.includes(
-        "e335ee1d5cd1defcd861262d600a69d823b65811365b4d5ea74ff86c2fd362bb",
-      ) &&
-      widget.includes(
-        "!hash_equals($expectedRecipientHash, hash('sha256', $coupleTo))",
+      widget.indexOf("strpos($eventKey, 'app-review-') === 0") <
+        widget.indexOf("if ($isEmailTestFixture)") &&
+      includesIgnoringWhitespace(widget,
+        "!(hash_equals($expectedRecipientHash, hash('sha256', $coupleTo)) || hash_equals($expectedCoupleAliasHash, hash('sha256', $coupleTo)))",
       ) &&
       widget.includes(
         "$incomingCoupleSubject !== 'Your name was selected for a QR Bingo booth draw'",
@@ -260,13 +302,29 @@ Deno.test("Simulator and website clearly label the no-prize QA fixture", async (
         app,
         "one notice is sent only to the allowlisted test mailbox",
       ) &&
-      app.includes("does not award a real prize"),
+      includesIgnoringWhitespace(app, "No real prize is awarded."),
     "the Simulator-only scan emulator and vendor warning must be visibly test-only",
   );
   assert(
     websiteMarkup.includes("email-test-fixture-notice") &&
-      websiteMarkup.includes("does not award a real prize") &&
+      websiteMarkup.includes("Email test mode — no real prize.") &&
+      websiteMarkup.includes("Only the approved test recipient can receive this email.") &&
       websiteScript.includes("data.email_test_fixture"),
     "the website dashboard must identify the isolated no-prize email test",
+  );
+
+  const vendorEmailNotice = between(
+    app,
+    "{vendorRaffle.email_test_fixture ? (",
+    "<View style={styles.vendorRaffleGuideCard}>",
+  );
+  assert(
+    vendorEmailNotice.includes("Email test mode — no real prize") &&
+      includesIgnoringWhitespace(
+        vendorEmailNotice,
+        "Only the approved test recipient can receive this email.",
+      ) &&
+      !vendorEmailNotice.includes("Sound Of Harmony"),
+    "the native vendor email-test notice must not name an unrelated business",
   );
 });

@@ -82,6 +82,7 @@ import {
   UserRound,
 } from 'lucide-react-native';
 import {
+  isVendorDrawDashboardUrl,
   isWeddingWinHost,
   isWedWebsiteHost,
   qrPayloadUrlAllowed,
@@ -328,6 +329,7 @@ type QrBingoRaffleEntry = {
     | 'already_selected'
     | 'previous_winner'
     | 'disqualified'
+    | 'replaced'
     | 'reacceptance_required'
     | 'in_person_scan_required';
   pool_status_reason?: string;
@@ -350,9 +352,10 @@ type QrBingoRaffleDraw = {
   draw_reason: string;
   drawn_at: string;
   email_error?: string;
-  selection_status?: 'legacy' | 'potential' | 'verified' | 'disqualified';
+  selection_status?: 'legacy' | 'potential' | 'verified' | 'disqualified' | 'replaced';
   eligibility_verified_at?: string;
   skill_question_verified_at?: string;
+  skill_question_vendor_attested_at?: string;
   verified_at?: string;
   winner_rules_confirmed_at?: string;
   skill_question_prompt?: string;
@@ -362,6 +365,8 @@ type QrBingoRaffleDraw = {
   notice_complete?: boolean;
   can_send_notice?: boolean;
   can_test_suppressed_notice?: boolean;
+  can_confirm_and_send_notice?: boolean;
+  can_confirm_and_test_suppressed_notice?: boolean;
 };
 type QrBingoVendorRaffleResponse = {
   ok?: boolean;
@@ -369,6 +374,7 @@ type QrBingoVendorRaffleResponse = {
   detail?: string;
   message?: string;
   conflict?: boolean;
+  code?: string;
   event_key?: string;
   event_revision?: number;
   vendor?: QrBingoVendor;
@@ -471,6 +477,7 @@ const COUPLE_MEMBERSHIP_PLAN_ID = '18';
 const VENDOR_MEMBERSHIP_PLAN_ID = '17';
 const VENDOR_MEMBERSHIP_PLAN_IDS = new Set(['17', '27', '28']);
 const TERMS_URL = `${TARGET_URL}/about/terms`;
+const QR_BINGO_TERMS_URL = `${TERMS_URL}#qr-bingo`;
 const PRIVACY_URL = `${TARGET_URL}/about/privacy`;
 const TERMS_VERSION = '2026-09-01';
 const PRIVACY_VERSION = '2026-09-01';
@@ -491,10 +498,10 @@ const CHAT_UNREAD_SESSION_KEY = 'weddingwin.chatUnread.v1';
 const PUSH_TOKEN_SESSION_KEY = 'weddingwin.expoPushToken.v1';
 const PENDING_PUSH_UNREGISTER_KEY = 'weddingwin.pendingPushUnregister.v1';
 const ACCOUNT_DELETED_EVENT_KEY = 'weddingwin.accountDeleted.v1';
-const QR_BINGO_PARTICIPATION_NOTICE_VERSION = '2026-09-01-in-person-entry';
+const QR_BINGO_PARTICIPATION_NOTICE_VERSION = '2026-09-04-pre-scan-draw-consent';
 const VENDOR_RAFFLE_WIZARD_STEPS = [
   { id: 1, label: 'Prize' },
-  { id: 2, label: 'Rules & Open' },
+  { id: 2, label: 'Open' },
   { id: 3, label: 'Couples' },
   { id: 4, label: 'Winner' },
 ] as const satisfies readonly { id: VendorRaffleWizardStep; label: string }[];
@@ -708,18 +715,12 @@ function buildNativeGoogleStartUrl(
   return url.toString();
 }
 
-function base64UrlFromBytes(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return globalThis
-    .btoa(binary)
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
-
 async function createGooglePkcePair() {
-  const codeVerifier = base64UrlFromBytes(await Crypto.getRandomBytesAsync(32));
+  // Avoid depending on a browser encoding global. A 64-character hex verifier
+  // preserves all 256 random bits and meets PKCE's 43–128 character limit.
+  const codeVerifier = Array.from(await Crypto.getRandomBytesAsync(32), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
   const base64Challenge = await Crypto.digestStringAsync(
     Crypto.CryptoDigestAlgorithm.SHA256,
     codeVerifier,
@@ -910,8 +911,8 @@ const CLOAK_INJECTION = `
     var ensureInline = function(v) {
       v.setAttribute('playsinline', '');
       v.setAttribute('webkit-playsinline', '');
-      v.removeAttribute('autoplay');
-      v.autoplay = false;
+      // Preserve the site's playback intent. Stripping autoplay breaks muted
+      // previews and players that start after their asynchronous setup.
     };
     var applyToVideos = function(root) {
       try { (root || document).querySelectorAll('video').forEach(ensureInline); } catch(e) {}
@@ -1256,19 +1257,6 @@ function formatQrMenuDate(value?: string): string {
     : '';
 }
 
-function isValidIsoCalendarDate(value: string): boolean {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-  if (!match) return false;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
-  );
-}
 
 function normalizeRaffleMaxWinners(value: unknown): 1 | 2 | 3 {
   const parsed = Number(value);
@@ -1286,6 +1274,13 @@ function normalizeCurrencyDraft(value: string): string {
     .replace(/\./g, '')
     .slice(0, 2);
   return `${whole}.${fraction}`;
+}
+
+function formatVendorPrizeDraftDescription(title: string, description: string): string {
+  // Restore the saved title boundary in the combined title/conditions editor.
+  if (!title || description.includes('\n') || !description.startsWith(title)) return description;
+  const remainder = description.slice(title.length);
+  return /^\s+\S/.test(remainder) ? `${title}\n${remainder.trimStart()}` : description;
 }
 
 function recommendedVendorRaffleWizardStep(
@@ -1557,16 +1552,13 @@ function NativeQrScanner({
     null,
   );
   const [raffleSaving, setRaffleSaving] = useState(false);
-  const [raffleRulesViewedVersion, setRaffleRulesViewedVersion] = useState('');
-  const [ageOfMajorityAttested, setAgeOfMajorityAttested] = useState(false);
-  const [residencyAttested, setResidencyAttested] = useState(false);
-  const [exclusionsAttested, setExclusionsAttested] = useState(false);
-  const [promotionResponsibilityAccepted, setPromotionResponsibilityAccepted] =
-    useState(false);
-  const [participationNoticeAccepted, setParticipationNoticeAccepted] =
-    useState(false);
+  const [acceptedParticipationNoticeKey, setAcceptedParticipationNoticeKey] =
+    useState('');
   const [participationNoticeLoading, setParticipationNoticeLoading] =
     useState(false);
+  const [reviewingParticipationNotice, setReviewingParticipationNotice] =
+    useState(false);
+  const reviewingParticipationNoticeRef = useRef(false);
   const [serverMissingContactFields, setServerMissingContactFields] = useState<
     string[]
   >([]);
@@ -1616,10 +1608,32 @@ function NativeQrScanner({
     const rulesVersion = String(
       eventConfig?.rules_version || QR_BINGO_PARTICIPATION_NOTICE_VERSION,
     ).trim();
-    return userId
-      ? `weddingwin.qrParticipationNotice.${userId}.${rulesVersion}.${QR_BINGO_PARTICIPATION_NOTICE_VERSION}`
+    const eventKey = String(eventConfig?.event_key || '').trim();
+    return userId && eventKey
+      ? `weddingwin.qrParticipationNotice.${userId}.${eventKey}.${rulesVersion}.${QR_BINGO_PARTICIPATION_NOTICE_VERSION}`
       : '';
-  }, [eventConfig?.rules_version, member?.user_id, nativeSession?.user_id]);
+  }, [
+    eventConfig?.event_key,
+    eventConfig?.rules_version,
+    member?.user_id,
+    nativeSession?.user_id,
+  ]);
+  const participationNoticeAccepted = Boolean(
+    participationNoticeKey &&
+      acceptedParticipationNoticeKey === participationNoticeKey,
+  );
+  // The pre-camera agreement is versioned by account and event. Enter Draw is
+  // the separate affirmative confirmation for this named vendor and offer.
+  // Legacy rules_viewed records self-attested reading, not link-click telemetry.
+  const raffleRulesViewedVersion =
+    participationNoticeAccepted &&
+    raffleOffer?.consent_version === eventConfig?.rules_version
+      ? raffleOffer?.consent_version || ''
+      : '';
+  const ageOfMajorityAttested = participationNoticeAccepted;
+  const residencyAttested = participationNoticeAccepted;
+  const exclusionsAttested = participationNoticeAccepted;
+  const promotionResponsibilityAccepted = participationNoticeAccepted;
 
   useEffect(() => {
     requestCameraPermissionRef.current = requestPermission;
@@ -1641,13 +1655,6 @@ function NativeQrScanner({
     member?.phone_number,
     member?.user_id,
   ]);
-
-  const resetEligibilityAttestations = useCallback(() => {
-    setAgeOfMajorityAttested(false);
-    setResidencyAttested(false);
-    setExclusionsAttested(false);
-    setPromotionResponsibilityAccepted(false);
-  }, []);
 
   const clearBingoCardState = useCallback(() => {
     setEventConfig(null);
@@ -1780,6 +1787,8 @@ function NativeQrScanner({
     raffleEntryInFlightRef.current = false;
     setSavingBingo(false);
     setRaffleSaving(false);
+    reviewingParticipationNoticeRef.current = false;
+    setReviewingParticipationNotice(false);
     if (!visible) {
       bingoCardRequestIdRef.current += 1;
       setServerMissingContactFields([]);
@@ -1792,12 +1801,7 @@ function NativeQrScanner({
     clearBingoCardState();
     showScanFeedback('', 'idle');
     setRaffleOffer(null);
-    setRaffleRulesViewedVersion('');
-    setAgeOfMajorityAttested(false);
-    setResidencyAttested(false);
-    setExclusionsAttested(false);
-    setPromotionResponsibilityAccepted(false);
-    setParticipationNoticeAccepted(false);
+    setAcceptedParticipationNoticeKey('');
     loadBingoCard();
   }, [clearBingoCardState, loadBingoCard, showScanFeedback, visible]);
 
@@ -1805,7 +1809,6 @@ function NativeQrScanner({
     if (
       !visible ||
       !contactProfileComplete ||
-      !eventConfig ||
       !participationNoticeKey
     ) {
       setParticipationNoticeLoading(false);
@@ -1815,10 +1818,12 @@ function NativeQrScanner({
     setParticipationNoticeLoading(true);
     SecureStore.getItemAsync(participationNoticeKey)
       .then((value) => {
-        if (active) setParticipationNoticeAccepted(value === '1');
+        if (active) setAcceptedParticipationNoticeKey(
+          value === '1' ? participationNoticeKey : '',
+        );
       })
       .catch(() => {
-        if (active) setParticipationNoticeAccepted(false);
+        if (active) setAcceptedParticipationNoticeKey('');
       })
       .finally(() => {
         if (active) setParticipationNoticeLoading(false);
@@ -1826,13 +1831,14 @@ function NativeQrScanner({
     return () => {
       active = false;
     };
-  }, [contactProfileComplete, eventConfig, participationNoticeKey, visible]);
+  }, [contactProfileComplete, participationNoticeKey, visible]);
 
   useEffect(() => {
     if (
       !visible ||
       !contactProfileComplete ||
       !participationNoticeAccepted ||
+      reviewingParticipationNotice ||
       eventScanEnabled !== true ||
       scanWindowClosed ||
       !canRequestCameraPermission
@@ -1844,6 +1850,7 @@ function NativeQrScanner({
     contactProfileComplete,
     eventScanEnabled,
     participationNoticeAccepted,
+    reviewingParticipationNotice,
     scanWindowClosed,
     visible,
   ]);
@@ -1866,9 +1873,11 @@ function NativeQrScanner({
   useEffect(() => {
     if (eventVendorDrawsEnabled !== false) return;
     setRaffleOffer(null);
-    setRaffleRulesViewedVersion('');
-    resetEligibilityAttestations();
-  }, [eventVendorDrawsEnabled, resetEligibilityAttestations]);
+  }, [eventVendorDrawsEnabled]);
+
+  useEffect(() => {
+    if (!participationNoticeAccepted) setRaffleOffer(null);
+  }, [participationNoticeAccepted]);
 
   useEffect(() => clearScanFeedbackTimer, [clearScanFeedbackTimer]);
 
@@ -1963,11 +1972,6 @@ function NativeQrScanner({
           data.completed ? undefined : 5000,
         );
         if (nextEventConfig?.vendor_draws_enabled && data.raffle_offer) {
-          setRaffleRulesViewedVersion('');
-          setAgeOfMajorityAttested(false);
-          setResidencyAttested(false);
-          setExclusionsAttested(false);
-          setPromotionResponsibilityAccepted(false);
           setRaffleOffer(data.raffle_offer);
         } else {
           setRaffleOffer(null);
@@ -2015,6 +2019,10 @@ function NativeQrScanner({
         );
         return false;
       }
+      if (!participationNoticeAccepted) {
+        setBingoError('Read and accept the current QR Bingo terms before reviewing a draw.');
+        return false;
+      }
       if (eventVendorDrawsEnabled !== true) {
         showScanFeedback(
           `Already scanned: ${vendor.name}. Optional vendor draws are temporarily unavailable.`,
@@ -2044,6 +2052,7 @@ function NativeQrScanner({
               action: 'raffle_offer',
               native_session: nativeSession,
               vendor_id: vendor.id,
+              participation_notice_version: `${eventConfig?.rules_version || ''}|${QR_BINGO_PARTICIPATION_NOTICE_VERSION}`,
             }),
           },
           'Loading this vendor draw took too long. Check your connection and try again.',
@@ -2080,11 +2089,6 @@ function NativeQrScanner({
           );
           return false;
         }
-        setRaffleRulesViewedVersion('');
-        setAgeOfMajorityAttested(false);
-        setResidencyAttested(false);
-        setExclusionsAttested(false);
-        setPromotionResponsibilityAccepted(false);
         setRaffleOffer(data.raffle_offer);
         showScanFeedback(
           `Booth already visited. ${vendor.name} draw available.`,
@@ -2113,14 +2117,17 @@ function NativeQrScanner({
     },
     [
       clearBingoCardState,
+      eventConfig?.rules_version,
       eventVendorDrawsEnabled,
       nativeSession,
+      participationNoticeAccepted,
       showScanFeedback,
     ],
   );
 
   const handleBarcodeScanned = useCallback(
     async (result: BarcodeScanningResult) => {
+      if (reviewingParticipationNoticeRef.current) return;
       if (accountDeletionIsInFlight()) return;
       const interactionGeneration = qrInteractionGenerationRef.current;
       const value = result.data?.trim();
@@ -2239,7 +2246,6 @@ function NativeQrScanner({
       };
       try {
         setRaffleOffer(null);
-        resetEligibilityAttestations();
         const refreshed = await reopenVendorDrawOffer(staleVendor);
         if (
           interactionGeneration !== qrInteractionGenerationRef.current ||
@@ -2257,9 +2263,9 @@ function NativeQrScanner({
       return;
     }
     if (raffleRulesViewedVersion !== raffleOffer.consent_version) {
-      setBingoError(
-        'Open the official rules before choosing to enter this vendor draw.',
-      );
+      setRaffleOffer(null);
+      setAcceptedParticipationNoticeKey('');
+      setBingoError('Review the current QR Bingo terms before continuing.');
       return;
     }
     if (
@@ -2268,9 +2274,9 @@ function NativeQrScanner({
       !exclusionsAttested ||
       !promotionResponsibilityAccepted
     ) {
-      setBingoError(
-        'Confirm the eligibility statements and accept the named vendor contact-sharing and marketing terms before entering this draw.',
-      );
+      setRaffleOffer(null);
+      setAcceptedParticipationNoticeKey('');
+      setBingoError('Review the current QR Bingo terms before continuing.');
       return;
     }
     const participantResponsibilityDisclosure = String(
@@ -2304,6 +2310,7 @@ function NativeQrScanner({
           body: JSON.stringify({
             action: 'raffle_opt_in',
             native_session: nativeSession,
+            participation_notice_version: `${eventConfig?.rules_version || ''}|${QR_BINGO_PARTICIPATION_NOTICE_VERSION}`,
             vendor_id: raffleOffer.vendor_id,
             vendor_offer_version: vendorOfferVersion,
             consent_version: raffleOffer.consent_version,
@@ -2337,7 +2344,6 @@ function NativeQrScanner({
             name: raffleOffer.vendor_name,
           };
           setRaffleOffer(null);
-          resetEligibilityAttestations();
           await reopenVendorDrawOffer(staleVendor);
           if (
             interactionGeneration !== qrInteractionGenerationRef.current ||
@@ -2365,7 +2371,6 @@ function NativeQrScanner({
         () => {},
       );
       setRaffleOffer(null);
-      resetEligibilityAttestations();
     } catch (error) {
       if (
         interactionGeneration === qrInteractionGenerationRef.current &&
@@ -2385,6 +2390,7 @@ function NativeQrScanner({
     ageOfMajorityAttested,
     clearBingoCardState,
     eventVendorDrawsEnabled,
+    eventConfig?.rules_version,
     exclusionsAttested,
     nativeSession,
     promotionResponsibilityAccepted,
@@ -2392,19 +2398,42 @@ function NativeQrScanner({
     raffleRulesViewedVersion,
     raffleSaving,
     reopenVendorDrawOffer,
-    resetEligibilityAttestations,
     residencyAttested,
     showScanFeedback,
   ]);
 
   const acceptParticipationNotice = useCallback(() => {
-    if (!participationNoticeKey || accountDeletionIsInFlight()) return;
-    setParticipationNoticeAccepted(true);
+    if (
+      !participationNoticeKey ||
+      !contactProfileComplete ||
+      !nativeSession?.user_id ||
+      !nativeSession?.token ||
+      accountDeletionIsInFlight()
+    ) return;
+    reviewingParticipationNoticeRef.current = false;
+    setReviewingParticipationNotice(false);
+    setAcceptedParticipationNoticeKey(participationNoticeKey);
     setBingoError(null);
     SecureStore.setItemAsync(participationNoticeKey, '1').catch(() => {
       // The acknowledgement still applies for this open scanner session.
     });
-  }, [participationNoticeKey]);
+  }, [contactProfileComplete, nativeSession, participationNoticeKey]);
+
+  const reviewParticipationNotice = useCallback(() => {
+    if (
+      !participationNoticeAccepted ||
+      scanInFlightRef.current ||
+      raffleOfferInFlightRef.current ||
+      raffleEntryInFlightRef.current
+    ) return;
+    reviewingParticipationNoticeRef.current = true;
+    setReviewingParticipationNotice(true);
+  }, [participationNoticeAccepted]);
+
+  const returnFromParticipationNotice = useCallback(() => {
+    reviewingParticipationNoticeRef.current = false;
+    setReviewingParticipationNotice(false);
+  }, []);
 
   if (!visible) return null;
 
@@ -2435,6 +2464,10 @@ function NativeQrScanner({
   const onlyNameMissing =
     missingContactFields.length === 1 &&
     missingContactFields[0].toLowerCase() === 'name';
+  const showingParticipationNotice =
+    contactProfileComplete &&
+    Boolean(eventConfig) &&
+    (!participationNoticeAccepted || reviewingParticipationNotice);
 
   return (
     <View
@@ -2476,7 +2509,12 @@ function NativeQrScanner({
               : 'Visit every vendor booth. Scan each QR. Fill your card.'}
       </Text>
 
-      <View style={styles.qrCameraFrame}>
+      <View
+        style={[
+          styles.qrCameraFrame,
+          showingParticipationNotice && styles.qrAgreementFrame,
+        ]}
+      >
         {!contactProfileComplete ? (
           <View style={styles.qrPermissionPanel}>
             <UserRound size={52} color={BRAND_COLOR} strokeWidth={1.8} />
@@ -2543,50 +2581,104 @@ function NativeQrScanner({
               Checking your acknowledgement
             </Text>
           </View>
-        ) : !participationNoticeAccepted ? (
-          <View style={styles.qrPermissionPanel}>
-            <QrCode size={52} color={BRAND_COLOR} strokeWidth={1.8} />
-            <Text style={styles.qrPermissionTitle}>Before you scan</Text>
-            <TouchableOpacity
-              style={styles.signupConsentToggle}
-              activeOpacity={0.82}
-              onPress={acceptParticipationNotice}
-              accessible
-              testID="qr-bingo-terms-acknowledgement"
-              accessibilityRole="checkbox"
-              accessibilityLabel="I agree to the QR Bingo Terms"
-              accessibilityHint="Required before using the QR Bingo scanner"
-              accessibilityState={{ checked: participationNoticeAccepted }}
-            >
-              <View style={styles.signupConsentBox} />
-              <Text style={styles.signupConsentText}>
-                I agree to the QR Bingo Terms.
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              activeOpacity={0.76}
-              onPress={() =>
-                Linking.openURL(TERMS_URL).catch(() =>
-                  setBingoError('The Terms of Use could not be opened.'),
-                )
-              }
-              accessibilityRole="link"
-              accessibilityLabel="Read the QR Bingo Terms"
-            >
-              <Text style={styles.raffleTermsLink}>Read QR Bingo Terms</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              activeOpacity={0.76}
-              onPress={() =>
-                Linking.openURL(PRIVACY_URL).catch(() =>
-                  setBingoError('The Privacy Policy could not be opened.'),
-                )
-              }
-              accessibilityRole="link"
-              accessibilityLabel="Open WeddingWin Privacy Policy"
-            >
-              <Text style={styles.raffleTermsLink}>View Privacy Policy</Text>
-            </TouchableOpacity>
+        ) : showingParticipationNotice ? (
+          <View
+            style={styles.qrConsentPanel}
+            testID="qr-bingo-pre-scan-agreement"
+          >
+            <View style={styles.qrConsentHeader}>
+              <Text style={styles.qrConsentTitle}>Before you scan</Text>
+            </View>
+            <View style={styles.qrConsentLinks}>
+              <TouchableOpacity
+                style={styles.qrConsentLink}
+                activeOpacity={0.76}
+                onPress={() =>
+                  Linking.openURL(QR_BINGO_TERMS_URL).catch(() =>
+                    setBingoError('The QR Bingo Terms could not be opened.'),
+                  )
+                }
+                accessibilityRole="link"
+                accessibilityLabel="Read the QR Bingo Terms"
+                testID="qr-bingo-terms-link"
+              >
+                <Text style={styles.qrConsentLinkText}>QR Bingo Terms</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.qrConsentLink}
+                activeOpacity={0.76}
+                onPress={() =>
+                  Linking.openURL(eventConfig.official_rules_url).catch(() =>
+                    setBingoError('The Draw Rules could not be opened.'),
+                  )
+                }
+                accessibilityRole="link"
+                accessibilityLabel="Read vendor Draw Rules before scanning"
+                testID="qr-bingo-draw-rules-link"
+              >
+                <Text style={styles.qrConsentLinkText}>Draw Rules</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.qrConsentLink}
+                activeOpacity={0.76}
+                onPress={() =>
+                  Linking.openURL(PRIVACY_URL).catch(() =>
+                    setBingoError('The Privacy Policy could not be opened.'),
+                  )
+                }
+                accessibilityRole="link"
+                accessibilityLabel="Open WeddingWin Privacy Policy"
+              >
+                <Text style={styles.qrConsentLinkText}>Privacy Policy</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.qrConsentActions}>
+              {participationNoticeAccepted ? (
+                <>
+                  <View
+                    style={[styles.signupConsentToggle, styles.qrConsentAgreement]}
+                    accessible
+                    accessibilityLabel="Your QR Bingo agreement is accepted."
+                    testID="qr-bingo-agreement-accepted"
+                  >
+                    <View style={[styles.signupConsentBox, styles.signupConsentBoxChecked]}>
+                      <Text style={styles.signupConsentCheck}>{'\u2713'}</Text>
+                    </View>
+                    <Text style={styles.signupConsentText}>
+                      I have read and agree to the QR Bingo Terms and Draw Rules.
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.qrConsentReturnButton}
+                    activeOpacity={0.84}
+                    onPress={returnFromParticipationNotice}
+                    accessibilityRole="button"
+                    accessibilityLabel="Return to QR Bingo scanner"
+                    testID="qr-bingo-agreement-return"
+                  >
+                    <Text style={styles.qrPermissionButtonText}>Return to Scanner</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.signupConsentToggle, styles.qrConsentAgreement]}
+                  activeOpacity={0.82}
+                  onPress={acceptParticipationNotice}
+                  accessible
+                  testID="qr-bingo-terms-acknowledgement"
+                  accessibilityRole="checkbox"
+                  accessibilityLabel="I have read and agree to the QR Bingo Terms and Draw Rules."
+                  accessibilityHint="Accepts the current terms and opens the scanner. It does not enter a draw."
+                  accessibilityState={{ checked: participationNoticeAccepted }}
+                >
+                  <View style={styles.signupConsentBox} />
+                  <Text style={styles.signupConsentText}>
+                    I have read and agree to the QR Bingo Terms and Draw Rules.
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {bingoError ? <Text style={styles.qrErrorText}>{bingoError}</Text> : null}
           </View>
         ) : scanWindowClosed ? (
           <View style={styles.qrPermissionPanel}>
@@ -2615,6 +2707,7 @@ function NativeQrScanner({
         ) : scanEnabled && hasPermission ? (
           <>
             <CameraView
+              testID="qr-bingo-live-camera"
               style={styles.qrCamera}
               facing="back"
               accessible={false}
@@ -2688,6 +2781,7 @@ function NativeQrScanner({
       (emailTestFixture || appReviewFixture) &&
       contactProfileComplete &&
       participationNoticeAccepted &&
+      !reviewingParticipationNotice &&
       vendors.length === 1 &&
       !scannedVendorIds.has(vendors[0].id) ? (
         <TouchableOpacity
@@ -2715,7 +2809,7 @@ function NativeQrScanner({
         </TouchableOpacity>
       ) : null}
 
-      {contactProfileComplete ? (
+      {contactProfileComplete && participationNoticeAccepted && !reviewingParticipationNotice ? (
         <View style={styles.qrFooter}>
           <View style={styles.qrProgressHeader}>
             <Text style={styles.qrFooterTitle}>
@@ -2765,7 +2859,8 @@ function NativeQrScanner({
             >
               {vendors.map((vendor) => {
                 const isScanned = scannedVendorIds.has(vendor.id);
-                const canReviewVendorDraw = isScanned && vendorDrawsEnabled;
+                const canReviewVendorDraw =
+                  isScanned && vendorDrawsEnabled && participationNoticeAccepted;
                 return (
                   <TouchableOpacity
                     key={vendor.id}
@@ -2807,24 +2902,37 @@ function NativeQrScanner({
               })}
             </ScrollView>
           )}
+          <TouchableOpacity
+            style={styles.qrAgreementReviewLink}
+            activeOpacity={0.78}
+            onPress={reviewParticipationNotice}
+            disabled={savingBingo || raffleSaving || !!raffleOffer}
+            accessibilityRole="button"
+            accessibilityLabel="Review QR Bingo agreement"
+            testID="qr-bingo-agreement-review"
+          >
+            <Text style={styles.qrAgreementReviewLinkText}>Review QR Bingo agreement</Text>
+          </TouchableOpacity>
         </View>
       ) : null}
       <Modal
-        visible={vendorDrawsEnabled && !!raffleOffer}
+        visible={
+          vendorDrawsEnabled && participationNoticeAccepted && !!raffleOffer
+        }
         transparent
         animationType="fade"
         onRequestClose={() => {
           setRaffleOffer(null);
           setBingoError(null);
-          resetEligibilityAttestations();
         }}
       >
         <View style={styles.raffleModalBackdrop}>
           <View style={styles.raffleModalCard}>
             <ScrollView
+              testID="vendor-draw-offer-scroll"
               style={styles.raffleModalBody}
               contentContainerStyle={styles.raffleModalCardContent}
-              showsVerticalScrollIndicator={false}
+              showsVerticalScrollIndicator
             >
               <Text style={styles.raffleModalEyebrow}>Vendor Draw</Text>
               <Text style={styles.raffleModalTitle}>
@@ -2886,30 +2994,19 @@ function NativeQrScanner({
                   ? 'The same couple will not be selected more than once.'
                   : 'A prior verified winner remains eligible for another random selection.'}
               </Text>
+              {raffleOffer?.eligibility_region ? (
+                <Text style={styles.raffleModalText}>
+                  Eligibility: {raffleOffer.eligibility_region}
+                </Text>
+              ) : null}
               <Text style={styles.raffleModalText}>
-                Vendor draws are only for eligible couples attending the wedding
-                show in person. Visit the booth, scan its QR code, then choose
-                whether to enter. The QR entry replaces a paper ballot; scanning
-                alone only records the booth visit and QR Bingo progress. No
-                purchase from the vendor is required. One entry is allowed per
-                eligible couple for this vendor draw.
-              </Text>
-              <Text style={styles.raffleModalText}>
-                By entering, I agree that Wedding Win Inc. may share my name,
-                email address, phone number, wedding date, and entry/consent
-                evidence with{' '}
+                Enter Draw confirms you meet this vendor&apos;s eligibility
+                requirements and accept its prize details and Draw Rules. Your
+                contact details will be shared with{' '}
                 {raffleOffer?.vendor_business_name ||
                   raffleOffer?.vendor_name ||
                   'the named vendor'}
-                . That vendor may use these details to administer this draw and
-                contact me with wedding-related offers and promotions. I may
-                unsubscribe from vendor marketing at any time. The named vendor
-                remains responsible for the prize, eligibility, verification,
-                delivery, and fulfilment disputes.
-              </Text>
-              <Text style={styles.raffleModalText}>
-                {raffleOffer?.apple_non_sponsor_disclaimer ||
-                  'Apple Inc. is not a sponsor of and is not involved in this promotion.'}
+                {' '}for this draw and wedding-related marketing.
               </Text>
               <TouchableOpacity
                 activeOpacity={0.76}
@@ -2917,7 +3014,6 @@ function NativeQrScanner({
                   if (!raffleOffer?.terms_url) return;
                   Linking.openURL(raffleOffer.terms_url)
                     .then(() => {
-                      setRaffleRulesViewedVersion(raffleOffer.consent_version);
                       setBingoError(null);
                     })
                     .catch(() =>
@@ -2928,129 +3024,6 @@ function NativeQrScanner({
                 accessibilityLabel="View vendor draw rules"
               >
                 <Text style={styles.raffleTermsLink}>View draw rules</Text>
-              </TouchableOpacity>
-              <Text style={styles.raffleModalText}>
-                {raffleRulesViewedVersion === raffleOffer?.consent_version
-                  ? 'Rules opened. Enter Draw now records your acceptance.'
-                  : 'Open the rules before the entry button becomes available.'}
-              </Text>
-              <TouchableOpacity
-                style={styles.signupConsentToggle}
-                onPress={() => {
-                  setAgeOfMajorityAttested((value) => !value);
-                  setBingoError(null);
-                }}
-                accessible
-                testID="vendor-draw-age-confirmation"
-                accessibilityRole="checkbox"
-                accessibilityLabel="I have reached the age of majority"
-                accessibilityHint="Required to enter this vendor draw"
-                accessibilityState={{ checked: ageOfMajorityAttested }}
-              >
-                <View
-                  style={[
-                    styles.signupConsentBox,
-                    ageOfMajorityAttested && styles.signupConsentBoxChecked,
-                  ]}
-                >
-                  {ageOfMajorityAttested ? (
-                    <Text style={styles.signupConsentCheck}>{'\u2713'}</Text>
-                  ) : null}
-                </View>
-                <Text style={styles.signupConsentText}>
-                  I have reached the age of majority.
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.signupConsentToggle}
-                onPress={() => {
-                  setResidencyAttested((value) => !value);
-                  setBingoError(null);
-                }}
-                accessible
-                testID="vendor-draw-residency-confirmation"
-                accessibilityRole="checkbox"
-                accessibilityLabel="I reside in the eligible region shown in the draw rules"
-                accessibilityHint="Required to enter this vendor draw"
-                accessibilityState={{ checked: residencyAttested }}
-              >
-                <View
-                  style={[
-                    styles.signupConsentBox,
-                    residencyAttested && styles.signupConsentBoxChecked,
-                  ]}
-                >
-                  {residencyAttested ? (
-                    <Text style={styles.signupConsentCheck}>{'\u2713'}</Text>
-                  ) : null}
-                </View>
-                <Text style={styles.signupConsentText}>
-                  I reside in the eligible region shown above.
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.signupConsentToggle}
-                onPress={() => {
-                  setExclusionsAttested((value) => !value);
-                  setBingoError(null);
-                }}
-                accessible
-                testID="vendor-draw-exclusions-confirmation"
-                accessibilityRole="checkbox"
-                accessibilityLabel="I am not excluded from this vendor draw under the official rules"
-                accessibilityHint="Required to enter this vendor draw"
-                accessibilityState={{ checked: exclusionsAttested }}
-              >
-                <View
-                  style={[
-                    styles.signupConsentBox,
-                    exclusionsAttested && styles.signupConsentBoxChecked,
-                  ]}
-                >
-                  {exclusionsAttested ? (
-                    <Text style={styles.signupConsentCheck}>{'\u2713'}</Text>
-                  ) : null}
-                </View>
-                <Text style={styles.signupConsentText}>
-                  I am not Wedding Win Inc., the named vendor or prize provider,
-                  an employee of either, or a member of an excluded
-                  employee&apos;s immediate household under the Official Rules.
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.signupConsentToggle}
-                onPress={() => {
-                  setPromotionResponsibilityAccepted((value) => !value);
-                  setBingoError(null);
-                }}
-                accessible
-                testID="vendor-draw-contact-sharing-confirmation"
-                accessibilityRole="checkbox"
-                accessibilityLabel={`I agree to share my contact information with ${raffleOffer?.vendor_business_name || raffleOffer?.vendor_name || 'this vendor'} for this draw and its wedding-related marketing, and I accept the current draw rules`}
-                accessibilityHint="Required to enter this vendor draw"
-                accessibilityState={{
-                  checked: promotionResponsibilityAccepted,
-                }}
-              >
-                <View
-                  style={[
-                    styles.signupConsentBox,
-                    promotionResponsibilityAccepted &&
-                      styles.signupConsentBoxChecked,
-                  ]}
-                >
-                  {promotionResponsibilityAccepted ? (
-                    <Text style={styles.signupConsentCheck}>{'\u2713'}</Text>
-                  ) : null}
-                </View>
-                <Text style={styles.signupConsentText}>
-                  I agree to share my contact information with{' '}
-                  {raffleOffer?.vendor_business_name ||
-                    raffleOffer?.vendor_name ||
-                    'this vendor'}{' '}
-                  for this draw and its wedding-related marketing, and I accept
-                  the current draw rules.
-                </Text>
               </TouchableOpacity>
               {bingoError ? (
                 <Text
@@ -3069,7 +3042,6 @@ function NativeQrScanner({
                 onPress={() => {
                   setRaffleOffer(null);
                   setBingoError(null);
-                  resetEligibilityAttestations();
                 }}
                 disabled={raffleSaving}
                 accessibilityRole="button"
@@ -3087,16 +3059,14 @@ function NativeQrScanner({
                 disabled={raffleEntryDisabled}
                 accessibilityRole="button"
                 accessibilityLabel="Enter vendor draw"
+                accessibilityHint="Enters this named vendor's draw under the terms you accepted before scanning."
                 accessibilityState={{ disabled: raffleEntryDisabled }}
               >
                 {raffleSaving ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
                   <Text style={styles.raffleEnterText}>
-                    {raffleRulesViewedVersion ===
-                      raffleOffer?.consent_version && vendorDrawConsentConfirmed
-                      ? 'Accept Rules & Enter'
-                      : 'Review & Confirm All'}
+                    Enter Draw
                   </Text>
                 )}
               </TouchableOpacity>
@@ -3322,6 +3292,7 @@ function NativeHome({
   onSignOut,
   nativeSession,
   vendorDrawOpenRequestId,
+  onVendorDrawOpenRequestHandled,
 }: {
   onOpenUrl: (path: string) => void;
   onOpenWebsiteBuilder: () => void;
@@ -3347,8 +3318,9 @@ function NativeHome({
   onSignOut: () => void | Promise<void>;
   nativeSession: NativeBridgeSession | null;
   vendorDrawOpenRequestId: number;
+  onVendorDrawOpenRequestHandled: (requestId: number) => void;
 }) {
-  const { width: viewportWidth, height: viewportHeight } =
+  const { width: viewportWidth, height: viewportHeight, fontScale } =
     useWindowDimensions();
   const vendorDrawSlideWidth = Math.min(Math.max(viewportWidth - 82, 260), 380);
   const vendorDrawSlideHeight = Math.round(
@@ -3431,16 +3403,6 @@ function NativeHome({
   const [raffleExcludePreviousWinners, setRaffleExcludePreviousWinners] =
     useState(true);
   const [raffleLegalAccepted, setRaffleLegalAccepted] = useState(false);
-  const [vendorEligibilityConfirmed, setVendorEligibilityConfirmed] =
-    useState(false);
-  const [vendorRulesReleaseConfirmed, setVendorRulesReleaseConfirmed] =
-    useState(false);
-  const [vendorSkillAnswer, setVendorSkillAnswer] = useState('');
-  const [vendorVerificationDate, setVendorVerificationDate] = useState('');
-  const [vendorVerificationMethod, setVendorVerificationMethod] = useState('');
-  const [vendorVerificationReference, setVendorVerificationReference] =
-    useState('');
-  const [vendorReviewNotes, setVendorReviewNotes] = useState('');
   const [vendorRaffleRulesViewedVersion, setVendorRaffleRulesViewedVersion] =
     useState('');
   const [vendorRaffleSaveMessage, setVendorRaffleSaveMessage] = useState('');
@@ -3764,7 +3726,10 @@ function NativeHome({
       setVendorRaffle(data);
       setRaffleEnabled(Boolean(data.settings?.enabled));
       setRafflePrizeTitle(data.settings?.prize_title || '');
-      setRafflePrizeDescription(data.settings?.prize_description || '');
+      const displayDescription = formatVendorPrizeDraftDescription(
+        data.settings?.prize_title || '', data.settings?.prize_description || '',
+      );
+      setRafflePrizeDescription(displayDescription);
       setRafflePrizeApproxValueCad(
         data.settings?.prize_approx_value_cad
           ? String(data.settings.prize_approx_value_cad)
@@ -3790,23 +3755,16 @@ function NativeHome({
         setVendorRaffleWizardStep(recommendedVendorRaffleWizardStep(data));
         setVendorRaffleRulesExpanded(false);
       }
-      setVendorEligibilityConfirmed(false);
-      setVendorRulesReleaseConfirmed(false);
-      setVendorSkillAnswer('');
-      setVendorVerificationDate('');
-      setVendorVerificationMethod('');
-      setVendorVerificationReference('');
-      setVendorReviewNotes('');
       vendorRaffleLastSavedRef.current = vendorRaffleSignature(
         Boolean(data.settings?.enabled),
-        data.settings?.prize_description || '',
+        displayDescription,
         data.settings?.prize_approx_value_cad
           ? String(data.settings.prize_approx_value_cad)
           : '',
         normalizeRaffleMaxWinners(data.settings?.max_winners),
         data.settings?.exclude_previous_winners !== false,
-        Boolean(data.settings?.legal_terms_accepted),
-        data.settings?.legal_terms_version || '',
+        currentRulesAccepted,
+        currentRulesAccepted ? data.rules_version || '' : '',
       );
       vendorRaffleLastFailedSignatureRef.current = '';
       setVendorRaffleSaveError(null);
@@ -3928,8 +3886,14 @@ function NativeHome({
     }
 
     lastVendorDrawOpenRequestRef.current = vendorDrawOpenRequestId;
+    onVendorDrawOpenRequestHandled(vendorDrawOpenRequestId);
     openVendorRaffle();
-  }, [openVendorRaffle, showVendorMenu, vendorDrawOpenRequestId]);
+  }, [
+    onVendorDrawOpenRequestHandled,
+    openVendorRaffle,
+    showVendorMenu,
+    vendorDrawOpenRequestId,
+  ]);
 
   const saveVendorRaffle = useCallback(
     async (options: { silent?: boolean } = {}) => {
@@ -4070,7 +4034,24 @@ function NativeHome({
           );
         }
         setVendorRaffle(data);
-        vendorRaffleLastSavedRef.current = savedSignature;
+        // Preserve formatting only when the complete server value is the same;
+        // never hide truncation or replace newer edits with an older response.
+        const serverDescription = data.settings.prize_description || '';
+        const sameDescription = (value: string) => value.replace(/\s+/g, ' ').trim();
+        const displayDescription = sameDescription(draftPrizeDescription) === sameDescription(serverDescription)
+          ? draftPrizeDescription : serverDescription;
+        const serverCurrency = data.settings.prize_approx_value_cad
+          ? String(data.settings.prize_approx_value_cad) : '';
+        const displayCurrency = draftPrizeApproxValueCad.trim() !== ''
+          && Number.isFinite(Number(draftPrizeApproxValueCad))
+          && Number(draftPrizeApproxValueCad) === Number(serverCurrency)
+          ? draftPrizeApproxValueCad : serverCurrency;
+        vendorRaffleLastSavedRef.current = vendorRaffleSignature(
+          Boolean(data.settings.enabled), displayDescription, displayCurrency,
+          normalizeRaffleMaxWinners(data.settings.max_winners),
+          data.settings.exclude_previous_winners !== false,
+          acceptancePersisted, acceptancePersisted ? data.rules_version || '' : '',
+        );
         vendorRaffleLastFailedSignatureRef.current = '';
         if (
           vendorRaffleLocalEditGenerationRef.current === saveEditGeneration &&
@@ -4079,12 +4060,8 @@ function NativeHome({
           vendorRaffleHydratingRef.current = true;
           setRaffleEnabled(Boolean(data.settings?.enabled));
           setRafflePrizeTitle(data.settings?.prize_title || '');
-          setRafflePrizeDescription(data.settings?.prize_description || '');
-          setRafflePrizeApproxValueCad(
-            data.settings?.prize_approx_value_cad
-              ? String(data.settings.prize_approx_value_cad)
-              : '',
-          );
+          setRafflePrizeDescription(displayDescription);
+          setRafflePrizeApproxValueCad(displayCurrency);
           setRaffleMaxWinners(
             normalizeRaffleMaxWinners(data.settings?.max_winners),
           );
@@ -4440,14 +4417,14 @@ function NativeHome({
                 native_session: nativeSession,
               }),
             },
-            'Loading the entrant selection list took too long. Check your connection and try again.',
+          'Loading your contacts took too long. Check your connection and try again.',
           );
         if (!requestIsCurrent()) return;
         if (!response.ok || data?.ok === false) {
           throw new Error(
             data?.detail ||
               data?.error ||
-              'Could not load the entrant selection list.',
+              'Could not load your contacts.',
           );
         }
         setVendorRaffleEntries(data.entries || []);
@@ -4475,7 +4452,7 @@ function NativeHome({
           setVendorRaffleError(
             error instanceof Error
               ? error.message
-              : 'Could not load the entrant selection list.',
+              : 'Could not load your contacts.',
           );
         }
       } finally {
@@ -4532,13 +4509,13 @@ function NativeHome({
       : typedReason;
     if (!participantReference) {
       setVendorRaffleError(
-        'This entrant is missing its protected participant reference. Refresh the list and try again.',
+        'This contact could not be updated. Refresh the list and try again.',
       );
       return;
     }
     if (!included && !reason) {
       setVendorRaffleError(
-        'Add a short reason before excluding this entrant from random selection.',
+        'Add a short reason before removing this couple from the draw.',
       );
       return;
     }
@@ -4547,10 +4524,10 @@ function NativeHome({
     if (!(await prepareVendorRaffleAction(actionKey))) return;
     vendorRaffleActionInFlightRef.current = `confirm:${actionKey}`;
     Alert.alert(
-      included ? 'Restore to selection pool?' : 'Exclude from selection pool?',
+      included ? 'Add back to the draw?' : 'Remove from the draw?',
       included
-        ? `${entry.couple_name || 'This entrant'} will be included again. The no-repeat winner rule may still keep a prior winner out of the eligible pool. Their opted-in record has remained in the CSV.`
-        : `${entry.couple_name || 'This entrant'} will stay in the entrant CSV, but will not be eligible for random selection until restored.`,
+        ? `${entry.couple_name || 'This couple'} can be picked again, unless your previous-winner setting prevents it. Their contact details stay in your list.`
+        : `${entry.couple_name || 'This couple'} cannot be picked unless you add them back. Their contact details stay in your list.`,
       [
         {
           text: 'Cancel',
@@ -4564,7 +4541,7 @@ function NativeHome({
           },
         },
         {
-          text: included ? 'Restore' : 'Exclude',
+          text: included ? 'Add back' : 'Remove',
           style: included ? 'default' : 'destructive',
           onPress: async () => {
             if (!accountMutationIsCurrent(deletionGeneration)) {
@@ -4606,15 +4583,15 @@ function NativeHome({
                     }),
                   },
                   included
-                    ? 'Restoring this entrant took too long. Check your connection and try again.'
-                    : 'Excluding this entrant took too long. Check your connection and try again.',
+                    ? 'Adding this couple back took too long. Check your connection and try again.'
+                    : 'Removing this couple took too long. Check your connection and try again.',
                 );
               if (!accountMutationIsCurrent(deletionGeneration)) return;
               if (!response.ok || data?.ok === false) {
                 throw new Error(
                   data?.detail ||
                     data?.error ||
-                    'Could not update this entrant.',
+                    'Could not update this couple.',
                 );
               }
               setVendorRaffle((current) =>
@@ -4661,17 +4638,17 @@ function NativeHome({
                 [participantReference]: '',
               }));
               Alert.alert(
-                included ? 'Entrant restored' : 'Entrant excluded',
+                included ? 'Added back to the draw' : 'Removed from the draw',
                 included
-                  ? 'This entrant is included again. If the no-repeat winner rule applies, a prior winner still remains ineligible. Their CSV record was never removed.'
-                  : 'This entrant is out of the selection pool but remains in the vendor CSV.',
+                  ? 'This couple is back in the draw. Your previous-winner setting still applies. Their contact details stay in your list.'
+                  : 'This couple cannot be picked now. Their contact details stay in your list.',
               );
             } catch (error) {
               if (!accountMutationIsCurrent(deletionGeneration)) return;
               setVendorRaffleError(
                 error instanceof Error
                   ? error.message
-                  : 'Could not update this entrant.',
+                  : 'Could not update this couple.',
               );
             } finally {
               if (
@@ -4772,7 +4749,7 @@ function NativeHome({
               if (!accountMutationIsCurrent(deletionGeneration)) return;
               Alert.alert(
                 'Potential Winner Selected',
-                `${data.draw?.winner_name || 'Potential winner selected.'}\n\nNo email or prize claim was sent. Complete the verification shown in the dashboard, then use that verified selection's separate Send Winner Email button.`,
+                `${data.draw?.winner_name || 'Potential winner selected.'}\n\nNo email was sent. Complete the checks in the Draw Rules, then send the winner email.`,
               );
             } catch (error) {
               if (!accountMutationIsCurrent(deletionGeneration)) return;
@@ -4805,6 +4782,17 @@ function NativeHome({
       vendorRaffleActionInFlightRef.current
     )
       return;
+    const currentDraw = (vendorRaffle?.draws || []).find(
+      (selection) => selection.id === draw.id,
+    );
+    const canConfirmAndSend = currentDraw?.selection_status === 'potential' &&
+      (currentDraw.can_confirm_and_send_notice === true ||
+        currentDraw.can_confirm_and_test_suppressed_notice === true);
+    const canSendVerified = currentDraw?.selection_status === 'verified' &&
+      (currentDraw.can_send_notice === true ||
+        currentDraw.can_test_suppressed_notice === true);
+    if (!currentDraw || currentDraw.notice_complete ||
+      (!canConfirmAndSend && !canSendVerified)) return;
     const deletionGeneration = getAccountDeletionGeneration();
     const actionKey = `send-winner:${draw.id}`;
     if (!(await prepareVendorRaffleAction(actionKey))) return;
@@ -4814,10 +4802,8 @@ function NativeHome({
         ? 'Test the send step?'
         : 'Send winner email?',
       vendorRaffle?.app_review_fixture
-        ? 'This isolated App Review fixture will exercise the separate send action but will not send an email or record a delivery timestamp.'
-        : vendorRaffle?.email_test_fixture
-          ? 'This isolated QA fixture sends one production-rendered test message only to its allowlisted mailbox. It does not award a real prize.'
-          : `Send the verified winner email for selection #${draw.draw_number} now? Selection and verification are already recorded; this action only sends the fulfillment notices.`,
+        ? 'Confirm you have completed the checks in the Draw Rules. This App Review test will not send email.'
+        : `Confirm you have completed the checks in the Draw Rules. WeddingWin.ca will email ${currentDraw.winner_name || 'this couple'}.`,
       [
         {
           text: 'Cancel',
@@ -4848,6 +4834,8 @@ function NativeHome({
             )
               return;
             vendorRaffleActionInFlightRef.current = `request:${actionKey}`;
+            vendorRaffleEntriesRequestGenerationRef.current += 1;
+            vendorRaffleEntriesInFlightRef.current = null;
             setVendorRaffleSendingDrawId(draw.id);
             setVendorRaffleError(null);
             try {
@@ -4866,6 +4854,7 @@ function NativeHome({
                     action: 'vendor_raffle_send_notice',
                     native_session: nativeSession,
                     draw_id: draw.id,
+                    winner_checks_confirmed: true,
                     client_platform: 'ios',
                   }),
                 },
@@ -4873,18 +4862,27 @@ function NativeHome({
               );
               if (!accountMutationIsCurrent(deletionGeneration)) return;
               if (!response.ok || data?.ok === false) {
+                if (isCompleteVendorRaffleDashboard(data) &&
+                  data.vendor.id === vendorRaffle?.vendor?.id &&
+                  data.event_key === vendorRaffle?.event_key) {
+                  applyVendorRaffle(data, { preserveWizardContext: true });
+                }
                 throw new Error(
                   data?.detail ||
                     data?.error ||
                     'Could not send the winner email.',
                 );
               }
-              if (!isCompleteVendorRaffleDashboard(data)) {
+              if (!isCompleteVendorRaffleDashboard(data) ||
+                data.vendor.id !== vendorRaffle?.vendor?.id ||
+                data.event_key !== vendorRaffle?.event_key) {
                 throw new Error(
                   'The winner-email response was incomplete. Reload the vendor draw before trying again.',
                 );
               }
               applyVendorRaffle(data, { preserveWizardContext: true });
+              await fetchVendorRaffleEntries();
+              if (!accountMutationIsCurrent(deletionGeneration)) return;
               if (
                 data.suppressed_test_complete === true ||
                 data.suppressed === true
@@ -4896,8 +4894,13 @@ function NativeHome({
                 );
                 return;
               }
-              const vendorSent = data.email_result?.vendor?.sent;
-              const coupleSent = data.email_result?.couple?.sent;
+              // A disabled recipient can be reported as complete by the sender.
+              // Only persisted timestamps prove that a recipient was emailed.
+              const sentDraw = data.draw?.id === currentDraw.id
+                ? data.draw
+                : data.draws?.find((row) => row.id === currentDraw.id);
+              const vendorSent = Boolean(sentDraw?.vendor_email_sent_at);
+              const coupleSent = Boolean(sentDraw?.couple_email_sent_at);
               Alert.alert(
                 'Winner Email Sent',
                 vendorSent && coupleSent
@@ -4930,126 +4933,45 @@ function NativeHome({
     );
   };
 
-  const reviewVendorPotentialWinner = async (
-    drawId: string,
-    decision: 'confirm' | 'disqualify',
-  ) => {
+
+  const replaceVendorPotentialWinner = async (drawId: string) => {
     if (
       accountDeletionIsInFlight() ||
       !nativeSession?.user_id ||
       !nativeSession?.token ||
       vendorRaffleReviewing ||
-      vendorRaffleActionInFlightRef.current
-    )
-      return;
+      vendorRaffleActionInFlightRef.current ||
+      !(vendorRaffle?.draws || []).some(
+        (draw) => draw.id === drawId && draw.selection_status === 'potential',
+      )
+    ) return;
     const deletionGeneration = getAccountDeletionGeneration();
-    const showVendorReviewError = (message: string) => {
-      setVendorRaffleError(message);
-      Alert.alert(
-        decision === 'confirm'
-          ? 'Complete winner verification'
-          : 'Disqualification reason required',
-        message,
-      );
-    };
-    const verificationDate = vendorVerificationDate.trim();
-    const verificationMethod = vendorVerificationMethod.trim();
-    const verificationReference = vendorVerificationReference.trim();
-    const additionalReviewNotes = vendorReviewNotes.trim();
-    let confirmationEvidenceNotes = '';
-    if (decision === 'confirm') {
-      if (!vendorEligibilityConfirmed) {
-        showVendorReviewError(
-          'Attest that your business independently verified eligibility under the current Official Rules.',
-        );
-        return;
-      }
-      if (!vendorRulesReleaseConfirmed) {
-        showVendorReviewError(
-          'Attest that your business obtained the entrant declaration/release outside Wedding Win.',
-        );
-        return;
-      }
-      if (!vendorSkillAnswer.trim()) {
-        showVendorReviewError(
-          "Enter the selected couple's answer to the verification question.",
-        );
-        return;
-      }
-      if (!isValidIsoCalendarDate(verificationDate)) {
-        showVendorReviewError(
-          'Enter the verification date in YYYY-MM-DD format.',
-        );
-        return;
-      }
-      if (!verificationMethod) {
-        showVendorReviewError(
-          'State how your business completed the verification, such as by phone, video call, email, or in person.',
-        );
-        return;
-      }
-      if (!verificationReference) {
-        showVendorReviewError(
-          'Add a non-sensitive evidence reference, such as a call-log time, email subject/date, or signed-release file ID.',
-        );
-        return;
-      }
-      confirmationEvidenceNotes = [
-        `Date: ${verificationDate}`,
-        `Method: ${verificationMethod}`,
-        `Reference: ${verificationReference}`,
-        additionalReviewNotes
-          ? `Additional notes: ${additionalReviewNotes}`
-          : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-    }
-    if (decision === 'disqualify' && !additionalReviewNotes) {
-      showVendorReviewError(
-        'Add a clear disqualification reason before preserving this decision.',
-      );
-      return;
-    }
-
-    const actionKey = `review:${drawId}:${decision}`;
+    const actionKey = `replace:${drawId}`;
     if (!(await prepareVendorRaffleAction(actionKey))) return;
     vendorRaffleActionInFlightRef.current = `confirm:${actionKey}`;
     Alert.alert(
-      decision === 'confirm'
-        ? 'Confirm potential winner?'
-        : 'Disqualify potential winner?',
-      decision === 'confirm'
-        ? "Your business confirms it completed every required winner-verification step and saved dated evidence. Wedding Win records your attestation; it does not perform or certify your business's eligibility, release, or prize-fulfillment work."
-        : 'This preserves the reason in the audit record and allows a replacement potential winner to be selected.',
+      'Choose a different winner?',
+      'We will randomly choose another eligible couple. If no one else is available, your current choice stays. No email will be sent.',
       [
         {
           text: 'Cancel',
           style: 'cancel',
           onPress: () => {
-            if (
-              vendorRaffleActionInFlightRef.current === `confirm:${actionKey}`
-            ) {
+            if (vendorRaffleActionInFlightRef.current === `confirm:${actionKey}`) {
               vendorRaffleActionInFlightRef.current = null;
             }
           },
         },
         {
-          text: decision === 'confirm' ? 'Confirm' : 'Disqualify',
-          style: decision === 'disqualify' ? 'destructive' : 'default',
+          text: 'Choose a different winner',
           onPress: async () => {
             if (!accountMutationIsCurrent(deletionGeneration)) {
-              if (
-                vendorRaffleActionInFlightRef.current === `confirm:${actionKey}`
-              ) {
+              if (vendorRaffleActionInFlightRef.current === `confirm:${actionKey}`) {
                 vendorRaffleActionInFlightRef.current = null;
               }
               return;
             }
-            if (
-              vendorRaffleActionInFlightRef.current !== `confirm:${actionKey}`
-            )
-              return;
+            if (vendorRaffleActionInFlightRef.current !== `confirm:${actionKey}`) return;
             vendorRaffleActionInFlightRef.current = `request:${actionKey}`;
             vendorRaffleEntriesRequestGenerationRef.current += 1;
             vendorRaffleEntriesInFlightRef.current = null;
@@ -5067,58 +4989,48 @@ function NativeHome({
                       'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                      action: 'vendor_raffle_review',
+                      action: 'vendor_raffle_replace',
                       native_session: nativeSession,
                       draw_id: drawId,
-                      decision,
-                      skill_question_answer: vendorSkillAnswer.trim(),
-                      eligibility_confirmed: vendorEligibilityConfirmed,
-                      rules_release_confirmed: vendorRulesReleaseConfirmed,
-                      review_notes:
-                        decision === 'confirm'
-                          ? confirmationEvidenceNotes
-                          : additionalReviewNotes,
-                      disqualification_reason: additionalReviewNotes,
                     }),
                   },
-                  'Recording the potential-winner review took too long. Check your connection and try again.',
+                  'Choosing a different winner took too long. Reload the Winner step to check the result before trying again.',
                 );
               if (!accountMutationIsCurrent(deletionGeneration)) return;
-              if (!response.ok || data?.ok === false) {
-                throw new Error(
-                  data?.detail ||
-                    data?.error ||
-                    'Could not record the potential-winner review.',
-                );
+              if (!isCompleteVendorRaffleDashboard(data) ||
+                data.vendor.id !== vendorRaffle?.vendor?.id ||
+                data.event_key !== vendorRaffle?.event_key) {
+                throw new Error('The winner response was incomplete. Reload the Winner step to check the result before trying again.');
               }
-              if (!isCompleteVendorRaffleDashboard(data)) {
-                throw new Error(
-                  'The winner-review response was incomplete. Reload the vendor draw before trying again.',
-                );
+              if (!response.ok || data.ok === false) {
+                applyVendorRaffle(data, { preserveWizardContext: true });
+                await fetchVendorRaffleEntries();
+                if (!accountMutationIsCurrent(deletionGeneration)) return;
+                if (response.status === 409 && data.code === 'no_replacement_available' &&
+                  data.draws?.some((draw) => draw.id === drawId && draw.selection_status === 'potential')) {
+                  Alert.alert('No other eligible couples', 'Your current potential winner stays selected. No email was sent.');
+                  return;
+                }
+                throw new Error(data.detail || data.error || 'Could not choose a different winner.');
+              }
+              const replacement = data.draw;
+              if (!replacement?.id || replacement.id === drawId ||
+                replacement.selection_status !== 'potential' ||
+                !data.draws?.some((draw) => draw.id === replacement.id && draw.selection_status === 'potential') ||
+                !data.draws?.some((draw) => draw.id === drawId && draw.selection_status === 'replaced')) {
+                throw new Error('The replacement response was incomplete. Reload the Winner step to check the result before trying again.');
               }
               applyVendorRaffle(data, { preserveWizardContext: true });
               await fetchVendorRaffleEntries();
               if (!accountMutationIsCurrent(deletionGeneration)) return;
-              Alert.alert(
-                decision === 'confirm'
-                  ? 'Verification Recorded'
-                  : 'Potential Winner Disqualified',
-                decision === 'confirm'
-                  ? 'Your vendor attestation and evidence reference are recorded. Your business remains responsible for winner verification and prize fulfillment; Wedding Win has not performed or certified that work.'
-                  : 'The audit record is preserved. You may select a replacement potential winner.',
-              );
+              Alert.alert('New potential winner selected', 'Review this couple before sending their winner email. Your contact list and previous selection are kept. No email was sent.');
             } catch (error) {
               if (!accountMutationIsCurrent(deletionGeneration)) return;
-              const message =
-                error instanceof Error
-                  ? error.message
-                  : 'Could not record the potential-winner review.';
+              const message = error instanceof Error ? error.message : 'Could not choose a different winner.';
               setVendorRaffleError(message);
-              Alert.alert('Winner review not saved', message);
+              Alert.alert('Check the winner status', message);
             } finally {
-              if (
-                vendorRaffleActionInFlightRef.current === `request:${actionKey}`
-              ) {
+              if (vendorRaffleActionInFlightRef.current === `request:${actionKey}`) {
                 vendorRaffleActionInFlightRef.current = null;
               }
               setVendorRaffleReviewing(false);
@@ -5161,14 +5073,14 @@ function NativeHome({
               native_session: nativeSession,
             }),
           },
-          'Creating the draw entrant list took too long. Check your connection and try again.',
+          'Preparing your contact list took too long. Check your connection and try again.',
         );
       if (!accountMutationIsCurrent(deletionGeneration)) return;
       if (!response.ok || data?.ok === false || !data.report) {
         throw new Error(
           data?.detail ||
             data?.error ||
-            'Could not create the draw entrant list.',
+            'Could not prepare your contact list.',
         );
       }
       const expectedVendorBingoId = String(
@@ -5207,13 +5119,13 @@ function NativeHome({
         typeof data.report.csv !== 'string'
       ) {
         throw new Error(
-          'The entrant list did not match this vendor, event, current rules, or required CSV privacy contract.',
+          'We could not confirm this contact list belongs to your current draw. Refresh and try again.',
         );
       }
       if (data.report.row_count < 1) {
         Alert.alert(
           'No current entrants',
-          'No current vendor-draw entries with the required entrant attestations are available to report.',
+          'There are no couples to download for this draw yet.',
         );
         return;
       }
@@ -5231,11 +5143,11 @@ function NativeHome({
         await Sharing.shareAsync(reportFile.uri, {
           mimeType: 'text/csv',
           UTI: 'public.comma-separated-values-text',
-          dialogTitle: 'Save WeddingWin draw entrant list',
+          dialogTitle: 'Save WeddingWin contact list',
         });
         if (!accountMutationIsCurrent(deletionGeneration)) return;
         setVendorRaffleSaveMessage(
-          `Entrant list ready: ${data.report.row_count} current ${data.report.row_count === 1 ? 'entry' : 'entries'}. Every listed couple accepted this vendor's draw and wedding-related marketing terms.`,
+          `Your contact list is ready: ${data.report.row_count} ${data.report.row_count === 1 ? 'couple' : 'couples'}.`,
         );
       } finally {
         try {
@@ -5249,7 +5161,7 @@ function NativeHome({
       setVendorRaffleError(
         error instanceof Error
           ? error.message
-          : 'Could not create the draw entrant list.',
+          : 'Could not prepare your contact list.',
       );
     } finally {
       if (vendorRaffleActionInFlightRef.current === `request:${actionKey}`) {
@@ -5296,9 +5208,6 @@ function NativeHome({
       vendorRaffle?.selection_pool_count ??
       vendorRaffleEntrantCount,
   );
-  const vendorRaffleExcludedCount = Number(
-    vendorRaffle?.excluded_entry_count ?? vendorRaffle?.excluded_count ?? 0,
-  );
   const vendorRaffleHasEligibleEntries = vendorRaffleSelectionPoolCount > 0;
   const vendorPendingPotentialWinner = (vendorRaffle?.draws || []).find(
     (draw) => draw.selection_status === 'potential',
@@ -5337,6 +5246,13 @@ function NativeHome({
   );
   const vendorRafflePrizeControlsDisabled =
     vendorRaffleMaterialLocked || vendorRaffleSettingsMutationBusy;
+  // A background draft save must not dismiss the keyboard. Material locks,
+  // opening a draw and other mutations still prevent prize editing.
+  const vendorRafflePrizeTextDisabled = Boolean(
+    vendorRaffleMaterialLocked || raffleEnabled ||
+    vendorRaffleDrawing || vendorRaffleSendingDrawId || vendorRaffleReviewing ||
+    vendorRaffleExporting || vendorRaffleEntryUpdatingReference,
+  );
   const vendorRaffleSaveMessageLower = vendorRaffleSaveMessage.toLowerCase();
   const vendorRaffleSaveHasIssue =
     Boolean(vendorRaffleSaveError) ||
@@ -5353,16 +5269,16 @@ function NativeHome({
     rafflePrizeDescription.trim() && Number(rafflePrizeApproxValueCad) > 0,
   );
   const vendorRaffleWizardStepTitle = {
-    1: 'Describe your prize',
-    2: 'Review rules and open entries',
-    3: 'Manage couples',
-    4: 'Select and contact a winner',
+    1: 'What can couples win?',
+    2: 'Ready to open your draw?',
+    3: 'Your couples',
+    4: 'Pick your winner',
   }[vendorRaffleWizardStep];
   const vendorRaffleWizardStepDescription = {
-    1: 'Add what the winner receives, its maximum value or savings, and how many winners you want.',
-    2: 'Accept the current vendor draw rules, review the final summary, and choose whether couples can enter.',
-    3: 'View every couple who entered, manage the selection pool, and download the contact list.',
-    4: 'Select a potential winner, complete the required checks, then send the separate winner email.',
+    1: 'A free gift, service, or discount — you choose.',
+    2: 'Review the rules, then turn your draw on.',
+    3: 'See who entered and download their contact details.',
+    4: 'Choose first. Check the draw rules. Then send the email.',
   }[vendorRaffleWizardStep];
   const vendorRaffleCanUpdateEntries = Boolean(
     vendorRaffle?.can_update_entries !== false &&
@@ -5392,14 +5308,6 @@ function NativeHome({
       return matchesFilter && (!query || searchable.includes(query));
     });
   }, [vendorRaffleEntries, vendorRaffleEntryFilter, vendorRaffleEntryQuery]);
-  const vendorPotentialWinnerConfirmationReady = Boolean(
-    vendorEligibilityConfirmed &&
-    vendorRulesReleaseConfirmed &&
-    vendorSkillAnswer.trim() &&
-    isValidIsoCalendarDate(vendorVerificationDate) &&
-    vendorVerificationMethod.trim() &&
-    vendorVerificationReference.trim(),
-  );
 
   const openVendorRaffleWizardStep = (step: VendorRaffleWizardStep) => {
     setVendorRaffleWizardStep(step);
@@ -5527,6 +5435,7 @@ function NativeHome({
       return;
     }
 
+    Keyboard.dismiss();
     profileSavePressInFlightRef.current = true;
     void onCompleteProfile({
       firstName: profileFirstName.trim(),
@@ -5544,6 +5453,7 @@ function NativeHome({
         scrollEnabled
         contentContainerStyle={[styles.nativeContent]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <ImageBackground
           source={HERO_IMAGE}
@@ -6553,19 +6463,15 @@ function NativeHome({
             accessibilityViewIsModal
           >
             <View style={styles.vendorRaffleHeader}>
-              <View>
+              <View style={styles.vendorRaffleHeaderCopy}>
                 <Text style={styles.vendorRaffleEyebrow}>
-                  Wedding show tools
+                  QR Bingo
                 </Text>
                 <Text
                   style={styles.vendorRaffleTitle}
                   accessibilityRole="header"
                 >
-                  QR Bingo Vendor Draw
-                </Text>
-                <Text style={styles.vendorRaffleHeaderText}>
-                  Set up your booth prize in four short steps, then manage
-                  couples and winners from the same place.
+                  Your prize draw
                 </Text>
               </View>
               <TouchableOpacity
@@ -6591,7 +6497,7 @@ function NativeHome({
                 ref={vendorRaffleScrollRef}
                 style={styles.vendorRaffleScroll}
                 testID="vendor-draw-wizard-scroll"
-                showsVerticalScrollIndicator={false}
+                showsVerticalScrollIndicator
                 keyboardDismissMode="interactive"
                 keyboardShouldPersistTaps="handled"
               >
@@ -6608,28 +6514,24 @@ function NativeHome({
                 {vendorRaffle?.vendor ? (
                   <>
                     {vendorRaffle.app_review_fixture ? (
-                      <View style={styles.vendorRaffleDrawStatusCard}>
+                      <View style={styles.vendorRaffleTestNotice}>
                         <Text style={styles.vendorRaffleDrawStatusLabel}>
                           Isolated App Review fixture
                         </Text>
-                        <Text style={styles.vendorRaffleDrawStatusText}>
-                          Test-only data is separated from the production event.
-                          Early selection is enabled for review, no real prize
-                          is awarded, outbound email is suppressed, and the
-                          private vendor listing remains inactive.
+                        <Text style={styles.vendorRaffleFieldHelp}>
+                          Test mode — no real prizes or emails.
                         </Text>
                       </View>
                     ) : null}
                     {vendorRaffle.email_test_fixture ? (
                       <View style={styles.vendorRaffleDrawStatusCard}>
                         <Text style={styles.vendorRaffleDrawStatusLabel}>
-                          Isolated prize-email QA fixture
+                          Email test mode — no real prize
                         </Text>
                         <Text style={styles.vendorRaffleDrawStatusText}>
-                          This test uses Sound Of Harmony and one allowlisted
-                          couple account in a separate event. It cannot select a
-                          production entrant, cannot send a vendor copy, and
-                          does not award a real prize.
+                          Only the approved test recipient can receive this
+                          email. Real draw entries are not included, and no
+                          vendor email is sent.
                         </Text>
                       </View>
                     ) : null}
@@ -6650,10 +6552,7 @@ function NativeHome({
                       >
                         <View style={styles.vendorRaffleGuideCopy}>
                           <Text style={styles.vendorRaffleGuideTitle}>
-                            New here? See how it works
-                          </Text>
-                          <Text style={styles.vendorRaffleGuideText}>
-                            Optional five-page visual guide
+                            Need help? See how it works
                           </Text>
                         </View>
                         <ChevronDown
@@ -6669,6 +6568,13 @@ function NativeHome({
                       </TouchableOpacity>
                       {vendorRaffleGuideExpanded ? (
                         <View style={styles.vendorRaffleGuideContent}>
+                          {vendorRaffle.app_review_fixture ? (
+                            <Text style={styles.vendorRaffleFieldHelp}>
+                              This isolated test uses separate entries, allows
+                              early selection, sends no email and awards no
+                              real prize. The vendor listing stays private.
+                            </Text>
+                          ) : null}
                           <View
                             style={[
                               styles.vendorRaffleInfographicFrame,
@@ -6746,9 +6652,6 @@ function NativeHome({
                       ) : null}
                     </View>
                     <View style={styles.vendorRaffleWizardCard}>
-                      <Text style={styles.vendorRaffleSectionEyebrow}>
-                        Prize setup wizard
-                      </Text>
                       <View
                         style={styles.vendorRaffleProcessRow}
                         accessibilityRole="tablist"
@@ -6836,14 +6739,14 @@ function NativeHome({
                             >
                               <View style={styles.vendorRaffleRulesHeaderCopy}>
                                 <Text style={styles.vendorRaffleRulesTitle}>
-                                  Vendor draw agreement
+                                  Rules &amp; responsibilities
                                 </Text>
                                 <Text style={styles.vendorRaffleRulesSummary}>
                                   {raffleLegalAccepted &&
                                   vendorRaffleRulesViewedVersion ===
                                     vendorRaffleRulesVersion
-                                    ? 'Accepted. You can review the legal details anytime.'
-                                    : 'Open the Official Rules, then confirm below.'}
+                                    ? 'Agreed — view anytime.'
+                                    : 'Read before agreeing below.'}
                                 </Text>
                               </View>
                               <View
@@ -6854,9 +6757,7 @@ function NativeHome({
                                     styles.vendorRaffleRulesHeaderActionText
                                   }
                                 >
-                                  {vendorRaffleRulesExpanded
-                                    ? 'Hide details'
-                                    : 'View details'}
+                                  {vendorRaffleRulesExpanded ? 'Hide' : 'Read'}
                                 </Text>
                                 <ChevronDown
                                   size={18}
@@ -6880,6 +6781,10 @@ function NativeHome({
                                     Vendor responsibilities
                                   </Text>
                                   <Text style={styles.vendorRaffleInfoText}>
+                                    By agreeing, you confirm you are authorized
+                                    to accept the current Official Rules and
+                                    vendor responsibilities for this business.
+                                    {'\n\n'}
                                     {vendorResponsibilityDisclosure ||
                                       'The current vendor responsibility agreement could not be verified. Reload before accepting or opening entries.'}
                                   </Text>
@@ -6967,6 +6872,7 @@ function NativeHome({
                               <TouchableOpacity
                                 style={[
                                   styles.signupConsentToggle,
+                                  styles.vendorRaffleAgreementToggle,
                                   vendorRaffleSettingsMutationBusy &&
                                     styles.loginButtonDisabled,
                                 ]}
@@ -7027,9 +6933,7 @@ function NativeHome({
                                     styles.vendorRaffleAgreementText,
                                   ]}
                                 >
-                                  I confirm I have read and accept the current
-                                  Official Rules and vendor responsibilities,
-                                  and I am authorized to do so for this vendor.
+                                  I have read and agree to the rules above.
                                 </Text>
                               </TouchableOpacity>
                             </View>
@@ -7109,8 +7013,8 @@ function NativeHome({
                               </Text>
                               <Text style={styles.vendorRaffleToggleText}>
                                 {raffleEnabled
-                                  ? 'Your draw is open. Couples who scan your booth can choose to enter.'
-                                  : 'Your draw is closed. Couples can still scan your booth for QR Bingo, but they will not see an option to enter your draw.'}
+                                  ? 'Couples can now choose to enter your draw.'
+                                  : 'Off: couples can scan your booth, but cannot enter your draw.'}
                               </Text>
                             </View>
                           </TouchableOpacity>
@@ -7120,7 +7024,7 @@ function NativeHome({
                         {vendorRaffleWizardStep === 1 ? (
                           <View testID="vendor-draw-step-prize">
                             <Text style={styles.inputLabel}>
-                              Prize or discount details
+                              Your prize or discount
                             </Text>
                             <View
                               style={[
@@ -7130,13 +7034,13 @@ function NativeHome({
                             >
                               <TextInput
                                 value={rafflePrizeDescription}
-                                editable={!vendorRafflePrizeControlsDisabled}
+                                editable={!vendorRafflePrizeTextDisabled}
                                 onChangeText={(value) => {
                                   markVendorRaffleLocalEdit();
                                   setRafflePrizeDescription(value);
                                 }}
                                 placeholder={
-                                  'Example: 50% off a photography package\nMaximum discount $500. New bookings only; include the package, expiry, and exclusions.'
+                                  '50% off a photography package\nSave up to $500. New bookings only. Valid until January 31, 2027.'
                                 }
                                 placeholderTextColor="#A8A8AD"
                                 style={[
@@ -7146,23 +7050,23 @@ function NativeHome({
                                 testID="vendor-draw-prize-details"
                                 accessibilityLabel="Prize or discount details"
                                 accessibilityState={{
-                                  disabled: vendorRafflePrizeControlsDisabled,
+                                  disabled: vendorRafflePrizeTextDisabled,
                                 }}
                                 multiline
                               />
                             </View>
                             <Text style={styles.vendorRaffleFieldHelp}>
                               {vendorRaffleMaterialLocked
-                                ? 'Prize details are locked for this open draw. See Vendor Draw Rules for why.'
-                                : 'Use the first line as the prize name. Discounts such as 50% off are supported—state the service or package, maximum savings, expiry, booking requirements, and exclusions.'}
+                                ? 'This draw is open, so prize details are locked.'
+                                : 'Start with the prize name. Add any expiry date or conditions below it.'}
                             </Text>
                             <Text style={styles.inputLabel}>
-                              Prize value or maximum savings (CAD)
+                              Value or maximum savings ($ CAD)
                             </Text>
                             <View style={styles.inputShell}>
                               <TextInput
                                 value={rafflePrizeApproxValueCad}
-                                editable={!vendorRafflePrizeControlsDisabled}
+                                editable={!vendorRafflePrizeTextDisabled}
                                 onChangeText={(value) => {
                                   markVendorRaffleLocalEdit();
                                   setRafflePrizeApproxValueCad(
@@ -7176,15 +7080,12 @@ function NativeHome({
                                 testID="vendor-draw-prize-value"
                                 accessibilityLabel="Approximate prize value or maximum savings in Canadian dollars"
                                 accessibilityState={{
-                                  disabled: vendorRafflePrizeControlsDisabled,
+                                  disabled: vendorRafflePrizeTextDisabled,
                                 }}
                               />
                             </View>
                             <Text style={styles.vendorRaffleFieldHelp}>
-                              Required before entries can open. For a percentage
-                              discount, enter the largest dollar amount a winner
-                              can save. Couples see this amount before opting
-                              in.
+                              For a discount, enter the most the winner can save.
                             </Text>
                             <Text style={styles.inputLabel}>
                               Number of winners
@@ -7227,10 +7128,7 @@ function NativeHome({
                               ))}
                             </View>
                             <Text style={styles.vendorRaffleFieldHelp}>
-                              Choose up to three verified winners. Each
-                              selection is a separate step, and no winner email
-                              is sent until you verify that selection and tap
-                              Send Winner Email.
+                              Choose 1, 2, or 3.
                             </Text>
                             <TouchableOpacity
                               style={[
@@ -7271,12 +7169,12 @@ function NativeHome({
                               </View>
                               <View style={styles.vendorRaffleToggleCopy}>
                                 <Text style={styles.vendorRaffleToggleTitle}>
-                                  Do not select the same couple twice
+                                  A different couple each time
                                 </Text>
                                 <Text style={styles.vendorRaffleToggleText}>
                                   {raffleExcludePreviousWinners
-                                    ? 'On (recommended): a verified winner is excluded from later random selections for this vendor draw.'
-                                    : 'Off: a prior verified winner remains eligible in later random selections.'}
+                                    ? 'On — previous winners will not win again.'
+                                    : 'Off — the same couple can win again.'}
                                 </Text>
                               </View>
                             </TouchableOpacity>
@@ -7399,7 +7297,7 @@ function NativeHome({
                                 {vendorRaffleEntrantCount}
                               </Text>
                               <Text style={styles.vendorRaffleStatLabel}>
-                                Total entrants
+                                Couples entered
                               </Text>
                             </View>
                             <View style={styles.vendorRaffleStat}>
@@ -7407,7 +7305,7 @@ function NativeHome({
                                 {vendorRaffleSelectionPoolCount}
                               </Text>
                               <Text style={styles.vendorRaffleStatLabel}>
-                                In selection pool
+                                Can be picked
                               </Text>
                             </View>
                             <View style={styles.vendorRaffleStat}>
@@ -7415,37 +7313,28 @@ function NativeHome({
                                 {vendorRaffleDrawCount}/{vendorRaffleMaxDraws}
                               </Text>
                               <Text style={styles.vendorRaffleStatLabel}>
-                                Selections used
+                                Picked so far
                               </Text>
                             </View>
                           </View>
-                          <Text style={styles.vendorRaffleSectionEyebrow}>
-                            Couple contacts
-                          </Text>
                           <Text
                             style={styles.vendorRaffleSectionTitle}
                             accessibilityRole="header"
                           >
-                            Your draw contacts
+                            Your contact list
                           </Text>
                           <Text style={styles.vendorRaffleHint}>
-                            Search every couple who opted in. Open Manage winner
-                            selection on a contact only when you need to remove
-                            or restore them. Every contact stays in your CSV.
-                          </Text>
-                          <Text style={styles.vendorRaffleHint}>
-                            Included: {vendorRaffleSelectionPoolCount} ·
-                            Excluded: {vendorRaffleExcludedCount}
+                            Find couples who entered your draw. Removing someone
+                            from the draw keeps their contact details in your list.
                           </Text>
                           {vendorRaffleHasPendingPotentialWinner ? (
                             <View style={styles.vendorRaffleDrawStatusCard}>
                               <Text style={styles.vendorRaffleDrawStatusLabel}>
-                                Selection pool paused
+                                Review your pick first
                               </Text>
                               <Text style={styles.vendorRaffleDrawStatusText}>
-                                Include, exclude, and restore controls are
-                                temporarily disabled while a potential winner is
-                                awaiting verification or disqualification.
+                                Finish reviewing the couple you picked before
+                                adding or removing anyone else.
                               </Text>
                             </View>
                           ) : null}
@@ -7475,8 +7364,8 @@ function NativeHome({
                               ) : (
                                 <Text style={styles.raffleCancelText}>
                                   {vendorRaffleEntries.length
-                                    ? 'Refresh Contacts'
-                                    : 'View Couple Contacts'}
+                                    ? 'Refresh list'
+                                    : 'View contacts'}
                                 </Text>
                               )}
                             </TouchableOpacity>
@@ -7527,8 +7416,8 @@ function NativeHome({
                                 {(
                                   [
                                     ['all', 'All'],
-                                    ['included', 'In selection'],
-                                    ['excluded', 'Not selectable'],
+                                    ['included', 'Can be picked'],
+                                    ['excluded', 'Cannot be picked'],
                                   ] as const
                                 ).map(([value, label]) => {
                                   const selected =
@@ -7590,15 +7479,17 @@ function NativeHome({
                                 ? 'Selected'
                                 : poolStatus === 'disqualified'
                                   ? 'Disqualified'
+                                  : poolStatus === 'replaced'
+                                    ? 'Replaced'
                                   : poolStatus === 'previous_winner'
                                     ? 'Prior winner'
                                     : poolStatus === 'reacceptance_required'
-                                      ? 'Scan and reaccept required'
+                                      ? 'Needs to enter again'
                                       : poolStatus === 'in_person_scan_required'
-                                        ? 'In-show scan required'
+                                        ? 'Needs a show scan'
                                         : poolStatus === 'excluded'
-                                          ? 'Excluded'
-                                          : 'Included';
+                                          ? 'Removed from draw'
+                                          : 'In the draw';
                             const rowUpdating =
                               vendorRaffleEntryUpdatingReference ===
                               participantReference;
@@ -7607,7 +7498,7 @@ function NativeHome({
                               entry.can_update !== false &&
                               !rowUpdating;
                             const entrantName =
-                              entry.couple_name || 'Unnamed entrant';
+                              entry.couple_name || 'Couple';
                             const nameParts = entrantName
                               .trim()
                               .split(/\s+/)
@@ -7633,10 +7524,10 @@ function NativeHome({
                             const managementProtected =
                               !canExcludeFromPool && !canRestoreToPool;
                             const managementLabel = managementProtected
-                              ? 'View entry record'
+                              ? 'View details'
                               : canRestoreToPool
-                                ? 'Restore or review entry'
-                                : 'Manage winner selection';
+                                ? 'Add back or view details'
+                                : 'Manage this couple';
                             const isExpanded =
                               vendorRaffleExpandedEntryReference ===
                               participantReference;
@@ -7835,16 +7726,11 @@ function NativeHome({
                                   <View
                                     style={styles.vendorRaffleEntryManagement}
                                   >
-                                    <Text
-                                      style={styles.vendorRaffleEntryReference}
-                                    >
-                                      Entry reference: {participantReference}
-                                    </Text>
                                     <Text style={styles.vendorRaffleEntryText}>
                                       {entry.entry_method ===
                                       'alternate_free_entry'
-                                        ? 'Archived historical entry'
-                                        : 'In-show QR entry'}
+                                        ? 'Past draw entry'
+                                        : 'Entered at the show'}
                                       {entry.entered_at
                                         ? ` · ${formatPromotionDate(entry.entered_at)}`
                                         : ''}
@@ -7861,7 +7747,7 @@ function NativeHome({
                                     {canExcludeFromPool ? (
                                       <>
                                         <Text style={styles.inputLabel}>
-                                          Reason to exclude
+                                          Why are you removing them?
                                         </Text>
                                         <View style={styles.inputShell}>
                                           <TextInput
@@ -7880,7 +7766,7 @@ function NativeHome({
                                               );
                                               setVendorRaffleError(null);
                                             }}
-                                            placeholder="Example: duplicate entry confirmed"
+                                            placeholder="Example: entered twice"
                                             placeholderTextColor="#A8A8AD"
                                             style={styles.textInput}
                                             maxLength={300}
@@ -7915,7 +7801,7 @@ function NativeHome({
                                                 styles.vendorRaffleSmallDangerButtonText
                                               }
                                             >
-                                              Exclude from Selection
+                                              Remove from draw
                                             </Text>
                                           )}
                                         </TouchableOpacity>
@@ -7929,7 +7815,7 @@ function NativeHome({
                                         >
                                           Reason:{' '}
                                           {entry.exclusion_reason ||
-                                            'No reason returned.'}
+                                            'No reason provided.'}
                                         </Text>
                                         <TouchableOpacity
                                           style={[
@@ -7956,7 +7842,7 @@ function NativeHome({
                                                 styles.vendorRaffleSmallRestoreButtonText
                                               }
                                             >
-                                              Restore to Selection
+                                              Add back to draw
                                             </Text>
                                           )}
                                         </TouchableOpacity>
@@ -7968,15 +7854,16 @@ function NativeHome({
                                         }
                                       >
                                         {poolStatus === 'already_selected'
-                                          ? 'This entrant has already been selected and cannot be changed in the selection pool.'
+                                          ? 'This couple has already been picked. Review them in the Winner step.'
                                           : poolStatus === 'disqualified'
-                                            ? 'This disqualification is preserved in the audit record, and the entrant cannot be selected again for this vendor offer.'
-                                            : 'The no-repeat setting keeps this prior winner out of the current selection pool.'}
+                                            ? 'This couple did not qualify and cannot be picked again for this draw.'
+                                            : poolStatus === 'replaced'
+                                              ? 'A different couple was selected. These contact details stay in your list.'
+                                            : 'This couple cannot be picked right now. Their contact details remain available.'}
                                       </Text>
                                     )}
                                     <Text style={styles.vendorRaffleFieldHelp}>
-                                      This contact stays in the downloadable CSV
-                                      whether included or excluded.
+                                      Their contact details stay in your list.
                                     </Text>
                                   </View>
                                 ) : null}
@@ -7997,12 +7884,9 @@ function NativeHome({
                             </View>
                           ) : null}
                           <Text style={styles.vendorRaffleHint}>
-                            Download every couple who entered this draw, with
-                            name, email, phone, wedding date, and entry/consent
-                            evidence. The list excludes member IDs and raw
-                            database IDs. Each listed couple agreed that this
-                            named vendor may use the information for the draw
-                            and wedding-related marketing.
+                            Download all contacts, including couples removed from
+                            the draw. Use their shared details for this draw and
+                            wedding-related offers.
                           </Text>
                           <View style={styles.vendorRaffleExportRow}>
                             <TouchableOpacity
@@ -8031,419 +7915,50 @@ function NativeHome({
                             </TouchableOpacity>
                           </View>
                           <Text style={styles.vendorRaffleHint}>
-                            Every person in this list expressly chose this named
-                            vendor draw and accepted its named-vendor
-                            contact-sharing and wedding-related marketing terms.
-                            Honour unsubscribe requests and protect the
-                            information under the Vendor Draw Rules.
+                            Follow the Vendor Draw Rules and honour unsubscribe
+                            requests.
                           </Text>
                         </View>
                       ) : null}
                       {vendorRaffleWizardStep === 4 ? (
                         <View testID="vendor-draw-step-winner">
-                          <Text style={styles.vendorRaffleSectionEyebrow}>
-                            Potential-winner selection
-                          </Text>
-                          <Text
-                            style={styles.vendorRaffleSectionTitle}
-                            accessibilityRole="header"
-                          >
-                            Winner selection and email
-                          </Text>
                           <View style={styles.vendorRaffleDrawStatusCard}>
                             <Text style={styles.vendorRaffleDrawStatusLabel}>
                               {vendorRaffleCanTestSuppressedNotice
-                                ? 'Safe test send ready'
+                                ? 'Safe test ready'
                                 : vendorRaffleOutboundEmailBlocked
-                                  ? 'Verified email waiting'
+                                  ? 'Email unavailable'
                                   : vendorRaffleHasPendingPotentialWinner
-                                    ? 'Awaiting vendor verification'
+                                    ? 'Your selected couple'
                                     : vendorRaffleWillSendVerifiedNotice
                                       ? 'Winner email ready'
                                       : vendorRaffleDrawsRemaining <= 0
                                         ? 'All winner spots filled'
                                         : !vendorRaffleHasEligibleEntries
-                                          ? 'Waiting for included entrants'
+                                          ? 'No couples available yet'
                                           : vendorRaffleCanPickWinner
                                             ? 'Selection is available'
                                             : 'Selection opens after entry closes'}
                             </Text>
                             <Text style={styles.vendorRaffleDrawStatusText}>
                               {vendorRaffleCanTestSuppressedNotice
-                                ? 'Verification is recorded. Use Test Send on the matching selection to exercise the separate send step; this isolated fixture will send no email and record no delivery timestamp.'
+                                ? 'This test will not send a real email.'
                                 : vendorRaffleOutboundEmailBlocked
-                                  ? 'The verified selection is preserved, but its separate winner-email button remains disabled until outbound delivery is available.'
+                                  ? 'Your selected couple is saved. Try sending later.'
                                   : vendorRaffleHasPendingPotentialWinner
-                                    ? 'A potential winner is awaiting verification. No fulfillment notice or prize claim is allowed yet.'
+                                    ? 'Send the winner email or choose a different couple.'
                                     : vendorRaffleWillSendVerifiedNotice
-                                      ? 'Verification is recorded. Use Send Winner Email on the matching verified selection below; selecting and emailing remain separate actions.'
+                                      ? 'Send the good news below.'
                                       : vendorRaffleDrawsRemaining <= 0
-                                        ? `All ${vendorRaffleMaxDraws} configured winner ${vendorRaffleMaxDraws === 1 ? 'slot is' : 'slots are'} used.`
+                                        ? 'Your contact list remains available.'
                                         : !vendorRaffleHasEligibleEntries
-                                          ? 'Restore or wait for an eligible entrant before selecting another potential winner.'
+                                          ? 'Eligible couples will appear here.'
                                           : vendorRaffleCanPickWinner
                                             ? `${vendorRaffleDrawsRemaining} of ${vendorRaffleMaxDraws} potential-winner selections available.`
                                             : `Selection is available after ${formatPromotionDate(vendorRaffle?.draw_opens_at)}.`}
                             </Text>
                           </View>
-                          <View style={styles.vendorRaffleWinnerSteps}>
-                            <View style={styles.vendorRaffleWinnerStep}>
-                              <Text style={styles.vendorRaffleWinnerStepNumber}>
-                                1
-                              </Text>
-                              <View style={styles.vendorRaffleWinnerStepCopy}>
-                                <View
-                                  style={styles.vendorRaffleWinnerStepTitleRow}
-                                  accessible={false}
-                                >
-                                  <UserRound
-                                    size={17}
-                                    color="#AA565D"
-                                    strokeWidth={2.2}
-                                  />
-                                  <Text
-                                    style={styles.vendorRaffleWinnerStepTitle}
-                                  >
-                                    Pick a potential winner
-                                  </Text>
-                                </View>
-                                <Text style={styles.vendorRaffleWinnerStepText}>
-                                  After entries close, tap Select Potential
-                                  Winner. Wedding Win will randomly choose one
-                                  couple.
-                                </Text>
-                              </View>
-                            </View>
-                            <View style={styles.vendorRaffleWinnerStep}>
-                              <Text style={styles.vendorRaffleWinnerStepNumber}>
-                                2
-                              </Text>
-                              <View style={styles.vendorRaffleWinnerStepCopy}>
-                                <View
-                                  style={styles.vendorRaffleWinnerStepTitleRow}
-                                  accessible={false}
-                                >
-                                  <Eye
-                                    size={17}
-                                    color="#AA565D"
-                                    strokeWidth={2.2}
-                                  />
-                                  <Text
-                                    style={styles.vendorRaffleWinnerStepTitle}
-                                  >
-                                    Confirm the winner
-                                  </Text>
-                                </View>
-                                <Text style={styles.vendorRaffleWinnerStepText}>
-                                  Make sure the couple meets your draw rules,
-                                  then finish the quick verification steps.
-                                </Text>
-                              </View>
-                            </View>
-                            <View style={styles.vendorRaffleWinnerStep}>
-                              <Text style={styles.vendorRaffleWinnerStepNumber}>
-                                3
-                              </Text>
-                              <View style={styles.vendorRaffleWinnerStepCopy}>
-                                <View
-                                  style={styles.vendorRaffleWinnerStepTitleRow}
-                                  accessible={false}
-                                >
-                                  <Mail
-                                    size={17}
-                                    color="#AA565D"
-                                    strokeWidth={2.2}
-                                  />
-                                  <Text
-                                    style={styles.vendorRaffleWinnerStepTitle}
-                                  >
-                                    Send the good news
-                                  </Text>
-                                </View>
-                                <Text style={styles.vendorRaffleWinnerStepText}>
-                                  Once verified, tap Send Winner Email. Wedding
-                                  Win will send the official notice.
-                                </Text>
-                              </View>
-                            </View>
-                            <View style={styles.vendorRaffleWinnerStep}>
-                              <Text style={styles.vendorRaffleWinnerStepNumber}>
-                                4
-                              </Text>
-                              <View style={styles.vendorRaffleWinnerStepCopy}>
-                                <View
-                                  style={styles.vendorRaffleWinnerStepTitleRow}
-                                  accessible={false}
-                                >
-                                  <Store
-                                    size={17}
-                                    color="#AA565D"
-                                    strokeWidth={2.2}
-                                  />
-                                  <Text
-                                    style={styles.vendorRaffleWinnerStepTitle}
-                                  >
-                                    Give the prize
-                                  </Text>
-                                </View>
-                                <Text style={styles.vendorRaffleWinnerStepText}>
-                                  Contact the verified couple to arrange their
-                                  prize. Entrants also agreed that you may
-                                  contact them about wedding-related offers.
-                                </Text>
-                              </View>
-                            </View>
-                          </View>
-                          {vendorPendingPotentialWinner ? (
-                            <View style={styles.vendorRaffleWinnerCard}>
-                              <Text style={styles.vendorRaffleWinnerTitle}>
-                                Vendor verification required
-                              </Text>
-                              <Text style={styles.vendorRaffleWinnerName}>
-                                {vendorPendingPotentialWinner.winner_name}
-                              </Text>
-                              <Text style={styles.vendorRaffleWinnerText}>
-                                {vendorPendingPotentialWinner.winner_email}
-                              </Text>
-                              <Text style={styles.inputLabel}>
-                                Verification question
-                              </Text>
-                              <Text style={styles.vendorRaffleSectionTitle}>
-                                {vendorPendingPotentialWinner.skill_question_prompt ||
-                                  'The verification question could not be generated. Contact Wedding Win support; do not confirm this selection.'}
-                              </Text>
-                              <Text style={styles.inputLabel}>
-                                Couple&apos;s answer
-                              </Text>
-                              <View style={styles.inputShell}>
-                                <TextInput
-                                  value={vendorSkillAnswer}
-                                  onChangeText={(value) => {
-                                    setVendorSkillAnswer(value);
-                                    setVendorRaffleError(null);
-                                  }}
-                                  placeholder="Enter the answer"
-                                  placeholderTextColor="#A8A8AD"
-                                  style={styles.textInput}
-                                  keyboardType="numbers-and-punctuation"
-                                  testID="vendor-draw-winner-answer"
-                                  accessibilityLabel="Selected couple verification answer"
-                                />
-                              </View>
-                              <Text style={styles.vendorRaffleFieldHelp}>
-                                Enter the answer exactly as the selected couple
-                                provides it. Wedding Win checks it when you
-                                submit.
-                              </Text>
-                              <TouchableOpacity
-                                style={styles.signupConsentToggle}
-                                onPress={() => {
-                                  setVendorEligibilityConfirmed(
-                                    (value) => !value,
-                                  );
-                                  setVendorRaffleError(null);
-                                }}
-                                testID="vendor-draw-winner-eligibility"
-                                accessibilityRole="checkbox"
-                                accessibilityState={{
-                                  checked: vendorEligibilityConfirmed,
-                                }}
-                              >
-                                <View
-                                  style={[
-                                    styles.signupConsentBox,
-                                    vendorEligibilityConfirmed &&
-                                      styles.signupConsentBoxChecked,
-                                  ]}
-                                >
-                                  {vendorEligibilityConfirmed ? (
-                                    <Text style={styles.signupConsentCheck}>
-                                      {'\u2713'}
-                                    </Text>
-                                  ) : null}
-                                </View>
-                                <Text style={styles.signupConsentText}>
-                                  I attest that my business independently
-                                  verified this person meets the eligibility
-                                  requirements in the current Official Rules.
-                                </Text>
-                              </TouchableOpacity>
-                              <TouchableOpacity
-                                style={styles.signupConsentToggle}
-                                onPress={() => {
-                                  setVendorRulesReleaseConfirmed(
-                                    (value) => !value,
-                                  );
-                                  setVendorRaffleError(null);
-                                }}
-                                testID="vendor-draw-winner-release"
-                                accessibilityRole="checkbox"
-                                accessibilityState={{
-                                  checked: vendorRulesReleaseConfirmed,
-                                }}
-                              >
-                                <View
-                                  style={[
-                                    styles.signupConsentBox,
-                                    vendorRulesReleaseConfirmed &&
-                                      styles.signupConsentBoxChecked,
-                                  ]}
-                                >
-                                  {vendorRulesReleaseConfirmed ? (
-                                    <Text style={styles.signupConsentCheck}>
-                                      {'\u2713'}
-                                    </Text>
-                                  ) : null}
-                                </View>
-                                <Text style={styles.signupConsentText}>
-                                  I attest that my business obtained the
-                                  potential winner&apos;s required declaration
-                                  and release outside Wedding Win and will
-                                  complete prize fulfillment itself.
-                                </Text>
-                              </TouchableOpacity>
-                              <Text style={styles.inputLabel}>
-                                Verification date (YYYY-MM-DD)
-                              </Text>
-                              <View style={styles.inputShell}>
-                                <TextInput
-                                  value={vendorVerificationDate}
-                                  onChangeText={(value) => {
-                                    setVendorVerificationDate(value);
-                                    setVendorRaffleError(null);
-                                  }}
-                                  placeholder="2026-08-30"
-                                  placeholderTextColor="#A8A8AD"
-                                  style={styles.textInput}
-                                  keyboardType="numbers-and-punctuation"
-                                  autoCapitalize="none"
-                                  maxLength={10}
-                                  testID="vendor-draw-verification-date"
-                                  accessibilityLabel="Potential winner verification date"
-                                />
-                              </View>
-                              <Text style={styles.inputLabel}>
-                                Verification method
-                              </Text>
-                              <View style={styles.inputShell}>
-                                <TextInput
-                                  value={vendorVerificationMethod}
-                                  onChangeText={(value) => {
-                                    setVendorVerificationMethod(value);
-                                    setVendorRaffleError(null);
-                                  }}
-                                  placeholder="Phone, video call, email, or in person"
-                                  placeholderTextColor="#A8A8AD"
-                                  style={styles.textInput}
-                                  maxLength={120}
-                                  testID="vendor-draw-verification-method"
-                                  accessibilityLabel="Potential winner verification method"
-                                />
-                              </View>
-                              <Text style={styles.inputLabel}>
-                                Evidence reference
-                              </Text>
-                              <View style={styles.inputShell}>
-                                <TextInput
-                                  value={vendorVerificationReference}
-                                  onChangeText={(value) => {
-                                    setVendorVerificationReference(value);
-                                    setVendorRaffleError(null);
-                                  }}
-                                  placeholder="Call-log time, email subject/date, or signed-release file ID"
-                                  placeholderTextColor="#A8A8AD"
-                                  style={styles.textInput}
-                                  maxLength={300}
-                                  testID="vendor-draw-verification-reference"
-                                  accessibilityLabel="Potential winner verification evidence reference"
-                                />
-                              </View>
-                              <Text style={styles.vendorRaffleFieldHelp}>
-                                Required for confirmation. Record a
-                                non-sensitive reference that your business can
-                                use to locate its own evidence; do not paste
-                                identity documents or the release itself.
-                              </Text>
-                              <Text style={styles.inputLabel}>
-                                Additional notes or disqualification reason
-                              </Text>
-                              <View
-                                style={[
-                                  styles.inputShell,
-                                  styles.vendorRaffleTextAreaShell,
-                                ]}
-                              >
-                                <TextInput
-                                  value={vendorReviewNotes}
-                                  onChangeText={(value) => {
-                                    setVendorReviewNotes(value);
-                                    setVendorRaffleError(null);
-                                  }}
-                                  placeholder="Optional for confirmation; a reason is required to disqualify"
-                                  placeholderTextColor="#A8A8AD"
-                                  style={[
-                                    styles.textInput,
-                                    styles.vendorRaffleTextArea,
-                                  ]}
-                                  testID="vendor-draw-verification-notes"
-                                  accessibilityLabel="Potential winner review notes"
-                                  maxLength={400}
-                                  multiline
-                                />
-                              </View>
-                              <View style={styles.raffleModalActions}>
-                                <TouchableOpacity
-                                  style={[
-                                    styles.raffleCancelButton,
-                                    vendorRaffleReviewing &&
-                                      styles.loginButtonDisabled,
-                                  ]}
-                                  disabled={vendorRaffleReviewing}
-                                  onPress={() =>
-                                    reviewVendorPotentialWinner(
-                                      vendorPendingPotentialWinner.id,
-                                      'disqualify',
-                                    )
-                                  }
-                                  accessibilityRole="button"
-                                  accessibilityLabel="Disqualify potential winner"
-                                >
-                                  <Text style={styles.raffleCancelText}>
-                                    Disqualify
-                                  </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                  style={[
-                                    styles.raffleEnterButton,
-                                    vendorRaffleReviewing &&
-                                      styles.loginButtonDisabled,
-                                  ]}
-                                  disabled={vendorRaffleReviewing}
-                                  onPress={() =>
-                                    reviewVendorPotentialWinner(
-                                      vendorPendingPotentialWinner.id,
-                                      'confirm',
-                                    )
-                                  }
-                                  accessibilityRole="button"
-                                  accessibilityLabel="Record vendor attestation and confirm potential winner"
-                                >
-                                  {vendorRaffleReviewing ? (
-                                    <ActivityIndicator
-                                      size="small"
-                                      color="#FFFFFF"
-                                    />
-                                  ) : (
-                                    <Text style={styles.raffleEnterText}>
-                                      {vendorPotentialWinnerConfirmationReady
-                                        ? 'Record Attestation & Confirm'
-                                        : 'Complete Required Verification'}
-                                    </Text>
-                                  )}
-                                </TouchableOpacity>
-                              </View>
-                            </View>
-                          ) : null}
+                          {!vendorRaffleHasPendingPotentialWinner ? (
                           <TouchableOpacity
                             style={[
                               styles.raffleEnterButton,
@@ -8459,9 +7974,7 @@ function NativeHome({
                             testID="vendor-draw-select-potential-winner"
                             accessibilityRole="button"
                             accessibilityLabel={
-                              vendorRaffleHasPendingPotentialWinner
-                                ? 'Awaiting vendor verification'
-                                : vendorRaffleDrawsRemaining <= 0
+                              vendorRaffleDrawsRemaining <= 0
                                   ? 'All winner spots filled'
                                   : 'Select potential winner'
                             }
@@ -8470,19 +7983,16 @@ function NativeHome({
                               <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
                               <Text style={styles.raffleEnterText}>
-                                {vendorRaffleHasPendingPotentialWinner
-                                  ? 'Awaiting Verification'
-                                  : vendorRaffleDrawsRemaining <= 0
+                                {vendorRaffleDrawsRemaining <= 0
                                     ? 'All Winner Spots Filled'
                                     : 'Select Potential Winner'}
                               </Text>
                             )}
                           </TouchableOpacity>
+                          ) : null}
                           {vendorRaffleHasPendingPotentialWinner ? (
                             <Text style={styles.vendorRaffleHint}>
-                              Your business must confirm or disqualify the
-                              potential winner above. A disqualified selection
-                              can be replaced while preserving its audit record.
+                              Your contact list and previous selections are kept.
                             </Text>
                           ) : vendorRaffleDrawsRemaining <= 0 ? (
                             <Text style={styles.vendorRaffleHint}>
@@ -8491,22 +8001,21 @@ function NativeHome({
                             </Text>
                           ) : !vendorRaffleHasEligibleEntries ? (
                             <Text style={styles.vendorRaffleHint}>
-                              There are no included eligible entrants. Restore
-                              an entrant or wait for another eligible entry.
+                              No eligible couples are available to pick yet.
                             </Text>
                           ) : !vendorRaffle?.can_draw ? (
                             <Text style={styles.vendorRaffleHint}>
-                              Selection opens only after the entry close,
-                              scheduled draw, and draw-open timestamps have all
-                              passed.
+                              You can pick a winner once the draw opens.
                             </Text>
                           ) : (
                             <Text style={styles.vendorRaffleHint}>
-                              Selecting creates a potential-winner record only.
-                              It does not send email.
+                              Picking a couple does not send an email.
                             </Text>
                           )}
-                          {(vendorRaffle?.draws || []).map((draw) => {
+                          {[...(vendorRaffle?.draws || [])].sort((left, right) =>
+                            Number(right.selection_status === 'potential') -
+                            Number(left.selection_status === 'potential'),
+                          ).map((draw) => {
                             const hasSelectedContact = Boolean(
                               draw.winner_name ||
                               draw.winner_email ||
@@ -8517,10 +8026,13 @@ function NativeHome({
                               draw.notice_complete === true;
                             const noticePending = draw.notice_pending === true;
                             const canSendNotice = draw.can_send_notice === true;
+                            const canConfirmAndSendNotice =
+                              draw.can_confirm_and_send_notice === true;
                             const canTestSuppressedNotice =
-                              draw.can_test_suppressed_notice === true;
+                              draw.can_test_suppressed_notice === true ||
+                              draw.can_confirm_and_test_suppressed_notice === true;
                             const canUseNoticeAction =
-                              canSendNotice || canTestSuppressedNotice;
+                              canSendNotice || canConfirmAndSendNotice || canTestSuppressedNotice;
                             const sendingThisNotice =
                               vendorRaffleSendingDrawId === draw.id;
                             return (
@@ -8528,10 +8040,18 @@ function NativeHome({
                                 key={draw.id}
                                 style={styles.vendorRaffleWinnerCard}
                               >
-                                <Text style={styles.vendorRaffleWinnerTitle}>
-                                  Selection #{draw.draw_number}:{' '}
-                                  {draw.selection_status === 'legacy'
+                                <Text style={styles.vendorRaffleWinnerTitle}
+                                  testID={`vendor-draw-selection-status-${draw.draw_number}`}
+                                  accessibilityLabel={`Selection ${draw.draw_number}: ${draw.selection_status || 'potential'}`}>
+                                  {draw.selection_status === 'potential'
+                                    ? 'Your selected couple'
+                                    : `Selection #${draw.draw_number}: `}
+                                  {draw.selection_status === 'potential'
+                                    ? ''
+                                    : draw.selection_status === 'legacy'
                                     ? 'historical record'
+                                    : draw.selection_status === 'replaced'
+                                      ? 'Replaced'
                                     : draw.selection_status || 'potential'}
                                 </Text>
                                 {hasSelectedContact ? (
@@ -8564,12 +8084,6 @@ function NativeHome({
                                         Wedding date: {draw.winner_wedding_date}
                                       </Text>
                                     ) : null}
-                                    <Text style={styles.vendorRaffleWinnerText}>
-                                      This couple accepted this vendor’s draw
-                                      and wedding-related marketing terms.
-                                      Honour unsubscribe requests and use the
-                                      information under the Vendor Draw Rules.
-                                    </Text>
                                   </>
                                 ) : (
                                   <Text style={styles.vendorRaffleWinnerText}>
@@ -8577,24 +8091,37 @@ function NativeHome({
                                     selection.
                                   </Text>
                                 )}
+                                {draw.selection_status === 'potential' ? (
+                                  <TouchableOpacity
+                                    style={[styles.raffleCancelButton, styles.vendorRaffleVerificationAction,
+                                      (vendorRaffleReviewing || sendingThisNotice) && styles.loginButtonDisabled]}
+                                    disabled={vendorRaffleReviewing || sendingThisNotice}
+                                    onPress={() => replaceVendorPotentialWinner(draw.id)}
+                                    testID="vendor-draw-replace-potential-winner"
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Choose a different winner">
+                                    <Text style={styles.raffleCancelText}>Choose a different winner</Text>
+                                  </TouchableOpacity>
+                                ) : null}
                                 {draw.selection_status === 'verified' &&
                                 noticeComplete ? (
                                   <Text style={styles.vendorRaffleNoticeSent}>
                                     Winner email sent
                                   </Text>
                                 ) : null}
-                                {draw.selection_status === 'verified' &&
-                                noticePending ? (
+                                {(draw.selection_status === 'verified' && noticePending) ||
+                                draw.selection_status === 'potential' ? (
                                   <TouchableOpacity
                                     style={[
                                       styles.raffleEnterButton,
+                                      styles.vendorRaffleVerificationAction,
                                       (!canUseNoticeAction ||
-                                        sendingThisNotice) &&
+                                        sendingThisNotice || vendorRaffleReviewing) &&
                                         styles.loginButtonDisabled,
                                     ]}
                                     activeOpacity={0.88}
                                     disabled={
-                                      !canUseNoticeAction || sendingThisNotice
+                                      !canUseNoticeAction || sendingThisNotice || vendorRaffleReviewing
                                     }
                                     onPress={() => sendVendorWinnerNotice(draw)}
                                     testID={`vendor-draw-send-winner-email-${draw.draw_number}`}
@@ -8614,7 +8141,7 @@ function NativeHome({
                                       <Text style={styles.raffleEnterText}>
                                         {canTestSuppressedNotice
                                           ? 'Test Send (Email Suppressed)'
-                                          : canSendNotice
+                                          : canSendNotice || canConfirmAndSendNotice
                                             ? 'Send Winner Email'
                                             : 'Winner Email Unavailable'}
                                       </Text>
@@ -8632,7 +8159,10 @@ function NativeHome({
                         </View>
                       ) : null}
                       <View
-                        style={styles.vendorRaffleAutosaveRow}
+                        style={[
+                          styles.vendorRaffleAutosaveRow,
+                          { height: Math.max(44, Math.ceil(30 * fontScale) + 12) },
+                        ]}
                         testID="vendor-draw-save-status"
                         accessibilityLabel={
                           vendorRaffleSaveError ||
@@ -9773,6 +9303,7 @@ export default function HomeScreen() {
   const [qrContactCompletionRequested, setQrContactCompletionRequested] =
     useState(false);
   const [vendorDrawOpenRequestId, setVendorDrawOpenRequestId] = useState(0);
+  const vendorDrawOpenSequenceRef = useRef(0);
   const [pendingDashboardRedirect, setPendingDashboardRedirect] =
     useState(false);
   const [pendingBridgeTargetPath, setPendingBridgeTargetPath] = useState(
@@ -9852,6 +9383,12 @@ export default function HomeScreen() {
     },
     [],
   );
+
+  const acknowledgeVendorDrawOpenRequest = useCallback((requestId: number) => {
+    // A handled request must not replay when the native menu remounts after
+    // another website visit. An old acknowledgement cannot clear a newer tap.
+    setVendorDrawOpenRequestId((current) => current === requestId ? 0 : current);
+  }, []);
 
   const queueNativeSessionStorageMutation = useCallback(
     (mutation: () => Promise<void>) => {
@@ -12812,15 +12349,17 @@ true;
       const authGeneration = beginAuthOperation('google-login');
       if (authGeneration === null) return;
       browserAuthInFlightRef.current = true;
-      const returnUrl = AuthSession.makeRedirectUri({
-        scheme: 'weddingwin',
-        path: BD_GOOGLE_RETURN_PATH,
-      });
-
       setGoogleLoginLoading(true);
+      let loginStage = 'setup';
       try {
+        const returnUrl = AuthSession.makeRedirectUri({
+          native: `weddingwin://${BD_GOOGLE_RETURN_PATH}`,
+          scheme: 'weddingwin',
+          path: BD_GOOGLE_RETURN_PATH,
+        });
         const { codeVerifier, codeChallenge } = await createGooglePkcePair();
         if (!authOperationIsCurrent('google-login', authGeneration)) return;
+        loginStage = 'browser';
         const result = await WebBrowser.openAuthSessionAsync(
           buildNativeGoogleStartUrl(returnUrl, role, codeChallenge, consent),
           returnUrl,
@@ -12834,7 +12373,24 @@ true;
         )
           return;
 
+        loginStage = 'callback';
         const callbackUrl = new URL(result.url);
+        const expectedCallback = new URL(returnUrl);
+        if (
+          callbackUrl.protocol !== expectedCallback.protocol ||
+          callbackUrl.hostname !== expectedCallback.hostname ||
+          callbackUrl.port !== expectedCallback.port ||
+          callbackUrl.pathname !== expectedCallback.pathname ||
+          callbackUrl.username ||
+          callbackUrl.password ||
+          callbackUrl.hash
+        ) {
+          Alert.alert(
+            'Google sign-in failed',
+            'WeddingWin could not confirm the sign-in response. Please try again.',
+          );
+          return;
+        }
         const errorMessage =
           callbackUrl.searchParams.get('error_description') ||
           callbackUrl.searchParams.get('error');
@@ -12852,6 +12408,7 @@ true;
           return;
         }
 
+        loginStage = 'exchange';
         const { response: exchangeResponse, data: exchange } =
           await fetchAppJsonWithTimeout<any>(
             `${APP_BACKEND_URL}/functions/v1/google-native-exchange`,
@@ -12889,9 +12446,15 @@ true;
         hideWebsiteBrowser();
       } catch {
         if (authOperationIsCurrent('google-login', authGeneration)) {
+          // Never log OAuth URLs, exchange codes, or verifier/session values.
+          addDebugLine(`Google login failed at ${loginStage}`);
           Alert.alert(
             'Google sign-in failed',
-            'Please check your connection and try again.',
+            loginStage === 'setup'
+              ? 'Google sign-in could not start. Please try again.'
+              : loginStage === 'exchange'
+                ? 'Google sign-in could not finish. Check your connection and try again.'
+                : 'Google sign-in was interrupted. Please try again.',
           );
         }
       } finally {
@@ -12949,6 +12512,51 @@ true;
 `);
   }, []);
 
+  const openVendorDrawSettings = useCallback(() => {
+    // Cancel older browser/dashboard work before retiring this WebView. Its
+    // synchronous generation change also makes repeated link taps inert.
+    invalidateNavigationIntent();
+    if (historyNavigationTimerRef.current) {
+      clearTimeout(historyNavigationTimerRef.current);
+      historyNavigationTimerRef.current = null;
+    }
+    clearLoadingTimeout();
+    webviewRef.current?.stopLoading();
+    setPendingDashboardRedirect(false);
+    setPendingBridgeTargetPath(DEFAULT_BRIDGE_TARGET_PATH);
+    setShowNativeChat(false);
+    setNativeChatThreadOpen(false);
+    setError(null);
+    setLoading(false);
+    hideWebsiteBrowser();
+    vendorDrawOpenSequenceRef.current += 1;
+    setVendorDrawOpenRequestId(vendorDrawOpenSequenceRef.current);
+  }, [clearLoadingTimeout, hideWebsiteBrowser, invalidateNavigationIntent]);
+
+  const interceptVendorDrawNavigation = useCallback(
+    (url: string) => {
+      const member = nativeMemberRef.current;
+      const session = nativeBridgeSessionRef.current;
+      if (
+        !isVendorDrawDashboardUrl(url) ||
+        accountDeletionIsInFlight() ||
+        logoutInFlightRef.current ||
+        pendingAppLogoutRef.current ||
+        !member ||
+        memberAccountRole(member) !== 'vendor' ||
+        !hasNativeTokenSession(session) ||
+        String(member.user_id || '') !== String(session?.user_id || '')
+      ) {
+        return false;
+      }
+      // This opens only the current account's native UI. The existing vendor
+      // endpoint still checks QR Bingo participation before returning data.
+      openVendorDrawSettings();
+      return true;
+    },
+    [openVendorDrawSettings],
+  );
+
   const handleShouldStart = useCallback(
     (request: ShouldStartLoadRequest) => {
       const { url } = request;
@@ -12984,6 +12592,8 @@ true;
         finishLogoutInApp('website logout started');
         return true;
       }
+
+      if (interceptVendorDrawNavigation(url)) return false;
 
       if (
         weddingWinPath.startsWith('/account') &&
@@ -13074,6 +12684,7 @@ true;
       addDebugLine,
       advanceWebViewSession,
       finishLogoutInApp,
+      interceptVendorDrawNavigation,
       nativeBridgeSession,
       nativeMember,
       navigateWebViewTo,
@@ -13088,6 +12699,7 @@ true;
 
   const handleNavigationStateChange = useCallback(
     (s: WebViewNavigation) => {
+      if (interceptVendorDrawNavigation(s.url)) return;
       currentUrlRef.current = s.url;
       setCanGoBack(s.canGoBack);
       setCanGoForward(s.canGoForward);
@@ -13215,6 +12827,7 @@ true;
       commitNativeMember,
       finishLogoutInApp,
       interceptVendorConnectChat,
+      interceptVendorDrawNavigation,
       openNativeChatDeepLink,
       pendingBridgeTargetPath,
       pendingDashboardRedirect,
@@ -13297,6 +12910,7 @@ true;
     (event: { nativeEvent: { targetUrl?: string } }) => {
       const target = event.nativeEvent.targetUrl;
       if (!target) return;
+      if (interceptVendorDrawNavigation(target)) return;
       const hasSignedInAppSession = Boolean(
         nativeMember || hasNativeBridgeSession(nativeBridgeSessionRef.current),
       );
@@ -13374,6 +12988,7 @@ true;
     [
       addDebugLine,
       interceptVendorConnectChat,
+      interceptVendorDrawNavigation,
       nativeMember,
       navigateWebViewTo,
       openNativeChatDeepLink,
@@ -13571,21 +13186,6 @@ true;
     invalidateNavigationIntent,
     openAbsoluteUrl,
   ]);
-
-  const openVendorDrawSettings = useCallback(() => {
-    if (historyNavigationTimerRef.current) {
-      clearTimeout(historyNavigationTimerRef.current);
-      historyNavigationTimerRef.current = null;
-    }
-    clearLoadingTimeout();
-    webviewRef.current?.stopLoading();
-    setShowNativeChat(false);
-    setNativeChatThreadOpen(false);
-    setError(null);
-    setLoading(false);
-    hideWebsiteBrowser();
-    setVendorDrawOpenRequestId((requestId) => requestId + 1);
-  }, [clearLoadingTimeout, hideWebsiteBrowser]);
 
   const dismissWrappedWebsiteMenus = useCallback(() => {
     webviewRef.current?.injectJavaScript(`
@@ -13813,6 +13413,7 @@ true;
             onSignOut={signOutEverywhere}
             nativeSession={nativeBridgeSession}
             vendorDrawOpenRequestId={vendorDrawOpenRequestId}
+            onVendorDrawOpenRequestHandled={acknowledgeVendorDrawOpenRequest}
           />
         </View>
         {renderNativeChatOverlay()}
@@ -13871,7 +13472,11 @@ true;
           originWhitelist={['*']}
           setSupportMultipleWindows
           allowsInlineMediaPlayback
-          mediaPlaybackRequiresUserAction
+          allowsFullscreenVideo
+          // Site play buttons can create an iframe or await the player SDK.
+          // Requiring a second native gesture leaves those players paused,
+          // including background previews with no provider play controls.
+          mediaPlaybackRequiresUserAction={false}
           allowsPictureInPictureMediaPlayback={false}
           // The embedded site is for account management and chat, not media
           // capture. Deny camera/microphone requests so WebKit cannot surface
@@ -14863,6 +14468,16 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 20,
   },
+  vendorRaffleVerificationActions: {
+    flexDirection: 'column',
+    paddingHorizontal: 0,
+    backgroundColor: 'transparent',
+  },
+  vendorRaffleVerificationAction: {
+    flex: 0,
+    paddingVertical: 12,
+    marginTop: 10,
+  },
   raffleCancelButton: {
     flex: 1,
     minHeight: 46,
@@ -14918,6 +14533,17 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 12,
   },
+  vendorRaffleHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  vendorRaffleTestNotice: {
+    borderLeftWidth: 3,
+    borderLeftColor: '#AA565D',
+    paddingLeft: 10,
+    paddingVertical: 5,
+    marginBottom: 10,
+  },
   vendorRaffleEyebrow: {
     color: BRAND_COLOR,
     fontSize: 11,
@@ -14943,6 +14569,7 @@ const styles = StyleSheet.create({
   vendorRaffleClose: {
     width: 44,
     height: 44,
+    flexShrink: 0,
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
@@ -14967,16 +14594,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#EAD2CC',
     backgroundColor: '#FFFFFF',
-    marginBottom: 14,
+    marginBottom: 10,
     overflow: 'hidden',
   },
   vendorRaffleGuideHeader: {
-    minHeight: 60,
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 13,
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
   vendorRaffleGuideCopy: {
     flex: 1,
@@ -14984,9 +14611,9 @@ const styles = StyleSheet.create({
   },
   vendorRaffleGuideTitle: {
     color: '#2E2E32',
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '900',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   vendorRaffleGuideText: {
     color: '#756662',
@@ -15009,8 +14636,8 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   vendorRaffleWizardHeading: {
-    marginTop: 14,
-    marginBottom: 14,
+    marginTop: 12,
+    marginBottom: 10,
   },
   vendorRaffleWizardCount: {
     color: '#AA565D',
@@ -15021,9 +14648,9 @@ const styles = StyleSheet.create({
   },
   vendorRaffleWizardDescription: {
     color: '#655956',
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '700',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
     marginTop: 5,
   },
   vendorRaffleWizardActions: {
@@ -15281,24 +14908,28 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: '800',
   },
+  vendorRaffleAgreementToggle: {
+    minHeight: 44,
+    alignItems: 'center',
+  },
   vendorRaffleProcessRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 12,
+    gap: 6,
   },
   vendorRaffleProcessPill: {
-    flexGrow: 1,
-    minWidth: '46%',
-    minHeight: 38,
-    borderRadius: 12,
+    flex: 1,
+    minWidth: 0,
+    minHeight: 56,
+    borderRadius: 10,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#F0D5D1',
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 10,
+    justifyContent: 'center',
+    gap: 3,
+    paddingHorizontal: 3,
+    paddingVertical: 6,
   },
   vendorRaffleProcessPillActive: {
     borderColor: '#8A454B',
@@ -15486,11 +15117,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   vendorRaffleAutosaveRow: {
-    height: 58,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#EFD8D6',
-    backgroundColor: '#FFF5F4',
+    minHeight: 44,
+    borderRadius: 8,
+    backgroundColor: 'transparent',
     paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
@@ -15527,7 +15156,7 @@ const styles = StyleSheet.create({
     color: '#9A3F46',
   },
   vendorRaffleSaveRetry: {
-    minHeight: 34,
+    minHeight: 44,
     borderRadius: 9,
     backgroundColor: '#AA565D',
     paddingHorizontal: 12,
@@ -16051,6 +15680,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.16)',
   },
+  qrAgreementFrame: {
+    height: 'auto',
+    minHeight: 0,
+    marginTop: 8,
+    backgroundColor: '#FFF8F5',
+  },
   qrCamera: {
     flex: 1,
   },
@@ -16108,6 +15743,69 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
     backgroundColor: '#FFF8F5',
+  },
+  qrConsentPanel: {
+    padding: 20,
+    backgroundColor: '#FFF8F5',
+  },
+  qrConsentHeader: {
+    marginBottom: 4,
+  },
+  qrConsentTitle: {
+    color: '#2E2E32',
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: '800',
+  },
+  qrConsentLinks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    columnGap: 16,
+    rowGap: 2,
+    marginBottom: 12,
+  },
+  qrConsentLink: {
+    minHeight: 44,
+    flexShrink: 1,
+    justifyContent: 'center',
+  },
+  qrConsentLinkText: {
+    color: BRAND_COLOR,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
+  },
+  qrConsentActions: {
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#EDDCD6',
+  },
+  qrConsentAgreement: {
+    minHeight: 44,
+  },
+  qrConsentReturnButton: {
+    minHeight: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: BRAND_COLOR,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  qrAgreementReviewLink: {
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    marginTop: 6,
+  },
+  qrAgreementReviewLinkText: {
+    color: '#756662',
+    fontSize: 12,
+    lineHeight: 17,
+    textDecorationLine: 'underline',
   },
   qrPermissionTitle: {
     color: '#2E2E32',

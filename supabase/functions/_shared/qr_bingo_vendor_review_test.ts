@@ -112,14 +112,20 @@ Deno.test("vendor draw responses use an explicit DTO and never expose answer sec
       `${sourceUrl.pathname} must not place a raw draw row in a JSON response`,
     );
     assert(
-      (source.match(/skill_question_salt/g) || []).length === 1 &&
-        (source.match(/skill_question_answer_hash/g) || []).length === 1 &&
+      (source.match(/skill_question_salt/g) || []).length === 2 &&
+        (source.match(/skill_question_answer_hash/g) || []).length === 2 &&
         source.includes("skill_question_salt: skillChallenge.salt") &&
         source.includes(
           "skill_question_answer_hash: skillChallenge.answerHash",
         ),
-      `${sourceUrl.pathname} may persist answer secrets but must not otherwise copy them`,
+      `${sourceUrl.pathname} initial selection and replacement may persist answer secrets but must not otherwise copy them`,
     );
+    for (const actionName of ["drawWinner", "replacePotentialWinner"]) {
+      const action = sourceSection(source, `async function ${actionName}(`, "\nasync function ");
+      assert((action.match(/p_skill_question_salt: skillChallenge\.salt/g) || []).length === 1 &&
+        (action.match(/p_skill_question_answer_hash: skillChallenge\.answerHash/g) || []).length === 1,
+        `${actionName} must send exactly one challenge to its server-only atomic RPC`);
+    }
   }
 });
 
@@ -140,11 +146,9 @@ Deno.test("website and iOS show selected-person contact for every draw status", 
       website.includes("['Email', draw.winner_email]") &&
       website.includes("['Phone', draw.winner_phone]") &&
       website.includes("['Wedding date', draw.winner_wedding_date]") &&
-      website.includes(
-        "accepted this vendor\\u2019s draw and wedding-related marketing terms",
-      ) &&
-      website.includes("Honour unsubscribe requests"),
-    "website must show every selected-person contact field with the recorded named-vendor marketing scope",
+      website.includes("rulesLink.href = rulesUrl;") &&
+      website.includes("trustedWeddingWinUrl(rulesLink.href)"),
+    "website must retain all selected-person contacts and the trusted Draw Rules link without forcing legal paragraphs into Step 4",
   );
   assert(
     !/contact details withheld/i.test(app) &&
@@ -153,12 +157,9 @@ Deno.test("website and iOS show selected-person contact for every draw status", 
       app.includes("Email: {draw.winner_email}") &&
       app.includes("Phone: {draw.winner_phone}") &&
       app.includes("Wedding date: {draw.winner_wedding_date}") &&
-      includesIgnoringWhitespace(
-        app,
-        "accepted this vendor’s draw and wedding-related marketing terms",
-      ) &&
-      app.includes("Honour unsubscribe requests"),
-    "iOS must show every selected-person contact field with the recorded named-vendor marketing scope",
+      app.includes("Linking.openURL(vendorRaffle.terms_url)") &&
+      app.includes('accessibilityLabel="Open vendor draw official rules"'),
+    "iOS must retain all selected-person contacts and accessible Draw Rules without forcing legal paragraphs into Step 4",
   );
 });
 

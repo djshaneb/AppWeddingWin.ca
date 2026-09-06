@@ -28,7 +28,7 @@ Deno.test("every vendor dashboard action requires the published QR Bingo tag", a
     );
     assert(
       source.includes(
-        "const user = await fetchFullBdUserById(nativeSession.user_id);",
+        "const user = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);",
       ) &&
         !source.includes("? ({ user_id: nativeSession.user_id } as BdRow)"),
       `${label} can authorize an isolated vendor without loading current BD tags`,
@@ -42,15 +42,26 @@ Deno.test("every vendor dashboard action requires the published QR Bingo tag", a
         ) &&
         (source.match(/const vendor = await resolveVendorForRaffleAction\(/g) ||
             [])
-            .length === 7,
-      `${label} does not gate all seven vendor dashboard action routes`,
+            .length === 9,
+      `${label} does not gate all nine vendor dashboard and read-only navigation routes`,
     );
+    const replacement = source.slice(source.indexOf('if (action === "vendor_raffle_replace")'), source.indexOf('if (action === "vendor_raffle_review")'));
+    assert(replacement.includes("await resolveVendorForRaffleAction(") && replacement.includes("return replacePotentialWinner("),
+      `${label} replacement must use the same current vendor-tag authorization`);
     assert(
       source.includes(
         "if (!userId || !isEligibleVendor || !name) return null;",
       ),
       `${label} does not require active status and the event tag for production vendors`,
     );
+    const access = source.slice(source.indexOf('if (action === "vendor_dashboard_access")'), source.indexOf("const isReviewCouple = Boolean("));
+    assert(access.includes("await resolveVendorForRaffleAction(") &&
+      !/getSettings|getVendorRaffleDashboard|loadVendorEntryPool|drawWinner/.test(access),
+      `${label} navigation must enforce the same tag gate without initializing a draw or exposing contacts`);
+    assert(source.includes("const authenticatedMemberId = websitePrincipal?.userId || String(nativeSession!.user_id)") &&
+      source.includes("await verifyQrBingoWebsiteRequest(request, rawBody, body") &&
+      source.includes("if (!await nativeSessionMatchesCachedBdIdentity(nativeSession))"),
+      `${label} needs either signed website proof or the unchanged native cached identity`);
   }
 });
 

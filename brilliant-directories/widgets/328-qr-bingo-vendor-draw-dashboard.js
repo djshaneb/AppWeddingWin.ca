@@ -2,8 +2,7 @@
 (function () {
   'use strict';
 
-  const FUNCTION_URL = 'https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-vendor-sync';
-  const PUBLISHABLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzemNqb3lhYnd2enN4eGp0a2hzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2OTMxMTYsImV4cCI6MjA5NDI2OTExNn0.QLCEmNcn1WAks0IHkCLmI3iY5K4GnRxZ9Sfy89GYrLo';
+  const BRIDGE_URL = 'https://www.weddingwin.ca/qr-bingo-vendor-draw?ww_qrvd_bridge=1';
 
   function text(value) {
     return String(value == null ? '' : value).trim();
@@ -21,6 +20,18 @@
 
   function firstLine(value) {
     return text(value).replaceAll(String.fromCharCode(13), '').split(String.fromCharCode(10))[0].trim();
+  }
+
+  function formatPrizeDraftDescription(title, description) {
+    const cleanTitle = text(title);
+    const cleanDescription = text(description);
+    if (!cleanTitle || cleanDescription.includes('\n') || !cleanDescription.startsWith(cleanTitle)) return cleanDescription;
+    const remainder = cleanDescription.slice(cleanTitle.length);
+    return /^\s+\S/.test(remainder) ? `${cleanTitle}\n${remainder.trimStart()}` : cleanDescription;
+  }
+
+  function samePrizeWording(left, right) {
+    return text(left).replace(/\s+/g, ' ') === text(right).replace(/\s+/g, ' ');
   }
 
   function formatDate(value) {
@@ -59,8 +70,8 @@
 
   async function request(root, action, extra) {
     const userId = text(root.dataset.userId);
-    const token = text(root.dataset.token);
-    if (!userId || !token) {
+    const csrf = text(root.dataset.csrf);
+    if (!userId || !/^[0-9a-f]{64}$/.test(csrf)) {
       const error = new Error('Sign in again before opening vendor draw tools.');
       error.status = 401;
       throw error;
@@ -72,17 +83,14 @@
     }, 15000);
 
     try {
-      const response = await fetch(FUNCTION_URL, {
+      const response = await fetch(BRIDGE_URL, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${PUBLISHABLE_KEY}`,
-          apikey: PUBLISHABLE_KEY,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(Object.assign({
-          action: action,
-          native_session: { user_id: userId, token: token },
-        }, extra || {})),
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify(Object.assign({}, extra || {}, { action: action, csrf: csrf })),
         signal: controller.signal,
       });
 
@@ -165,18 +173,6 @@
     const drawStatus = find('[data-role="draw-status"]');
     const drawButton = find('[data-action="draw"]');
     const emailNotice = find('[data-role="email-notice"]');
-    const reviewPanel = find('[data-role="review-panel"]');
-    const reviewWinner = find('[data-role="review-winner"]');
-    const skillQuestionPrompt = find('[data-role="skill-question-prompt"]');
-    const reviewEligibilityConfirmed = find('[data-field="review-eligibility-confirmed"]');
-    const reviewRulesReleaseConfirmed = find('[data-field="review-rules-release-confirmed"]');
-    const reviewSkillAnswer = find('[data-field="review-skill-answer"]');
-    const reviewVerificationDate = find('[data-field="review-verification-date"]');
-    const reviewVerificationMethod = find('[data-field="review-verification-method"]');
-    const reviewEvidenceReference = find('[data-field="review-evidence-reference"]');
-    const reviewDisqualificationReason = find('[data-field="review-disqualification-reason"]');
-    const reviewConfirmButton = find('[data-action="review-confirm"]');
-    const reviewDisqualifyButton = find('[data-action="review-disqualify"]');
     const draws = find('[data-role="draws"]');
 
     const state = {
@@ -185,7 +181,6 @@
       conflict: false,
       rulesViewedVersion: '',
       responsibilityViewedVersion: '',
-      reviewDrawId: '',
       entries: [],
       entriesLoaded: false,
       entriesBusy: false,
@@ -276,9 +271,9 @@
           ? 'Entries open'
         : acceptanceReady && enabled.checked
           ? 'Ready to save'
-          : 'Review and open';
+          : 'Not open yet';
       wizardState3.textContent = `${count} ${count === 1 ? 'entry' : 'entries'}`;
-      wizardState4.textContent = text(drawStatusLabel.textContent) || 'Select and verify';
+      wizardState4.textContent = text(drawStatusLabel.textContent) || 'Choose a winner';
 
       wizardButtons.forEach(function (button) {
         const step = number(button.dataset.wizardStep);
@@ -288,20 +283,25 @@
         button.classList.toggle('is-complete', complete);
       });
 
-      saveButton.textContent = enabled.checked ? 'Save and open entries' : 'Save with entries off';
+      saveButton.textContent = 'Save and continue';
+      const enabledHelp = enabled.closest('.ww-qrvd-switch').querySelector('small');
+      if (enabledHelp) {
+        enabledHelp.textContent = enabled.checked
+          ? entriesOpen
+            ? 'Couples can now choose to enter your draw.'
+            : 'Save and continue to let couples enter your draw.'
+          : 'Off: couples can scan your booth, but cannot enter your draw.';
+      }
     }
 
-    function validIsoCalendarDate(value) {
-      const match = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(text(value));
-      if (!match) return false;
-      const year = Number(match[1]);
-      const month = Number(match[2]);
-      const day = Number(match[3]);
-      const date = new Date(Date.UTC(year, month - 1, day));
-      return date.getUTCFullYear() === year
-        && date.getUTCMonth() === month - 1
-        && date.getUTCDate() === day;
+    function currentDraftSignature() {
+      return JSON.stringify([
+        enabled.checked, description.value, prizeValue.value, maxWinners.value,
+        excludePreviousWinners.checked, legalAccepted.checked,
+        state.rulesViewedVersion, state.responsibilityViewedVersion,
+      ]);
     }
+
 
     function setBusy(value) {
       state.busy = Boolean(value);
@@ -309,8 +309,6 @@
       reloadButton.disabled = state.busy;
       participationReportButton.disabled = state.busy;
       entriesReloadButton.disabled = state.busy || state.entriesBusy;
-      reviewConfirmButton.disabled = state.busy;
-      reviewDisqualifyButton.disabled = state.busy;
       renderDrawControls();
       renderEntrants();
       renderDrawHistory();
@@ -347,11 +345,15 @@
       );
 
       legalAccepted.closest('.ww-qrvd-check').classList.toggle('is-complete', combinedAccepted);
+      const acceptanceSaved = Boolean(
+        settings.legal_terms_accepted && settings.vendor_responsibility_acknowledged &&
+        data.rules_current !== false
+      );
       acceptanceState.textContent = !rulesUrlAvailable || !disclosureAvailable
-        ? 'Unavailable until the current rules and responsibilities load'
+        ? 'Rules unavailable — please reload'
         : combinedAccepted
-          ? `Confirmed for rules version ${version}`
-          : 'Not confirmed yet';
+          ? acceptanceSaved ? 'Agreed' : 'Ready to save'
+          : 'Not agreed yet';
     }
 
     function renderDrawControls() {
@@ -376,38 +378,39 @@
 
       emailNotice.classList.add('is-hidden');
       emailNotice.textContent = '';
+      drawButton.hidden = Boolean(potential);
 
       if (potential) {
-        drawStatusLabel.textContent = 'Awaiting vendor verification';
-        drawStatus.textContent = 'A potential winner is selected. Complete the required winner verification before sending the winner notice.';
-        drawButton.textContent = 'Awaiting verification';
+        drawStatusLabel.textContent = 'Your selected couple';
+        drawStatus.textContent = 'Send their winner email or choose a different couple below.';
+        drawButton.textContent = 'Couple selected';
         drawButton.disabled = true;
       } else if (canSelect) {
-        drawStatusLabel.textContent = 'Selection is available';
+        drawStatusLabel.textContent = 'Ready to choose';
         drawStatus.textContent = `${remaining} of ${maximum} ${remaining === 1 ? 'winner remains' : 'winners remain'} to be selected.`;
         drawButton.textContent = `Select winner ${verified.length + 1} of ${maximum}`;
         drawButton.disabled = state.busy;
       } else if (remaining <= 0 || data.draw_limit_reached) {
-        drawStatusLabel.textContent = 'Selection limit reached';
+        drawStatusLabel.textContent = 'All winners chosen';
         drawStatus.textContent = maximum === 1
-          ? 'The configured winner has been selected. Winner email is sent separately from the verified record below.'
-          : `All ${maximum} winners have been selected. Winner email is sent separately from each verified record below.`;
+          ? 'Your winner has been chosen. Send their email below.'
+          : `All ${maximum} winners have been chosen. Send each email below.`;
         drawButton.textContent = 'All winners selected';
         drawButton.disabled = true;
       } else if (data.settings && !data.settings.enabled) {
         drawStatusLabel.textContent = 'Entries are off';
-        drawStatus.textContent = 'Open entries in Step 2 before potential-winner selection can become available.';
-        drawButton.textContent = 'Select potential winner';
+        drawStatus.textContent = 'Open your draw in Step 2 to get started.';
+        drawButton.textContent = 'Choose a winner';
         drawButton.disabled = true;
       } else if (!hasPool) {
-        drawStatusLabel.textContent = 'No included entrants';
-        drawStatus.textContent = 'Restore an eligible entrant in Step 3 before selecting a potential winner.';
-        drawButton.textContent = 'Select potential winner';
+        drawStatusLabel.textContent = 'No couples ready';
+        drawStatus.textContent = 'Check your couples list in Step 3 before choosing a winner.';
+        drawButton.textContent = 'Choose a winner';
         drawButton.disabled = true;
       } else {
-        drawStatusLabel.textContent = 'Selection is not open yet';
-        drawStatus.textContent = `Selection opens after ${formatDate(data.draw_opens_at)}.`;
-        drawButton.textContent = 'Select potential winner';
+        drawStatusLabel.textContent = 'Not time to draw yet';
+        drawStatus.textContent = `You can choose a winner after ${formatDate(data.draw_opens_at)}.`;
+        drawButton.textContent = 'Choose a winner';
         drawButton.disabled = true;
       }
     }
@@ -416,7 +419,7 @@
       draws.replaceChildren();
       const source = state.data && Array.isArray(state.data.draws) ? state.data.draws : [];
       if (!source.length) {
-        draws.appendChild(makeElement('p', '', 'No potential winner has been selected.'));
+        draws.appendChild(makeElement('p', '', 'No winner chosen yet.'));
         return;
       }
 
@@ -424,12 +427,14 @@
         const card = makeElement('article', 'ww-qrvd-selection');
         const statusValue = text(draw.selection_status || 'legacy').toLowerCase();
         const statusCopy = statusValue === 'potential'
-          ? 'Potential winner — awaiting vendor verification'
+          ? 'Selected couple'
           : statusValue === 'verified'
-            ? 'Verified potential winner — eligible for prize fulfillment'
-            : statusValue === 'disqualified'
-              ? 'Disqualified selection'
-              : 'Historical selection record';
+            ? 'Winner confirmed'
+            : statusValue === 'replaced'
+              ? 'Another couple selected'
+              : statusValue === 'disqualified'
+                ? 'Disqualified selection'
+                : 'Previous selection';
         const heading = makeElement('strong', '', `Selection ${number(draw.draw_number) || ''}: ${statusCopy}`);
         heading.id = `ww-qrvd-selection-${text(draw.id) || number(draw.draw_number) || index + 1}`;
         card.setAttribute('aria-labelledby', heading.id);
@@ -448,21 +453,32 @@
           availableContactFields.forEach(function (field) {
             card.appendChild(makeElement('span', '', `${field[0]}: ${text(field[1])}`));
           });
-          card.appendChild(makeElement('span', '', 'This couple accepted this vendor\u2019s draw and wedding-related marketing terms. Honour unsubscribe requests and protect the information under the Vendor Draw Rules.'));
+          card.appendChild(makeElement('span', '', 'Their contact details stay in your contacts and download.'));
         } else {
           card.appendChild(makeElement('span', '', 'No contact details were recorded for this selection.'));
         }
 
+        if (statusValue === 'potential') {
+          const replaceButton = makeElement('button', 'ww-qrvd-secondary', 'Choose a different winner');
+          replaceButton.type = 'button';
+          replaceButton.dataset.action = 'replace-winner';
+          replaceButton.dataset.drawId = text(draw.id);
+          replaceButton.disabled = state.busy || !text(draw.id);
+          card.appendChild(replaceButton);
+        }
         if (draw.email_error && statusValue === 'verified') {
           card.appendChild(makeElement('span', '', `Notice status: ${text(draw.email_error)}`));
         }
-        if (statusValue === 'verified') {
+        if (statusValue === 'verified' || statusValue === 'potential') {
+          const needsConfirmation = statusValue === 'potential';
           const noticeSentAt = text(draw.couple_email_sent_at || draw.winner_email_sent_at || draw.notice_sent_at);
           const noticeComplete = draw.notice_complete === true || Boolean(noticeSentAt);
           const noticeOutstanding = draw.notice_pending === true && !noticeComplete;
           const canTestSuppressedNotice = Boolean(
-            draw.can_test_suppressed_notice === true ||
-            (state.data && state.data.can_test_suppressed_notice === true)
+            needsConfirmation
+              ? draw.can_confirm_and_test_suppressed_notice === true
+              : draw.can_test_suppressed_notice === true ||
+                (state.data && state.data.can_test_suppressed_notice === true)
           );
           const suppressedTestComplete = canTestSuppressedNotice && state.suppressedTestedDrawIds.has(text(draw.id));
           const noticeStatus = makeElement(
@@ -476,7 +492,7 @@
                   ? 'Test Send completed. Email remained suppressed and was not delivered.'
                   : noticeOutstanding
                     ? 'Winner email has not been sent.'
-                    : 'Winner email is not ready to send.'
+                    : needsConfirmation ? 'No email has been sent.' : 'Winner email is not ready to send.'
           );
           card.appendChild(noticeStatus);
 
@@ -508,8 +524,10 @@
             noticeComplete ||
             suppressedTestComplete ||
             (outboundUnavailable && !canTestSuppressedNotice) ||
-            (draw.can_send_notice === false && !canTestSuppressedNotice) ||
-            !text(draw.id)
+            (needsConfirmation
+              ? draw.can_confirm_and_send_notice !== true && !canTestSuppressedNotice
+              : draw.can_send_notice === false && !canTestSuppressedNotice) ||
+            !text(draw.id) || !text(draw.winner_email)
           );
           if (outboundUnavailable && !canTestSuppressedNotice) {
             sendButton.textContent = state.data.outbound_email_suppressed
@@ -522,32 +540,6 @@
       });
     }
 
-    function renderReviewControls() {
-      const pending = activeDraws().find(function (draw) {
-        return draw.selection_status === 'potential';
-      });
-      reviewPanel.classList.toggle('is-hidden', !pending);
-      if (!pending) {
-        state.reviewDrawId = '';
-        return;
-      }
-
-      const pendingId = text(pending.id);
-      reviewWinner.textContent = text(pending.winner_name) || 'Selected entrant';
-      skillQuestionPrompt.textContent = text(pending.skill_question_prompt) || 'The required verification question could not be loaded. Contact Wedding Win before confirming this selection.';
-      if (state.reviewDrawId !== pendingId) {
-        state.reviewDrawId = pendingId;
-        reviewEligibilityConfirmed.checked = false;
-        reviewRulesReleaseConfirmed.checked = false;
-        reviewSkillAnswer.value = '';
-        reviewVerificationDate.value = '';
-        reviewVerificationMethod.value = '';
-        reviewEvidenceReference.value = '';
-        reviewDisqualificationReason.value = '';
-      }
-      reviewConfirmButton.disabled = state.busy;
-      reviewDisqualifyButton.disabled = state.busy;
-    }
 
     function entryValue(entry, keys) {
       for (const key of keys) {
@@ -569,30 +561,33 @@
       const previousWinner = poolStatus === 'previous_winner' || entry.previous_winner === true || entry.has_won === true;
       const alreadySelected = poolStatus === 'already_selected';
       const disqualified = poolStatus === 'disqualified';
+      const replaced = poolStatus === 'replaced' || entryValue(entry, ['selection_status']) === 'replaced';
       const reacceptanceRequired = poolStatus === 'reacceptance_required';
       const inPersonScanRequired = poolStatus === 'in_person_scan_required';
-      const inSelectionPool = poolStatus
+      const inSelectionPool = !replaced && (poolStatus
         ? poolStatus === 'included'
-        : included && !(previousWinner && excludePreviousWinners.checked);
-      const selectionProtected = disqualified || alreadySelected || reacceptanceRequired || inPersonScanRequired || (previousWinner && included && excludePreviousWinners.checked);
+        : included && !(previousWinner && excludePreviousWinners.checked));
+      const selectionProtected = disqualified || alreadySelected || replaced || reacceptanceRequired || inPersonScanRequired || (previousWinner && included && excludePreviousWinners.checked);
       const statusLabel = inSelectionPool
-        ? 'In winner selection'
+        ? 'In the draw'
         : alreadySelected
           ? 'Already selected'
-          : disqualified
-            ? 'Disqualified — record kept'
-            : reacceptanceRequired
-              ? 'New in-show scan and consent required'
-              : inPersonScanRequired
-                ? 'In-show scan required'
-            : previousWinner && included
-              ? 'Previous winner — not selectable'
-              : 'Removed from winner selection';
+          : replaced
+            ? 'Another couple selected'
+            : disqualified
+              ? 'Not eligible'
+              : reacceptanceRequired
+                ? 'Needs to scan and agree again'
+                : inPersonScanRequired
+                  ? 'Needs a show scan'
+                  : previousWinner && included
+                    ? 'Previous winner'
+                    : 'Out of the draw';
       const managementLabel = selectionProtected
-        ? 'View entry record'
+        ? 'View details'
         : included
-          ? 'Manage winner selection'
-          : 'Restore or review entry';
+          ? 'Manage entry'
+          : 'Add back or view details';
 
       return {
         included: included,
@@ -600,6 +595,7 @@
         previousWinner: previousWinner,
         alreadySelected: alreadySelected,
         disqualified: disqualified,
+        replaced: replaced,
         inSelectionPool: inSelectionPool,
         selectionProtected: selectionProtected,
         statusLabel: statusLabel,
@@ -662,17 +658,17 @@
 
       if (state.entriesBusy) {
         entrantVisibleCount.textContent = 'Loading contacts…';
-        entrants.appendChild(makeElement('p', 'ww-qrvd-empty', 'Loading opted-in couples…'));
+        entrants.appendChild(makeElement('p', 'ww-qrvd-empty', 'Loading your couples…'));
         return;
       }
       if (!state.entriesLoaded) {
         entrantVisibleCount.textContent = 'Contacts load when this step opens.';
-        entrants.appendChild(makeElement('p', 'ww-qrvd-empty', 'Open this step or choose Refresh list to load opted-in couples.'));
+        entrants.appendChild(makeElement('p', 'ww-qrvd-empty', 'Choose Refresh list to load your couples.'));
         return;
       }
       if (!state.entries.length) {
         entrantVisibleCount.textContent = '0 contacts';
-        entrants.appendChild(makeElement('p', 'ww-qrvd-empty', 'No couples have opted in to this vendor draw yet.'));
+        entrants.appendChild(makeElement('p', 'ww-qrvd-empty', 'No couples have entered your draw yet.'));
         return;
       }
 
@@ -741,24 +737,24 @@
         const adminDetails = makeElement('details', 'ww-qrvd-entry-admin');
         adminDetails.appendChild(makeElement('summary', '', selection.managementLabel));
         const adminBody = makeElement('div', 'ww-qrvd-entry-admin-body');
-        if (participantReference) {
-          adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-reference', `Entry reference: ${participantReference}`));
-        }
-
         if (!selection.included) {
           const reason = entryValue(entry, ['exclusion_reason', 'reason']);
           if (reason) adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-reason', `Reason: ${reason}`));
         }
-        const poolStatusReason = entryValue(entry, ['pool_status_reason']);
-        if (poolStatusReason && (selection.included || poolStatusReason !== entryValue(entry, ['exclusion_reason']))) {
-          adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-reason', poolStatusReason));
-        }
-        if (selection.previousWinner && selection.included && excludePreviousWinners.checked) {
-          adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-reason', 'This couple remains opted in and stays in the CSV, but the saved no-repeat rule keeps them out of another selection.'));
-        }
-        if (selection.disqualified) {
-          adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-reason', 'This disqualified selection is preserved in the entrant CSV and audit history, but it cannot be restored to the winner pool.'));
-        }
+        const statusHelp = selection.replaced
+          ? 'Another couple was chosen. Their contact details stay here and in your download.'
+          : selection.poolStatus === 'reacceptance_required'
+            ? 'They need to scan your booth and agree to the current rules before entering again.'
+            : selection.poolStatus === 'in_person_scan_required'
+              ? 'They need to scan your booth at the wedding show before they can be chosen.'
+              : selection.alreadySelected
+                ? 'They have been chosen. Complete their checks in the Winner step.'
+                : selection.disqualified
+                  ? 'They cannot be added back to this draw.'
+                  : selection.previousWinner && selection.included && excludePreviousWinners.checked
+                    ? 'They have already won and cannot be chosen again.'
+                    : '';
+        if (statusHelp) adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-reason', statusHelp));
 
         const controls = makeElement('div', 'ww-qrvd-entry-controls');
         const rowCanUpdate = entry.can_update !== false && state.data && state.data.can_update_entries !== false;
@@ -790,7 +786,7 @@
           const actionButton = makeElement(
             'button',
             selection.included ? 'ww-qrvd-secondary' : 'ww-qrvd-primary',
-            selection.included ? 'Remove from winner selection' : 'Restore to winner selection'
+            selection.included ? 'Remove from draw' : 'Add back to draw'
           );
           actionButton.type = 'button';
           actionButton.dataset.action = 'entry-update';
@@ -798,13 +794,13 @@
           actionButton.dataset.included = selection.included ? 'false' : 'true';
           actionButton.setAttribute(
             'aria-label',
-            `${selection.included ? 'Remove' : 'Restore'} ${entrantName} ${selection.included ? 'from' : 'to'} winner selection`
+            `${selection.included ? 'Remove' : 'Add'} ${entrantName} ${selection.included ? 'from' : 'back to'} the draw`
           );
           actionButton.disabled = pending || !rowCanUpdate || state.busy || state.entriesBusy || !participantReference;
           controls.appendChild(actionButton);
         }
         adminBody.appendChild(controls);
-        adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-csv-note', 'This contact stays in the CSV whether included in or removed from winner selection.'));
+        adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-csv-note', 'Their contact details stay in your download, even if removed from the draw.'));
         adminDetails.appendChild(adminBody);
         card.appendChild(adminDetails);
         entrants.appendChild(card);
@@ -861,18 +857,17 @@
       if (state.entriesBusy || !state.data) return;
       state.entriesBusy = true;
       entryStatus.classList.remove('is-error', 'is-success');
-      entryStatus.textContent = 'Loading opted-in couples…';
+      entryStatus.textContent = 'Loading your couples…';
       renderEntrants();
       try {
         const data = await request(root, 'vendor_raffle_entries_get', { client_platform: 'website' });
         applyEntrantData(data);
-        const count = state.entries.length;
-        entryStatus.textContent = count
-          ? `Loaded ${count} ${count === 1 ? 'opted-in couple' : 'opted-in couples'}.`
-          : 'No couples have opted in to this vendor draw yet.';
+        // The contact count and list already show the result; reserve this
+        // status area for loading and actionable errors.
+        entryStatus.textContent = '';
         entryStatus.classList.add('is-success');
       } catch (error) {
-        entryStatus.textContent = error.message || 'Could not load opted-in couples.';
+        entryStatus.textContent = error.message || 'Could not load your couples. Please try again.';
         entryStatus.classList.add('is-error');
       } finally {
         state.entriesBusy = false;
@@ -883,7 +878,7 @@
     async function updateEntrant(participantReference, included, reason) {
       if (state.entriesBusy || state.busy || pendingPotentialWinner()) return;
       if (!participantReference) {
-        entryStatus.textContent = 'This entrant is missing its protected participant reference. Refresh the list.';
+        entryStatus.textContent = 'This entry could not be updated. Please refresh the list.';
         entryStatus.classList.add('is-error');
         return;
       }
@@ -957,8 +952,15 @@
       vendorResponsibilityDetails.classList.toggle('is-unavailable', !exactResponsibilityDisclosure);
       if (hydrateForm) {
         enabled.checked = Boolean(settings.enabled);
-        description.value = text(settings.prize_description);
-        prizeValue.value = number(settings.prize_approx_value_cad) > 0 ? String(settings.prize_approx_value_cad) : '';
+        const draftFormatting = options && options.draftFormatting;
+        description.value = draftFormatting && samePrizeWording(draftFormatting.description, settings.prize_description)
+          ? draftFormatting.description
+          : formatPrizeDraftDescription(settings.prize_title, settings.prize_description);
+        prizeValue.value = draftFormatting && text(draftFormatting.prizeValue) &&
+          Number.isFinite(Number(draftFormatting.prizeValue)) &&
+          Number(draftFormatting.prizeValue) === Number(settings.prize_approx_value_cad)
+            ? draftFormatting.prizeValue
+            : number(settings.prize_approx_value_cad) > 0 ? String(settings.prize_approx_value_cad) : '';
         maxWinners.value = String(winnerCount(settings.max_winners));
         excludePreviousWinners.checked = settings.exclude_previous_winners !== false;
         legalAccepted.checked = currentRulesAccepted;
@@ -1004,7 +1006,6 @@
       reloadButton.classList.toggle('is-hidden', !state.conflict);
       saveButton.disabled = state.busy || state.conflict;
       renderDrawControls();
-      renderReviewControls();
       renderDrawHistory();
       renderEntrants();
       updateWizardSummary();
@@ -1021,12 +1022,12 @@
       setBusy(true);
       state.conflict = false;
       reloadButton.classList.add('is-hidden');
-      setStatus('Loading your current vendor draw settings…');
+      setStatus('Loading your draw…');
       try {
         const data = await request(root, 'vendor_raffle_get');
         if (!data.vendor) throw new Error('This account is not on the QR Bingo vendor list.');
         renderDashboard(data);
-        setStatus('Current settings loaded from the shared app and website record.', 'success');
+        setStatus('Your draw is ready to edit. Changes are saved when you choose Save and continue.', 'success');
       } catch (error) {
         workspace.classList.add('is-hidden');
         setStatus(error.message || 'Vendor draw tools are unavailable.', 'error');
@@ -1048,7 +1049,7 @@
       }
       if (!text(state.data && state.data.vendor_responsibility_disclosure)) return { message: 'Reload the exact vendor responsibility agreement before opening entries.', step: 2 };
       if (!legalAccepted.checked || state.rulesViewedVersion !== version || state.responsibilityViewedVersion !== version) {
-        return { message: 'Check the box confirming you have read and accept the current Official Rules and vendor responsibilities.', step: 2 };
+        return { message: 'Read the rules above, then check the agreement box.', step: 2 };
       }
       return null;
     }
@@ -1093,8 +1094,10 @@
         state.responsibilityViewedVersion === rulesVersion
       );
       const combinedAcceptance = Boolean(requestLegalAccepted && rulesReviewed);
+      const submittedDraftSignature = currentDraftSignature();
+      const submittedPrizeValue = prizeValue.value;
       setBusy(true);
-      setStatus('Saving these settings to the shared app and website record…');
+      setStatus('Saving your draw…');
       try {
         const data = await request(root, 'vendor_raffle_update', {
           enabled: Boolean(enabled.checked),
@@ -1112,13 +1115,22 @@
           client_platform: 'website',
           settings_updated_at: text(state.data.settings && state.data.settings.updated_at),
         });
+        if (!data || !data.settings || !text(data.settings.updated_at)) {
+          throw new Error('The save could not be confirmed. Please try again.');
+        }
+        const hasNewerEdits = currentDraftSignature() !== submittedDraftSignature;
         state.conflict = false;
-        renderDashboard(data);
-        showWizardStep(data.settings && data.settings.enabled ? 3 : 2, { userInitiated: false, focus: true });
+        renderDashboard(data, {
+          hydrateForm: !hasNewerEdits,
+          draftFormatting: { description: descriptionValue, prizeValue: submittedPrizeValue },
+        });
+        if (!hasNewerEdits) showWizardStep(3, { userInitiated: false, focus: true });
         setStatus(
-          data.settings && data.settings.enabled
-            ? 'Saved. Entries are open, and the app and website now use the same settings.'
-            : 'Saved with entries off. The app and website now use the same settings.',
+          hasNewerEdits
+            ? 'Saved your earlier changes. Save again to keep your latest edits.'
+            : data.settings.enabled
+              ? 'Saved. Your draw is open.'
+              : 'Saved. Your draw is closed for now.',
           'success'
         );
       } catch (error) {
@@ -1128,7 +1140,6 @@
           if (conflictData && conflictData.settings) renderDashboard(conflictData, { hydrateForm: false });
           reloadButton.classList.remove('is-hidden');
           saveButton.disabled = true;
-          showWizardStep(2, { userInitiated: false, focus: false });
           setStatus(`${error.message} Your unsaved draft is still visible. Reload the current settings before saving again.`, 'error');
         } else {
           setStatus(error.message || 'Could not save this draw.', 'error');
@@ -1157,7 +1168,7 @@
         state.entries = [];
         state.entriesLoaded = false;
         renderDashboard(data);
-        setStatus('Potential winner selected. No email was sent. Complete the verification step next.', 'success');
+        setStatus('Couple selected. No email was sent.', 'success');
       } catch (error) {
         const responseData = error && error.data;
         if (responseData && responseData.settings) renderDashboard(responseData, { hydrateForm: false });
@@ -1172,25 +1183,44 @@
       const draw = Array.isArray(state.data.draws)
         ? state.data.draws.find(function (item) { return text(item.id) === drawId; })
         : null;
-      if (!draw || draw.selection_status !== 'verified') {
-        setStatus('Only a verified winner can receive the winner email.', 'error');
+      const potential = draw && draw.selection_status === 'potential';
+      const suppressedTest = Boolean(draw && (potential
+        ? draw.can_confirm_and_test_suppressed_notice === true
+        : draw.can_test_suppressed_notice === true || state.data.can_test_suppressed_notice === true));
+      const canSend = Boolean(draw && (potential
+        ? draw.can_confirm_and_send_notice === true || suppressedTest
+        : draw.selection_status === 'verified' && (draw.can_send_notice === true || suppressedTest)));
+      const recipient = text(draw && draw.winner_email);
+      if (!canSend || !recipient) {
+        setStatus('Winner email is not available for this selection. Reload to check its status.', 'error');
         return;
       }
-      const suppressedTest = Boolean(
-        draw.can_test_suppressed_notice === true || state.data.can_test_suppressed_notice === true
-      );
+      const vendorId = text(state.data.vendor && state.data.vendor.id);
+      const eventKey = text(state.data.event_key);
+      const rulesVersion = text(state.data.rules_version);
+      function sameNoticeContext(data) {
+        return Boolean(data && vendorId && eventKey && rulesVersion &&
+          text(data.vendor && data.vendor.id) === vendorId &&
+          text(data.event_key) === eventKey && text(data.rules_version) === rulesVersion);
+      }
+      if (!sameNoticeContext(state.data)) return;
       const confirmation = suppressedTest
-        ? `Run Test Send for ${text(draw.winner_name) || 'this verified winner'}? Email is suppressed in this App Review fixture and will not be delivered.`
-        : `Send the winner email to ${text(draw.winner_name) || 'this verified winner'} now? Selecting a winner and sending email are separate actions.`;
+        ? `I confirm my business has completed the required checks in the Draw Rules. Run Test Send for ${recipient}? Email is suppressed in this App Review fixture and will not be delivered.`
+        : `I confirm my business has completed the required checks in the Draw Rules. Send the winner email to ${recipient} now?`;
       if (!window.confirm(confirmation)) return;
+      if (state.busy || !Array.isArray(state.data.draws) || !state.data.draws.includes(draw)) return;
 
       setBusy(true);
-      setStatus('Sending the verified winner email…');
+      setStatus('Sending winner email…');
       try {
         const data = await request(root, 'vendor_raffle_send_notice', {
           draw_id: drawId,
+          winner_checks_confirmed: true,
           client_platform: 'website',
         });
+        if (!sameNoticeContext(state.data) || !sameNoticeContext(data) || !data.settings || !Array.isArray(data.draws)) {
+          throw new Error('Reload this draw to check the current email status. Do not send again until its status is shown.');
+        }
         if (data.outbound_email_suppressed === true || suppressedTest) {
           state.suppressedTestedDrawIds.add(drawId);
         }
@@ -1205,81 +1235,78 @@
         );
       } catch (error) {
         const responseData = error && error.data;
-        if (responseData && responseData.settings) renderDashboard(responseData, { hydrateForm: false });
+        if (sameNoticeContext(state.data) && sameNoticeContext(responseData) && responseData.settings && Array.isArray(responseData.draws)) {
+          renderDashboard(responseData, { hydrateForm: false });
+        }
         setStatus(error.message || 'Could not send the verified winner email. No new winner was selected.', 'error');
       } finally {
         setBusy(false);
       }
     }
 
-    async function reviewPotentialWinner(decision) {
-      if (state.busy || !state.data || !state.reviewDrawId) return;
-      const isConfirm = decision === 'confirm';
-      const disqualificationReason = text(reviewDisqualificationReason.value);
-      if (isConfirm && !reviewEligibilityConfirmed.checked) {
-        setStatus('Confirm the selected entrant’s eligibility before continuing.', 'error');
-        return;
-      }
-      if (isConfirm && !reviewRulesReleaseConfirmed.checked) {
-        setStatus('Confirm the rules, winner-notice, and prize-fulfilment responsibilities before continuing.', 'error');
-        return;
-      }
-      if (isConfirm && !text(reviewSkillAnswer.value)) {
-        setStatus('Enter the selected couple’s answer to the verification question before confirming.', 'error');
-        return;
-      }
-      if (isConfirm && !validIsoCalendarDate(reviewVerificationDate.value)) {
-        setStatus('Enter a valid verification date before confirming.', 'error');
-        return;
-      }
-      if (isConfirm && !text(reviewVerificationMethod.value)) {
-        setStatus('Record how the vendor obtained the entrant declaration/release before confirming.', 'error');
-        return;
-      }
-      if (isConfirm && !text(reviewEvidenceReference.value)) {
-        setStatus('Record a privacy-safe evidence reference before confirming.', 'error');
-        return;
-      }
-      if (!isConfirm && !disqualificationReason) {
-        setStatus('Enter a disqualification reason before disqualifying this selection.', 'error');
-        return;
-      }
 
-      const confirmation = isConfirm
-        ? 'Confirm that your business completed every required winner-verification step and saved its evidence? Wedding Win will preserve—but does not certify—this vendor attestation.'
-        : 'Disqualify this potential winner? The audit record will be preserved.';
-      if (!window.confirm(confirmation)) return;
+    function currentPendingSelectionId() {
+      const pending = pendingPotentialWinner();
+      return text(pending && pending.id);
+    }
+
+    async function replacePotentialWinner(drawId) {
+      if (state.busy || !state.data || !text(drawId)) return;
+      drawId = text(drawId);
+      const pending = activeDraws().find(function (draw) {
+        return text(draw.id) === drawId && draw.selection_status === 'potential';
+      });
+      if (!pending) {
+        setStatus('This selection has changed. Reload before choosing another winner.', 'error');
+        return;
+      }
+      const vendorId = text(state.data.vendor && state.data.vendor.id);
+      const eventKey = text(state.data.event_key);
+      const rulesVersion = text(state.data.rules_version);
+      if (!vendorId || !eventKey || !rulesVersion) {
+        setStatus('Reload the current draw before choosing another winner.', 'error');
+        return;
+      }
+      if (!window.confirm('Choose a different couple at random? Everyone stays in your contacts. No email will be sent.')) return;
+
+      function sameSelectionContext(data) {
+        return Boolean(data && text(data.event_key) === eventKey &&
+          text(data.vendor && data.vendor.id) === vendorId && text(data.rules_version) === rulesVersion);
+      }
+      if (state.busy || currentPendingSelectionId() !== drawId || !sameSelectionContext(state.data)) return;
 
       setBusy(true);
-      setStatus(isConfirm ? 'Recording the vendor’s completed winner review…' : 'Recording the disqualification…');
+      setStatus('Choosing a different winner…');
       try {
-        const data = await request(root, 'vendor_raffle_review', {
-          draw_id: state.reviewDrawId,
-          decision: decision,
-          skill_question_answer: text(reviewSkillAnswer.value),
-          eligibility_confirmed: Boolean(reviewEligibilityConfirmed.checked),
-          rules_release_confirmed: Boolean(reviewRulesReleaseConfirmed.checked),
-          review_notes: isConfirm
-            ? [
-                `Date: ${text(reviewVerificationDate.value)}`,
-                `Method: ${text(reviewVerificationMethod.value)}`,
-                `Reference: ${text(reviewEvidenceReference.value)}`,
-              ].join(String.fromCharCode(10))
-            : '',
-          disqualification_reason: disqualificationReason,
+        const data = await request(root, 'vendor_raffle_replace', { draw_id: drawId });
+        if (currentPendingSelectionId() !== drawId || !sameSelectionContext(state.data)) {
+          throw new Error('The displayed draw has changed. Reload to see the current winner.');
+        }
+        const replaced = data && Array.isArray(data.draws) && data.draws.find(function (draw) {
+          return text(draw.id) === drawId && draw.selection_status === 'replaced';
         });
+        const replacement = data && Array.isArray(data.draws) && data.draws.find(function (draw) {
+          return text(draw.id) && text(draw.id) !== drawId && draw.selection_status === 'potential';
+        });
+        if (!sameSelectionContext(data) || data.ok !== true || !data.settings || !replaced || !replacement) {
+          throw new Error('The selection response could not be verified. Reload to see the current winner before trying again.');
+        }
+        state.entries = [];
         state.entriesLoaded = false;
-        renderDashboard(data);
-        setStatus(
-          isConfirm
-            ? 'Potential winner confirmed. Wedding Win recorded the vendor’s completed review attestation.'
-            : 'Selection disqualified. The audit record is preserved.',
-          'success'
-        );
+        renderDashboard(data, { hydrateForm: false });
+        setStatus('A different couple was selected. Everyone stays in your contacts. No email was sent.', 'success');
       } catch (error) {
         const responseData = error && error.data;
-        if (responseData && responseData.settings) renderDashboard(responseData, { hydrateForm: false });
-        setStatus(error.message || 'Could not record the vendor review.', 'error');
+        const currentSelectionUnchanged = currentPendingSelectionId() === drawId && sameSelectionContext(state.data);
+        if (currentSelectionUnchanged && sameSelectionContext(responseData) && responseData.settings) {
+          renderDashboard(responseData, { hydrateForm: false });
+        }
+        const noAlternative = error && error.status === 409 && responseData && responseData.code === 'no_replacement_available';
+        setStatus(!currentSelectionUnchanged
+          ? 'The displayed draw has changed. Reload to see the current winner.'
+          : noAlternative
+            ? 'No other eligible couple is available. Your current selection is unchanged.'
+            : error.message || 'Could not choose a different winner. Reload to check the current selection.', 'error');
       } finally {
         setBusy(false);
       }
@@ -1303,7 +1330,7 @@
     async function downloadParticipationReport() {
       if (state.busy) return;
       setBusy(true);
-      setStatus('Creating the protected draw entrant list…');
+      setStatus('Preparing your contact list…');
       try {
         const data = await request(root, 'vendor_raffle_export', { client_platform: 'website' });
         const current = state.data || {};
@@ -1339,14 +1366,14 @@
           throw new Error('The entrant list did not match this vendor, event, current rules, or required CSV privacy contract.');
         }
         if (number(data.report.row_count) < 1) {
-          setStatus('No current vendor-draw entries with the required entrant attestations are available to report.', 'success');
+          setStatus('No couples have entered your draw yet.', 'success');
           return;
         }
         downloadCsv(data.report);
         const count = Math.floor(number(data.report.row_count));
-        setStatus(`Downloaded ${count} current ${count === 1 ? 'entrant' : 'entrants'}. Every listed couple accepted this vendor's draw and wedding-related marketing terms.`, 'success');
+        setStatus(`Downloaded ${count} ${count === 1 ? 'contact' : 'contacts'}.`, 'success');
       } catch (error) {
-        setStatus(error.message || 'Could not download the draw entrant list.', 'error');
+        setStatus('Could not download your contacts. Please try again.', 'error');
       } finally {
         setBusy(false);
       }
@@ -1409,8 +1436,6 @@
     saveButton.addEventListener('click', save);
     reloadButton.addEventListener('click', load);
     drawButton.addEventListener('click', drawPotentialWinner);
-    reviewConfirmButton.addEventListener('click', function () { reviewPotentialWinner('confirm'); });
-    reviewDisqualifyButton.addEventListener('click', function () { reviewPotentialWinner('disqualify'); });
     participationReportButton.addEventListener('click', downloadParticipationReport);
     entriesReloadButton.addEventListener('click', function () { void loadEntrants(); });
     entrantSearch.addEventListener('input', function () {
@@ -1436,10 +1461,11 @@
     });
     draws.addEventListener('click', function (event) {
       const button = event.target instanceof Element
-        ? event.target.closest('[data-action="send-notice"]')
+        ? event.target.closest('[data-action="send-notice"], [data-action="replace-winner"]')
         : null;
-      if (!button || !draws.contains(button)) return;
-      void sendWinnerNotice(text(button.dataset.drawId));
+      if (!button || !draws.contains(button) || button.disabled) return;
+      if (button.dataset.action === 'replace-winner') void replacePotentialWinner(text(button.dataset.drawId));
+      else void sendWinnerNotice(text(button.dataset.drawId));
     });
     load();
   }

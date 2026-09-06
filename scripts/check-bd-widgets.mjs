@@ -60,6 +60,7 @@ function assert(condition, message) {
 }
 
 const currentInPersonRulesVersion = '2026-09-01-in-person-entry';
+const currentParticipationNoticeVersion = '2026-09-04-pre-scan-draw-consent';
 
 function normalizeQrEdgeCopy(source) {
   return source
@@ -138,7 +139,12 @@ assert(
     qr.includes("'fixture_context',") &&
     qr.includes("$fixtureVendorId = (string)$fixtureContext['vendor']['id'];") &&
     qr.includes("'vendor_id' => $fixtureVendorId") &&
-    qr.includes("'participation_notice_version' => $participationNoticeVersion") &&
+    qr.includes("'participation_notice_version' => $submittedNoticeVersion") &&
+    qr.includes("$legacyScanNoticeAccepted = $_POST['action'] === 'scan_vendor'") &&
+    qr.includes("(string)$eventConfig['rules_version'] . '|2026-09-01-in-person-entry'") &&
+    /if \(!hash_equals\(\$participationNoticeVersion, \$submittedNoticeVersion\)\s*&& !\$legacyScanNoticeAccepted\)/.test(qr) &&
+    qr.indexOf("'code' => 'participation_notice_required'") >= 0 &&
+    qr.indexOf("'code' => 'participation_notice_required'") < qr.indexOf('$fixtureScanResponse = ww_qr_bingo_vendor_draw_request(') &&
     qr.includes("$freshFixtureContext = ww_qr_bingo_fixture_context($fixtureScanResponse);") &&
     qr.includes("$scannedVendors = $fixtureContext['scanned'];") &&
     qr.includes("$fixtureVendor = $fixtureContext['vendor'];") &&
@@ -161,8 +167,8 @@ assert(
   app.includes('history_starts_at: string;') &&
     app.includes('const historyStartsAt = normalizedText(payload.history_starts_at, 80);') &&
     app.includes('historyStartsAtMs >= entryClosesAtMs') &&
-    app.includes("new Date(String(eventConfig?.history_starts_at || '')).getTime()") &&
-    app.includes("new Date(String(eventConfig?.entry_closes_at || '')).getTime()") &&
+    /new Date\(\s*String\(eventConfig\?\.history_starts_at \|\| ''\),?\s*\)\.getTime\(\)/.test(app) &&
+    /new Date\(\s*String\(eventConfig\?\.entry_closes_at \|\| ''\),?\s*\)\.getTime\(\)/.test(app) &&
     app.includes('scanWindowNow >= scanOpensAt') &&
     app.includes('scanWindowNow < scanClosesAt') &&
     !app.includes('scanClosesAt - (4 * 60 * 60 * 1000)'),
@@ -177,7 +183,7 @@ assert(
   'Native scanner plays the success feedback callback for an unrecognized QR'
 );
 assert(
-  /const saved = await saveBingoScan\(matched\);\s*if \(saved\) \{\s*onScan\(value\);\s*\}/.test(app),
+  /const saved = await saveBingoScan\(matched\);\s*if \(interactionGeneration !== qrInteractionGenerationRef\.current\) return;\s*if \(saved\) \{\s*onScan\(value\);\s*\}/.test(app),
   'Native scanner no longer plays success feedback after a saved QR scan'
 );
 assert(
@@ -205,13 +211,17 @@ assert(
     authCallback.includes('accessibilityLabel="Go to homepage"'),
   'Native auth-callback homepage control is not exposed as an accessible button'
 );
-const vendorRaffleFetch = app.match(
-  /const fetchVendorRaffle = useCallback\(async \(\) => \{([\s\S]*?)\n  \}, \[[^\]]*\]\);\n\n  const openVendorRaffle/
-)?.[1];
+const vendorRaffleFetchStart = app.indexOf('const fetchVendorRaffle = useCallback(');
+const vendorRaffleFetchEnd = app.indexOf('const openVendorRaffle = useCallback(', vendorRaffleFetchStart);
+const vendorRaffleFetch = vendorRaffleFetchStart >= 0 && vendorRaffleFetchEnd > vendorRaffleFetchStart
+  ? app.slice(vendorRaffleFetchStart, vendorRaffleFetchEnd)
+  : '';
 assert(vendorRaffleFetch, 'Vendor draw fetch block could not be located');
 assert(
   vendorRaffleFetch.includes('setVendorRaffle(null)') &&
     vendorRaffleFetch.includes('if (!isCompleteVendorRaffleDashboard(data))') &&
+    vendorRaffleFetch.includes('vendorRaffleOpenGenerationRef.current === openGeneration') &&
+    /if \(!requestIsCurrent\(\)\) return;\s*applyVendorRaffle\(data\);/.test(vendorRaffleFetch) &&
     app.includes('value?.vendor && value?.settings && value?.rules_version') &&
     vendorRaffleFetch.match(/setVendorRaffle\(null\)/g)?.length >= 2,
   'Vendor draw fetch does not clear stale data and fail closed when a complete eligible dashboard cannot be verified'
@@ -321,16 +331,18 @@ assert(
     qr.includes("requestVendorDraw('raffle_opt_in'") &&
     qr.includes('function ww_qr_bingo_vendor_draw_request') &&
     !qr.includes('const WEBSITE_SESSION') &&
-    qr.includes('id="vendorDrawResponsibility"') &&
-    qr.includes('promotion_responsibility_acknowledged: Boolean(vendorDrawResponsibility.checked)') &&
-    qr.includes('draw_administration_contact_share_acknowledged: Boolean(vendorDrawResponsibility.checked)') &&
-    qr.includes('vendor_marketing_consent_acknowledged: Boolean(vendorDrawResponsibility.checked)') &&
-    app.includes('draw_administration_contact_share_acknowledged: promotionResponsibilityAccepted') &&
-    app.includes('vendor_marketing_consent_acknowledged: promotionResponsibilityAccepted') &&
+    qr.includes('id="qrRulesNoticeAcknowledged"') &&
+    qr.includes('const participationAccepted = hasCurrentParticipationNotice();') &&
+    qr.includes('promotion_responsibility_acknowledged: participationAccepted') &&
+    qr.includes('draw_administration_contact_share_acknowledged: participationAccepted') &&
+    qr.includes('vendor_marketing_consent_acknowledged: participationAccepted') &&
+    app.includes('const promotionResponsibilityAccepted = participationNoticeAccepted;') &&
+    /draw_administration_contact_share_acknowledged:\s*promotionResponsibilityAccepted/.test(app) &&
+    /vendor_marketing_consent_acknowledged:\s*promotionResponsibilityAccepted/.test(app) &&
     qr.includes('await openVendorDrawOffer(matched);') &&
     qr.includes("drawButton.textContent = 'Review optional prize draw';") &&
     qr.includes('drawButton.hidden = !scanned.has(v.id);') &&
-    qr.includes('openVendorDrawOffer(v);') &&
+    qr.includes('openVendorDrawOffer(v, true);') &&
     qr.includes('$scanned[] = $scannedVendorId;') &&
     !qr.includes('$scanned[$scannedVendorId] = true;'),
   'QR website and native flows do not keep vendor draw entry optional with explicit participant responsibility and contact-sharing acceptance'
@@ -356,9 +368,11 @@ assert(
     qr.includes('await refreshVendorDrawAfterStale(currentVendorDrawVendor);'),
   'QR website opt-in does not preserve the trusted vendor offer version or refresh and fail closed after a stale offer'
 );
-const websiteRaffleOptInProxy = qr.match(
-  /\$drawPayload = array\('vendor_id' => \$drawVendorId\);\s*if \(\$_POST\['action'\] === 'raffle_opt_in'\) \{([\s\S]*?)\n\s*\}\n\s*\$drawResponse =/
-)?.[1];
+const websiteRaffleOptInStart = qr.indexOf("if ($_POST['action'] === 'raffle_opt_in') {");
+const websiteRaffleOptInEnd = qr.indexOf('$drawResponse = ww_qr_bingo_vendor_draw_request(', websiteRaffleOptInStart);
+const websiteRaffleOptInProxy = websiteRaffleOptInStart >= 0 && websiteRaffleOptInEnd > websiteRaffleOptInStart
+  ? qr.slice(websiteRaffleOptInStart, websiteRaffleOptInEnd)
+  : '';
 assert(websiteRaffleOptInProxy, 'QR website raffle opt-in proxy could not be isolated');
 assert(
   websiteRaffleOptInProxy.includes("isset($_POST['participant_responsibility_disclosure'])") &&
@@ -382,16 +396,18 @@ assert(
   qr.includes("$config['rules_version'] = $rulesVersion;") &&
     qr.includes("'couple|' . (string)$userId . '|' . $eventConfig['event_key'] . '|' . $participationNoticeVersion") &&
     qr.includes('id="qrRulesNoticeAcknowledged"') &&
-    qr.includes('I agree to the QR Bingo Terms.') &&
-    qr.includes('href="/about/terms"') &&
+    qr.includes('I have read and agree to the <a href="/about/terms#qr-bingo"') &&
+    qr.includes('href="/about/terms#qr-bingo"') &&
     qr.includes('href="/about/privacy"') &&
     !qr.includes('If I choose to enter a named vendor\'s draw, Wedding Win Inc. will share my name') &&
     app.includes('testID="qr-bingo-terms-acknowledgement"') &&
-    app.includes('I agree to the QR Bingo Terms.') &&
-    app.includes('Read QR Bingo Terms') &&
-    app.includes('View Privacy Policy') &&
+    app.includes('I have read and agree to the QR Bingo Terms and Draw Rules.') &&
+    app.includes('Read the QR Bingo Terms') &&
+    app.includes('Open WeddingWin Privacy Policy') &&
     qr.includes('window.localStorage.getItem(storageKey)') &&
-    qr.includes("window.localStorage.setItem(storageKey, '1')") &&
+    qr.includes('window.localStorage.getItem(storageKey) === scope') &&
+    qr.includes('window.localStorage.setItem(storageKey, acceptedScope)') &&
+    qr.includes('qrRulesNoticeAcceptedScope === scope') &&
     qr.includes('qrRulesNotice.hidden = true;'),
   'QR website notice is not a compact, per-couple, event-and-rules-version acknowledgement that stays dismissed'
 );
@@ -400,9 +416,9 @@ const websiteNoticeVersion = qr.match(/\$participationNoticeVersion = \(string\)
 for (const [label, source] of [['couple QR function', qrSync], ['vendor QR function', qrVendorSync]]) {
   const edgeNoticeVersion = source.match(/const QR_PARTICIPATION_NOTICE_VERSION = "([^"]+)"/)?.[1];
   assert(
-    appNoticeVersion === currentInPersonRulesVersion &&
-      websiteNoticeVersion === currentInPersonRulesVersion &&
-      edgeNoticeVersion === currentInPersonRulesVersion,
+    appNoticeVersion === currentParticipationNoticeVersion &&
+      websiteNoticeVersion === currentParticipationNoticeVersion &&
+      edgeNoticeVersion === currentParticipationNoticeVersion,
     `${label} notice version is not aligned with native and website QR Bingo`
   );
   const productionScanStart = source.indexOf('if (action === "scan")');
@@ -413,7 +429,10 @@ for (const [label, source] of [['couple QR function', qrSync], ['vendor QR funct
   assert(
     productionScan.includes('const scanResult = await postQrAction(') &&
       productionScan.includes('action: "scan_vendor"') &&
-      productionScan.includes('participation_notice_version: qrParticipationNoticeVersion()') &&
+      /participation_notice_version: cleanText\(\s*body\?\.participation_notice_version,\s*180,?\s*\)/.test(productionScan) &&
+      source.includes('!acceptsQrParticipationNotice(action, body as Record<string, unknown>)') &&
+      source.indexOf('code: "participation_notice_required"') < productionScanStart &&
+      source.includes('if (suppliedVersion === qrParticipationNoticeVersion()) return true;') &&
       productionScan.includes('const safeStatus = [409, 422, 428].includes(upstreamStatus)'),
     `${label} production scan does not forward the notice version or preserve safe website rejection statuses`
   );
@@ -577,8 +596,8 @@ assert(
     vendorDraw.includes('data-field="max_winners"') &&
     (vendorDraw.match(/<option value="[1-3]">/g) || []).length === 3 &&
     vendorDraw.includes('data-field="exclude_previous_winners" checked') &&
-    vendorDraw.includes('Do not select the same couple twice for this draw') &&
-    vendorDraw.includes('applies only to this vendor’s current prize offer') &&
+    vendorDraw.includes('A different couple each time') &&
+    vendorDraw.includes('Previous winners stay in your contacts, but cannot win this draw again.') &&
     vendorDraw.includes('data-field="legal_terms_accepted"') &&
     vendorDraw.includes('View the current Official Rules'),
   'Vendor dashboard omits prize value, winner count, repeat policy, or current-rules acceptance controls'
@@ -599,8 +618,6 @@ const vendorWizardUniqueSelectors = [
   'data-action="entries-reload"',
   'data-role="entrants"',
   'data-action="draw"',
-  'data-action="review-confirm"',
-  'data-action="review-disqualify"',
 ];
 assert(
   vendorWizardUniqueSelectors.every((selector) => vendorDraw.split(selector).length === 2),
@@ -617,12 +634,14 @@ assert(
     vendorDrawScript.includes('state.rulesViewedVersion = version;') &&
     vendorDrawScript.includes('state.responsibilityViewedVersion = version;') &&
     !vendorDrawScript.includes("vendorResponsibilityDetails.addEventListener('toggle'") &&
-    vendorDrawStyle.includes('grid-template-columns: repeat(2, minmax(0, 1fr))'),
+    vendorDrawStyle.includes('grid-template-columns: repeat(4, minmax(0, 1fr))'),
   'Vendor dashboard is missing the four-step wizard, mobile step layout, or current-rules gating'
 );
 assert(
-  vendorDraw.includes('One confirmation') &&
-    vendorDraw.includes('I confirm I have read and accept the current Official Rules and vendor responsibilities') &&
+  vendorDraw.includes('Rules &amp; responsibilities') &&
+    vendorDraw.includes('I have read and agree to the rules above.') &&
+    vendorDraw.includes('you confirm that you have read and accept the current Official Rules and vendor responsibilities, and are authorized to do so for this vendor.') &&
+    vendorDraw.includes('class="ww-qrvd-rules-details"') &&
     !vendorDraw.includes('Complete these 3 quick checks') &&
     !vendorDraw.includes('data-role="rules-review-item"') &&
     !vendorDraw.includes('data-role="responsibility-state"') &&
@@ -658,20 +677,21 @@ assert(
   'Vendor dashboard update payload does not satisfy the current Edge contract'
 );
 assert(
-  app.includes('const combinedAcceptance = Boolean(requestLegalAccepted && draftRulesViewed);') &&
+  /const combinedAcceptance = Boolean\(\s*requestLegalAccepted && draftRulesViewed,?\s*\);/.test(app) &&
     app.includes('legal_terms_accepted: combinedAcceptance') &&
     app.includes('rules_viewed: combinedAcceptance') &&
     app.includes('apple_non_sponsor_acknowledged: combinedAcceptance') &&
     app.includes('vendor_responsibility_acknowledged: combinedAcceptance') &&
-    app.includes('I confirm I have read and accept the current Official Rules and vendor responsibilities') &&
-    app.includes("setVendorRaffleRulesViewedVersion(nextAccepted ? vendorRaffleRulesVersion : '');") &&
+    app.includes('I have read and agree to the rules above.') &&
+    app.replace(/\s+/g, ' ').includes('By agreeing, you confirm you are authorized to accept the current Official Rules and vendor responsibilities for this business.') &&
+    /setVendorRaffleRulesViewedVersion\(\s*nextAccepted\s*\? vendorRaffleRulesVersion\s*: '',?\s*\);/.test(app) &&
     !app.includes('setRaffleLegalAccepted((value) => {'),
   'Native vendor-draw acceptance must use one pure checkbox state and map that attestation consistently to the shared API contract'
 );
 assert(
   vendorDrawScript.includes('data.entry_count') &&
     vendorDraw.includes('Download contacts (CSV)') &&
-    vendorDraw.includes('including anyone removed from winner selection.') &&
+    vendorDraw.includes('Everyone who entered stays in your contacts, even if removed from the draw.') &&
     vendorDraw.includes('data-role="entry-count"') &&
     vendorDraw.includes('data-role="selection-pool-count"') &&
     vendorDraw.includes('data-role="excluded-count"') &&
@@ -686,8 +706,10 @@ assert(
     vendorDrawScript.includes("['participant_reference', 'reference']") &&
     vendorDrawScript.includes("entryValue(entry, ['pool_status'])") &&
     vendorDrawScript.includes("const disqualified = poolStatus === 'disqualified';") &&
-    vendorDrawScript.includes('Disqualified — record kept') &&
-    vendorDrawScript.includes('it cannot be restored to the winner pool') &&
+    vendorDrawScript.includes('Not eligible') &&
+    vendorDrawScript.includes('They cannot be added back to this draw.') &&
+    !vendorDrawScript.includes('Entry reference: ${participantReference}') &&
+    vendorDrawScript.includes('actionButton.dataset.participantReference = participantReference;') &&
     vendorDrawScript.includes('const selectionProtected = disqualified || alreadySelected') &&
     vendorDrawScript.includes('entry.can_update !== false') &&
     vendorDrawScript.includes('state.data.can_update_entries !== false') &&
@@ -719,7 +741,7 @@ assert(
     vendorDraw.includes('data-role="entrant-filter"') &&
     vendorDraw.includes('data-role="entrant-visible-count"') &&
     vendorDraw.includes('Find a couple') &&
-    vendorDraw.includes('Complete contact list') &&
+    vendorDraw.includes('Your contact list') &&
     vendorDrawScript.includes("const entrantSearch = find('[data-role=\"entrant-search\"]');") &&
     vendorDrawScript.includes("const entrantFilter = find('[data-role=\"entrant-filter\"]');") &&
     vendorDrawScript.includes('function entrantSelectionDetails(entry)') &&
@@ -735,21 +757,21 @@ assert(
     vendorDrawStyle.includes('.ww-qrvd-entry-admin') &&
     vendorDrawStyle.includes('.ww-qrvd-entry-reason-field { flex: 0 0 auto; width: 100%; }') &&
     app.includes("const [vendorRaffleEntryQuery, setVendorRaffleEntryQuery] = useState('');") &&
-    app.includes("const [vendorRaffleEntryFilter, setVendorRaffleEntryFilter] = useState<'all' | 'included' | 'excluded'>('all');") &&
+    /const \[vendorRaffleEntryFilter, setVendorRaffleEntryFilter\] = useState<\s*'all' \| 'included' \| 'excluded'\s*>\('all'\);/.test(app) &&
     app.includes('const vendorRaffleVisibleEntries = useMemo(() => {') &&
     app.includes('Search name, email or phone') &&
-    app.includes("Linking.openURL(`mailto:${entrantEmail}`)") &&
+    /Linking.openURL\(\s*`mailto:\$\{entrantEmail\}`,?\s*\)/.test(app) &&
     app.includes("Linking.openURL(`tel:${dialValue}`)") &&
-    app.includes('vendorRaffleExpandedEntryReference === participantReference') &&
-    app.includes('This contact stays in the downloadable CSV whether included or excluded.'),
+    /vendorRaffleExpandedEntryReference ===\s*participantReference/.test(app) &&
+    app.includes('Their contact details stay in your list.'),
   'Vendor dashboard contact cards must stay searchable, filterable, actionable, and mobile friendly on website and iOS'
 );
 assert(
   vendorDrawScript.includes("draw.selection_status === 'potential'") &&
     vendorDrawScript.includes("draw.selection_status === 'verified'") &&
-    vendorDrawScript.includes('Awaiting vendor verification') &&
+    vendorDrawScript.includes('Your selected couple') &&
     vendorDrawScript.includes("request(root, 'vendor_raffle_draw'") &&
-    vendorDrawScript.includes("request(root, 'vendor_raffle_review'") &&
+    !vendorDrawScript.includes("request(root, 'vendor_raffle_review'") &&
     vendorDrawScript.includes("request(root, 'vendor_raffle_send_notice'") &&
     vendorDrawScript.includes("sendButton.dataset.action = 'send-notice'") &&
     vendorDrawScript.includes('draw.can_send_notice === false') &&
@@ -758,12 +780,16 @@ assert(
     vendorDrawScript.includes('can_test_suppressed_notice') &&
     vendorDrawScript.includes('Test Send (email suppressed)') &&
     vendorDrawScript.includes('Email was suppressed for App Review and was not delivered.') &&
-    vendorDraw.includes('Selecting a potential winner never sends an email') &&
+    vendorDraw.includes('Choose a couple, then send their winner email.') &&
     vendorDraw.includes('This button only performs random selection. It cannot send winner email.') &&
-    vendorDrawScript.includes("decision: decision") &&
-    vendorDrawScript.includes('skill_question_answer:') &&
-    vendorDrawScript.includes('eligibility_confirmed:') &&
-    vendorDrawScript.includes('rules_release_confirmed:'),
+    vendorDrawScript.includes('winner_checks_confirmed: true') &&
+    vendorDrawScript.includes('can_confirm_and_send_notice === true') &&
+    vendorDrawScript.includes('can_confirm_and_test_suppressed_notice === true') &&
+    vendorDrawScript.includes('I confirm my business has completed the required checks in the Draw Rules.') &&
+    vendorDrawScript.includes('Send the winner email to ${recipient} now?') &&
+    !vendorDrawScript.includes('skill_question_answer:') &&
+    !vendorDrawScript.includes('review_notes:') &&
+    !vendorDraw.includes('data-role="review-panel"'),
   'Vendor dashboard does not implement the potential-winner verification lifecycle'
 );
 const websiteWinnerSelectionStart = vendorDrawScript.indexOf('async function drawPotentialWinner()');
@@ -774,21 +800,43 @@ assert(
     !vendorDrawScript.slice(websiteWinnerSelectionStart, websiteWinnerSelectionEnd).includes('vendor_raffle_send_notice'),
   'Vendor website winner-selection action also sends email instead of keeping the two actions separate'
 );
+const websiteWinnerReplacementStart = vendorDrawScript.indexOf('async function replacePotentialWinner(drawId)');
+const websiteWinnerReplacementEnd = vendorDrawScript.indexOf('function downloadCsv(', websiteWinnerReplacementStart);
+const websiteWinnerReplacement = vendorDrawScript.slice(websiteWinnerReplacementStart, websiteWinnerReplacementEnd);
+assert(
+  vendorDrawScript.includes("replaceButton.dataset.action = 'replace-winner'") &&
+    vendorDrawScript.includes('Choose a different winner') &&
+    !vendorDraw.includes('data-field="review-disqualification-reason"') &&
+    !vendorDraw.includes('data-action="review-disqualify"') &&
+    vendorDraw.includes("'vendor_raffle_replace'") &&
+    websiteWinnerReplacementStart >= 0 && websiteWinnerReplacementEnd > websiteWinnerReplacementStart &&
+    websiteWinnerReplacement.includes("request(root, 'vendor_raffle_replace', { draw_id: drawId })") &&
+    websiteWinnerReplacement.includes('if (state.busy || !state.data || !text(drawId)) return;') &&
+    websiteWinnerReplacement.includes('currentPendingSelectionId() !== drawId') &&
+    websiteWinnerReplacement.includes("draw.selection_status === 'potential'") &&
+    websiteWinnerReplacement.includes("draw.selection_status === 'replaced'") &&
+    websiteWinnerReplacement.includes("responseData.code === 'no_replacement_available'") &&
+    websiteWinnerReplacement.includes('Your current selection is unchanged.') &&
+    vendorDrawScript.includes("statusValue === 'replaced'") &&
+    vendorDrawScript.includes('Another couple selected') &&
+    !websiteWinnerReplacement.includes('disqualification_reason') &&
+    !websiteWinnerReplacement.includes('vendor_raffle_send_notice') &&
+    !websiteWinnerReplacement.includes('vendor_raffle_review'),
+  'Vendor website replacement must use the exact pending selection, preserve truthful history, require no reason, and never send email'
+);
 assert(
   !/contact details withheld/i.test(vendorDrawScript + app) &&
     vendorDrawScript.includes("['Name', draw.winner_name]") &&
     vendorDrawScript.includes("['Email', draw.winner_email]") &&
     vendorDrawScript.includes("['Phone', draw.winner_phone]") &&
     vendorDrawScript.includes("['Wedding date', draw.winner_wedding_date]") &&
-    vendorDrawScript.includes('accepted this vendor\\u2019s draw and wedding-related marketing terms') &&
-    vendorDrawScript.includes('Honour unsubscribe requests') &&
+    vendorDrawScript.includes('Their contact details stay in your contacts and download.') &&
     app.includes('winner_phone?: string') &&
     app.includes('winner_wedding_date?: string') &&
     app.includes('Email: {draw.winner_email}') &&
     app.includes('Phone: {draw.winner_phone}') &&
     app.includes('Wedding date: {draw.winner_wedding_date}') &&
-    app.includes('accepted this vendor’s draw and wedding-related marketing terms') &&
-    app.includes('Honour unsubscribe requests'),
+    app.includes('Their contact details stay in your list.'),
   'Vendor-owned draw history must show all recorded selected-person contact fields on website and iOS'
 );
 assert(
@@ -806,16 +854,23 @@ assert(
 );
 assert(
   !/will email you and the selected couple/i.test(vendorDraw + vendorDrawScript) &&
-    vendorDraw.includes('<strong>Verification question:</strong>') &&
-    vendorDrawScript.includes('Complete the required winner verification before sending the winner notice.') &&
-    vendorDrawScript.includes('Enter the selected couple’s answer to the verification question before confirming.') &&
+    !vendorDraw.includes('<strong>Verification question:</strong>') &&
+    !vendorDraw.includes('data-field="review-skill-answer"') &&
+    !vendorDraw.includes('data-role="skill-question-prompt"') &&
+    !vendorDrawScript.includes('reviewSkillAnswer') &&
+    vendorDrawScript.includes("draw.selection_status === 'verified' && (draw.can_send_notice === true || suppressedTest)") &&
+    vendorDrawScript.includes('winner_checks_confirmed: true') &&
+    !vendorDrawScript.includes('reviewVerificationDate') &&
     officialRules.includes('<strong>Why the question is used:</strong>') &&
     officialRules.includes('The question is not part of entry and does') &&
-    officialRules.includes('compares the answer recorded') &&
+    !officialRules.includes('compares the answer recorded') &&
+    officialRules.includes('outside WeddingWin') &&
     !officialRules.includes('time-limited mathematical') &&
     !officialRules.includes('deadline in the notice') &&
-    app.includes('Complete winner verification') &&
-    app.includes('Enter the answer exactly as the selected couple provides it.') &&
+    app.includes('winner_checks_confirmed: true') &&
+    !app.includes('Enter the answer exactly as the selected couple provides it.') &&
+    !app.includes('vendorSkillAnswer') &&
+    app.includes('can_confirm_and_send_notice') &&
     !app.includes('Couple answers the math question') &&
     !vendorDraw.includes('Why the question?'),
   'Vendor dashboard does not clearly assign verification and fulfilment responsibility to the vendor'
@@ -823,7 +878,8 @@ assert(
 assert(
   vendorDrawStyle.includes('@media (max-width: 850px)') &&
     vendorDrawStyle.includes('@media (max-width: 640px)') &&
-    vendorDrawStyle.includes('.ww-qrvd-stats { grid-template-columns: 1fr; }') &&
+    vendorDrawStyle.includes('grid-template-columns: repeat(3, minmax(0, 1fr))') &&
+    vendorDrawStyle.includes('.ww-qrvd-stat { align-items: flex-start; flex-direction: column;') &&
     vendorDraw.includes('data-role="entry-status" role="status" aria-live="polite"') &&
     vendorDraw.includes('data-role="entrants" aria-busy="false"') &&
     vendorDrawScript.includes("card.setAttribute('aria-labelledby', entrantHeading.id)") &&
@@ -917,8 +973,8 @@ assert(
   'Form 354 source is not an explicit retired tombstone that preserves historical BD records'
 );
 assert(
-  vendorDraw.includes('not currently selectable') &&
-    vendorDraw.includes('including anyone removed from winner selection.') &&
+  vendorDraw.includes('<span>out of the draw</span>') &&
+    vendorDraw.includes('Everyone who entered stays in your contacts, even if removed from the draw.') &&
     vendorDrawScript.includes('excludedCount.textContent = String(Math.max(0, entrantTotal - poolTotal));') &&
     vendorDrawScript.includes('excludedCount.textContent = String(Math.max(0, count - poolCount));') &&
     vendorDrawScript.includes('state.entries = [];') &&
@@ -934,7 +990,13 @@ assert(
     officialRules.includes("vendor's draw") &&
     officialRules.includes("remains in the vendor's complete entrant CSV") &&
     /mark an\s+entry excluded from random selection/.test(officialRules) &&
-    /Entry-list\s+changes are locked while a potential winner is pending/.test(officialRules),
+    /Entry-list\s+changes stay locked while a potential winner is waiting for review/.test(officialRules) &&
+    officialRules.includes('<strong>Choose a different winner</strong>') &&
+    /before\s+confirming the current selection/.test(officialRules) &&
+    /you do not need to enter a reason in the\s+app or website/.test(officialRules) &&
+    officialRules.includes('The previous selection and contact details are kept.') &&
+    /If no\s+other eligible couple is available, the current selection stays unchanged\./.test(officialRules) &&
+    officialRules.includes('Choosing another potential winner does not send an email.'),
   'Official Rules do not disclose the multi-winner, no-repeat, entrant-management, CSV-retention, and separate-email behavior'
 );
 
@@ -945,7 +1007,13 @@ for (const [label, source] of [['couple QR function', qrSync], ['vendor QR funct
     ? source.slice(fixtureContextStart, fixtureContextEnd)
     : '';
   assert(
-    fixtureContextBranch.includes('fetchFullBdUserById(nativeSession.user_id)') &&
+    fixtureContextBranch.includes('websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)') &&
+      fixtureContextBranch.includes('String(fixtureUser.user_id) !== String(authenticatedMemberId)') &&
+      source.includes('const authenticatedMemberId = websitePrincipal?.userId || String(nativeSession!.user_id);') &&
+      source.includes('websitePrincipal = await verifyQrBingoWebsiteRequest(request, rawBody, body,') &&
+      source.includes('if (!await nativeSessionMatchesCachedBdIdentity(nativeSession))') &&
+      source.indexOf('websitePrincipal = await verifyQrBingoWebsiteRequest(') < fixtureContextStart &&
+      source.indexOf('if (!await nativeSessionMatchesCachedBdIdentity(nativeSession))') < fixtureContextStart &&
       fixtureContextBranch.includes('isolatedFixtureContext(') &&
       !fixtureContextBranch.includes('loginWebsiteSession') &&
       !fixtureContextBranch.includes('getQrPage'),
@@ -1039,6 +1107,7 @@ for (const [label, source] of [['couple QR function', qrSync], ['vendor QR funct
     `${label} does not delegate potential-winner creation to the atomic database selector`
   );
   assert(source.includes('draw.selection_status !== "verified"'), `${label} can send final notices before verification`);
+  assert(source.includes('body.winner_checks_confirmed !== true') && source.includes('p_winner_checks_confirmed: true'), `${label} can confirm a pending winner without the explicit send confirmation`);
   assert(
     /draw\.selection_status === "potential"\s*\|\|\s*draw\.selection_status === "verified"/.test(source) &&
       !source.includes('draw.selection_status !== "disqualified"'),
@@ -1069,7 +1138,8 @@ for (const [label, source] of [['couple QR function', qrSync], ['vendor QR funct
   );
   assert(
     source.includes('function hasCurrentQrBingoVendorTag') &&
-      source.includes('const user = await fetchFullBdUserById(nativeSession.user_id);') &&
+      source.includes('const user = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);') &&
+      source.includes('!user?.user_id || String(user.user_id) !== String(authenticatedMemberId)') &&
       source.includes('async function resolveVendorForRaffleAction') &&
       source.includes('return hasCurrentQrBingoVendorTag(user)') &&
       (source.match(/const vendor = await resolveVendorForRaffleAction\(/g) || []).length >= 5 &&

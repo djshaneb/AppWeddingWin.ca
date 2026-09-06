@@ -196,9 +196,15 @@ Deno.test("current draw opt-in requires and persists complete named-vendor marke
         "$drawPayload['vendor_marketing_consent_acknowledged']",
       ) &&
       website.includes(
-        "vendor_marketing_consent_acknowledged: Boolean(vendorDrawResponsibility.checked)",
+        "vendor_marketing_consent_acknowledged: participationAccepted",
+      ) &&
+      sourceFunction(website, "enterVendorDraw").includes(
+        "const participationAccepted = hasCurrentParticipationNotice();",
+      ) &&
+      sourceFunction(website, "vendorDrawEntryReady").includes(
+        "hasCurrentParticipationNotice()",
       ),
-    "native and website opt-in boundaries must submit the named-vendor marketing acknowledgement",
+    "native and website opt-in boundaries must submit the named-vendor marketing acknowledgement from current pre-scan acceptance and an explicit draw choice",
   );
 
   for (const source of sources) {

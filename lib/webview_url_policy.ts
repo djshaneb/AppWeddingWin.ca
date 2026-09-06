@@ -1,9 +1,14 @@
-export type WebViewUrlAction = "in-app" | "system-browser" | "external-app" | "block";
+export type WebViewUrlAction =
+  | "in-app"
+  | "system-browser"
+  | "external-app"
+  | "block";
 
 export function hostMatchesDomain(host: unknown, domain: string) {
   const normalizedHost = String(host || "").replace(/\.$/, "").toLowerCase();
   const normalizedDomain = domain.toLowerCase();
-  return normalizedHost === normalizedDomain || normalizedHost.endsWith(`.${normalizedDomain}`);
+  return normalizedHost === normalizedDomain ||
+    normalizedHost.endsWith(`.${normalizedDomain}`);
 }
 
 export function isWeddingWinHost(host: unknown) {
@@ -12,6 +17,26 @@ export function isWeddingWinHost(host: unknown) {
 
 export function isWedWebsiteHost(host: unknown) {
   return hostMatchesDomain(host, "wedwebsite.ca");
+}
+
+// Opening native vendor tools is narrower than ordinary WebView navigation:
+// only the two canonical HTTPS hosts and the exact dashboard route qualify.
+// Query/hash values never select a vendor, event, or native action.
+export function isVendorDrawDashboardUrl(value: unknown) {
+  try {
+    const parsed = new URL(String(value || "").trim());
+    return parsed.protocol === "https:" &&
+      (parsed.hostname === "weddingwin.ca" ||
+        parsed.hostname === "www.weddingwin.ca") &&
+      !parsed.username && !parsed.password &&
+      (parsed.port === "" || parsed.port === "443") &&
+      (parsed.pathname === "/qr-bingo-vendor-draw" ||
+        parsed.pathname === "/qr-bingo-vendor-draw/") &&
+      !parsed.searchParams.has("logout") &&
+      !parsed.searchParams.has("ww_app_logout");
+  } catch {
+    return false;
+  }
 }
 
 export function qrPayloadUrlAllowed(value: unknown) {
@@ -73,11 +98,16 @@ export function webViewUrlAction(value: unknown): WebViewUrlAction {
 
   const protocol = parsed.protocol.toLowerCase();
   if (protocol === "https:") {
-    return isWeddingWinHost(parsed.hostname) || isWedWebsiteHost(parsed.hostname)
+    return isWeddingWinHost(parsed.hostname) ||
+        isWedWebsiteHost(parsed.hostname)
       ? "in-app"
       : "system-browser";
   }
-  if (["mailto:", "tel:", "sms:", "itms-apps:", "itms-appss:", "maps:"].includes(protocol)) {
+  if (
+    ["mailto:", "tel:", "sms:", "itms-apps:", "itms-appss:", "maps:"].includes(
+      protocol,
+    )
+  ) {
     return "external-app";
   }
   return "block";
