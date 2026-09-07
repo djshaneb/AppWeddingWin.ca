@@ -33,6 +33,7 @@ async function fixture(
     ) => Promise<{ state: string; cookie: string; nonce: string }>;
     finish: (
       attempt: { state: string; cookie: string; nonce: string },
+      oauthError?: string,
     ) => Promise<Response>;
     verify: typeof verifyState;
     records: {
@@ -41,6 +42,7 @@ async function fixture(
       exchanges: Record<string, unknown>[];
       tokenRequests: number;
       attempts: number;
+      redemptions: number;
       cacheReads: number;
     };
     existing: (plan: string) => void;
@@ -66,6 +68,7 @@ async function fixture(
     exchanges: [] as Record<string, unknown>[],
     tokenRequests: 0,
     attempts: 0,
+    redemptions: 0,
     cacheReads: 0,
   };
   let member: Record<string, unknown> | undefined;
@@ -111,7 +114,9 @@ async function fixture(
           method === "POST"
         ) {
           const body = JSON.parse(String(init?.body));
+          records.redemptions++;
           const valid = !attemptConsumed &&
+            body.p_provider === storedAttempt?.provider &&
             body.p_state_hash === storedAttempt?.state_hash &&
             body.p_binding_hash === storedAttempt?.binding_hash;
           if (valid) attemptConsumed = true;
@@ -229,6 +234,7 @@ async function fixture(
     };
     const finish = async (
       attempt: { state: string; cookie: string; nonce: string },
+      oauthError?: string,
     ) => {
       idToken = await new SignJWT({
         email: "native-google@example.invalid",
@@ -245,7 +251,9 @@ async function fixture(
       return callbackHandler(
         new Request(
           `https://offline-google-db.example.invalid/functions/v1/google-oauth-callback?${new URLSearchParams(
-            { code: "offline-code", state: attempt.state },
+            oauthError
+              ? { error: oauthError, state: attempt.state }
+              : { code: "offline-code", state: attempt.state },
           )}`,
           { headers: { Cookie: attempt.cookie } },
         ),
@@ -381,12 +389,100 @@ Deno.test("Google signup rejects role insertion, removal and tampering before pr
         const response = await f.finish(altered);
         assert(
           response.status === 400 && f.records.tokenRequests === 0 &&
-            f.records.creates.length === 0,
+            f.records.creates.length === 0 && f.records.redemptions === 0 &&
+            !response.headers.has("Location"),
           "tampered signup intent reached provider or account operations",
+        );
+        assert(
+          response.headers.get("Content-Type") ===
+              "text/plain; charset=utf-8" &&
+            !(await response.text()).includes("<"),
+          "unverified state must fail without HTML source or a native redirect",
         );
       }
     });
   }
+});
+
+Deno.test("Google callback with a missing browser cookie returns a native error before exchange and permits a bound retry", async () => {
+  await fixture(async (f) => {
+    f.existing("18");
+    const attempt = await f.begin();
+    const response = await f.finish({ ...attempt, cookie: "" });
+    assert(
+      response.status === 302,
+      "verified native failure did not return to the app",
+    );
+    const target = new URL(response.headers.get("Location")!);
+    assert(
+      target.origin === "null" && target.protocol === "weddingwin:" &&
+        target.hostname === "bd-login" && target.pathname === "" &&
+        target.searchParams.get("error") === "google_sign_in_failed" &&
+        !target.searchParams.has("exchange_code") &&
+        !target.searchParams.has("ok"),
+      "cookie failure produced an unsafe or successful callback",
+    );
+    assert(
+      f.records.redemptions === 0 && f.records.tokenRequests === 0 &&
+        f.records.exchanges.length === 0 && f.records.creates.length === 0 &&
+        f.records.updates.length === 0,
+      "missing browser binding reached provider, member or session operations",
+    );
+    const retry = await f.finish(attempt);
+    assert(
+      new URL(retry.headers.get("Location")!).searchParams.get("ok") === "1" &&
+        Number(f.records.exchanges.length) === 1,
+      "missing-cookie failure consumed the valid browser-bound attempt",
+    );
+  });
+});
+
+Deno.test("Google cancellation consumes the bound attempt and cannot be replayed as success", async () => {
+  await fixture(async (f) => {
+    const attempt = await f.begin();
+    const response = await f.finish(attempt, "access_denied");
+    const target = new URL(response.headers.get("Location")!);
+    assert(
+      response.status === 302 &&
+        target.searchParams.get("error") === "access_denied" &&
+        !target.searchParams.has("exchange_code"),
+      "Google cancellation was not returned without credentials",
+    );
+    assert(
+      f.records.redemptions === 1 && f.records.tokenRequests === 0 &&
+        f.records.creates.length === 0 && f.records.exchanges.length === 0,
+      "cancelled authorization reached identity operations",
+    );
+    const replay = await f.finish(attempt);
+    assert(
+      new URL(replay.headers.get("Location")!).searchParams.get("error") ===
+          "google_sign_in_failed" &&
+        f.records.tokenRequests === 0 &&
+        f.records.exchanges.length === 0,
+      "cancelled authorization was replayable",
+    );
+  });
+});
+
+Deno.test("Google successful native callback cannot redeem the same authorization twice", async () => {
+  await fixture(async (f) => {
+    f.existing("18");
+    const attempt = await f.begin();
+    const first = await f.finish(attempt);
+    assert(
+      new URL(first.headers.get("Location")!).searchParams.get("ok") === "1",
+      "initial authorization failed",
+    );
+    const replay = await f.finish(attempt);
+    const target = new URL(replay.headers.get("Location")!);
+    assert(
+      replay.status === 302 &&
+        target.searchParams.get("error") === "google_sign_in_failed" &&
+        !target.searchParams.has("exchange_code") &&
+        f.records.tokenRequests === 1 && f.records.exchanges.length === 1,
+      "replayed authorization issued another provider exchange or session",
+    );
+  });
 });
 
 Deno.test("Google signup rejects duplicate or conflicting untrusted intent fields before authorization", async () => {

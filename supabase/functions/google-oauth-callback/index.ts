@@ -6,6 +6,7 @@ import {
 } from "../_shared/auth_exchange.ts";
 import { findAuthUserByEmail } from "../_shared/auth_users.ts";
 import { redeemOAuthLoginAttempt } from "../_shared/oauth_attempt.ts";
+import { googleOAuthErrorResponse } from "../_shared/google_oauth_error.ts";
 import { requireCurrentPolicyConsent } from "../_shared/policy_consent.ts";
 import { assertAppleSignupAccountType } from "../_shared/apple_signup_role.ts";
 import {
@@ -26,7 +27,6 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GOOGLE_CALLBACK_URL =
   Deno.env.get("GOOGLE_CALLBACK_URL") ||
   "https://www.weddingwin.ca/auth/google-callback";
-const DEFAULT_FINAL = "https://www.weddingwin.ca/";
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const BD_API_KEY = Deno.env.get("BD_API_KEY") || "";
 const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
@@ -395,29 +395,6 @@ function appRedirectWithError(appRedirect: URL, message: string): Response {
   });
 }
 
-function htmlPage(title: string, body: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
-<style>body{background:#0b0b0c;color:#e5e5e7;font-family:-apple-system,Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}.card{text-align:center;padding:32px;max-width:480px}.spinner{width:32px;height:32px;border:3px solid #2a2a2e;border-top-color:#d4af37;border-radius:50%;margin:0 auto 16px;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.err{color:#ff6b6b;font-family:monospace;font-size:12px;word-break:break-all;margin-top:16px;text-align:left}</style>
-</head><body><div class="card">${body}</div></body></html>`;
-}
-
-function escapeHtml(value: unknown) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function errorPage(message: string): Response {
-  const body = `<div style="color:#ff6b6b;font-weight:600;margin-bottom:12px">Sign-in failed</div><div>${escapeHtml(message)}</div><div style="margin-top:24px"><a href="${DEFAULT_FINAL}" style="color:#d4af37">Go back</a></div>`;
-  return new Response(htmlPage("Sign-in failed", body), {
-    status: 400,
-    headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-  });
-}
-
 async function getConfig(): Promise<{ id: string; secret: string }> {
   const { data, error } = await admin
     .from("admin_config")
@@ -436,6 +413,10 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
+  let verifiedReturnUrl: string | null = null;
+  const errorPage = (message: string) =>
+    googleOAuthErrorResponse(message, verifiedReturnUrl, corsHeaders);
+
   try {
     const url = new URL(req.url);
     const code = url.searchParams.get("code");
@@ -451,6 +432,7 @@ Deno.serve(async (req: Request) => {
       return errorPage(error instanceof Error ? error.message : "Invalid Google sign-in state.");
     }
     const finalRedirect = state.r;
+    verifiedReturnUrl = finalRedirect;
     const subscriptionId = state.s;
     const consent = state.c;
 

@@ -62,14 +62,18 @@ export function serializeOAuthBindingCookie(
     throw new Error("OAuth browser binding secret is invalid.");
   }
 
-  const sameSite = provider === "apple" ? "None" : "Lax";
+  // Both providers return through a different-site bridge. Safari can omit a
+  // Lax cookie during that redirect chain, even for Google's GET callback.
+  // None permits that return; the short-lived, HttpOnly host cookie is still
+  // required and redeemed with the signed state before any provider exchange.
+  // See https://bugs.webkit.org/show_bug.cgi?id=219650.
   return [
     `${OAUTH_BINDING_COOKIE_NAMES[provider]}=${bindingSecret}`,
     "Path=/",
     `Max-Age=${OAUTH_ATTEMPT_TTL_SECONDS}`,
     "Secure",
     "HttpOnly",
-    `SameSite=${sameSite}`,
+    "SameSite=None",
   ].join("; ");
 }
 

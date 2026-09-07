@@ -31,42 +31,31 @@ const STATE = "signed-oauth-state-fixture";
 
 type AttemptAdmin = Parameters<typeof createOAuthLoginAttempt>[0]["admin"];
 
-Deno.test("OAuth binding cookies are host-only, secure, HttpOnly, and provider-correct", () => {
-  const google = serializeOAuthBindingCookie("google", BINDING);
-  assert(
-    google.startsWith(`__Host-ww_google_oauth=${BINDING};`),
-    "Google cookie name is wrong",
-  );
-  assert(
-    google.includes("Path=/"),
-    "Google cookie must use the host-prefix path",
-  );
-  assert(
-    google.includes("Max-Age=600"),
-    "Google cookie lifetime must match state",
-  );
-  assert(google.includes("Secure"), "Google cookie must be Secure");
-  assert(google.includes("HttpOnly"), "Google cookie must be HttpOnly");
-  assert(
-    google.includes("SameSite=Lax"),
-    "Google callback uses a top-level GET",
-  );
-  assert(!/Domain=/i.test(google), "a __Host- cookie must not have Domain");
-
-  const apple = serializeOAuthBindingCookie("apple", BINDING);
-  assert(
-    apple.startsWith(`__Host-ww_apple_oauth=${BINDING};`),
-    "Apple cookie name is wrong",
-  );
-  assert(
-    apple.includes("SameSite=None"),
-    "Apple form_post bridge requires SameSite=None",
-  );
-  assert(apple.includes("Secure"), "SameSite=None must be paired with Secure");
-  assert(
-    !/Domain=/i.test(apple),
-    "the Apple binding must stay on the exact Edge host",
-  );
+Deno.test("OAuth cross-site binding cookies retain exact host, lifetime, and security attributes", () => {
+  for (const provider of ["google", "apple"] as const) {
+    const cookie = serializeOAuthBindingCookie(provider, BINDING);
+    const attributes = cookie.split("; ");
+    assert(
+      attributes[0] === `__Host-ww_${provider}_oauth=${BINDING}`,
+      `${provider} cookie name or value is wrong`,
+    );
+    assert(attributes.length === 6, "unexpected cookie attribute added");
+    assert(attributes.includes("Path=/"), "host-prefix path must be retained");
+    assert(
+      attributes.includes("Max-Age=600"),
+      "cookie lifetime must match state",
+    );
+    assert(attributes.includes("Secure"), "SameSite=None requires Secure");
+    assert(
+      attributes.includes("HttpOnly"),
+      "scripts must not read the binding",
+    );
+    assert(
+      attributes.includes("SameSite=None"),
+      `${provider} binding must survive the cross-site provider and website bridge`,
+    );
+    assert(!/Domain=/i.test(cookie), "a __Host- cookie must not have Domain");
+  }
 });
 
 Deno.test("OAuth start reuses a valid browser binding and rejects malformed cookies", () => {
@@ -80,6 +69,10 @@ Deno.test("OAuth start reuses a valid browser binding and rejects malformed cook
   assert(
     prepared.bindingSecret === BINDING,
     "parallel starts should reuse the browser binding",
+  );
+  assert(
+    prepared.setCookie.includes("SameSite=None"),
+    "reused Google bindings must receive the redirect-compatible policy too",
   );
   assert(
     readOAuthBindingCookie(request, "apple") === null,
@@ -193,18 +186,28 @@ Deno.test("OAuth redemption fails closed for a missing cookie, replay, or databa
       throw new Error("RPC must not run without the cookie");
     },
   } as unknown as AttemptAdmin;
-  await assertRejects(
-    () =>
-      redeemOAuthLoginAttempt({
-        admin: missingCookieAdmin,
-        request: new Request(
-          "https://project.supabase.co/functions/v1/google-oauth-callback",
-        ),
-        provider: "google",
-        state: STATE,
-      }),
-    /same browser/i,
-  );
+  for (
+    const cookie of [
+      "",
+      `__Host-ww_apple_oauth=${BINDING}`,
+      "__Host-ww_google_oauth=too-short",
+      `__Host-ww_google_oauth=${BINDING}%0A`,
+    ]
+  ) {
+    await assertRejects(
+      () =>
+        redeemOAuthLoginAttempt({
+          admin: missingCookieAdmin,
+          request: new Request(
+            "https://project.supabase.co/functions/v1/google-oauth-callback",
+            { headers: { cookie } },
+          ),
+          provider: "google",
+          state: STATE,
+        }),
+      /same browser/i,
+    );
+  }
 
   const request = new Request(
     "https://project.supabase.co/functions/v1/google-oauth-callback",
