@@ -1,10 +1,63 @@
+import type { CurrentPolicyConsent } from "./policy_consent.ts";
+
 export const DEFAULT_OAUTH_FINAL = "https://www.weddingwin.ca/";
+export const APPLE_NATIVE_RETURN_URL = "weddingwin://bd-apple-return";
+
+export type AppleNativeOAuthIntent = {
+  returnTo: typeof APPLE_NATIVE_RETURN_URL;
+  codeChallenge: string;
+};
+
+export function requireAppleNativeOAuthIntent(
+  value: unknown,
+): AppleNativeOAuthIntent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid OAuth native intent.");
+  }
+  const intent = value as Record<string, unknown>;
+  if (
+    Object.keys(intent).some((key) =>
+      key !== "returnTo" && key !== "codeChallenge"
+    ) ||
+    intent.returnTo !== APPLE_NATIVE_RETURN_URL ||
+    typeof intent.codeChallenge !== "string" ||
+    intent.codeChallenge.length !== 43 ||
+    !/^[A-Za-z0-9_-]{43}$/.test(intent.codeChallenge)
+  ) throw new Error("Invalid OAuth native intent.");
+  return {
+    returnTo: APPLE_NATIVE_RETURN_URL,
+    codeChallenge: intent.codeChallenge,
+  };
+}
+
+export type AppleWebSignupRole =
+  | "vendor"
+  | "vendor_basic"
+  | "vendor_show"
+  | "vendor_venue"
+  | "vendor_multi"
+  | "vendor_venue_multi"
+  | "couple";
+
+export function requireAppleWebSignupRole(value: unknown): AppleWebSignupRole {
+  if (
+    value !== "vendor" && value !== "vendor_basic" && value !== "vendor_show" &&
+    value !== "vendor_venue" && value !== "vendor_multi" &&
+    value !== "vendor_venue_multi" && value !== "couple"
+  ) {
+    throw new Error("Invalid OAuth signup role.");
+  }
+  return value;
+}
 
 export type VerifiedAppleOAuthState = {
   p: "apple";
   r: string;
   n: string;
   exp: number;
+  c?: CurrentPolicyConsent;
+  s?: AppleWebSignupRole;
+  native?: AppleNativeOAuthIntent;
 };
 
 type CreateAppleOAuthStateOptions = {
@@ -12,12 +65,46 @@ type CreateAppleOAuthStateOptions = {
   secret: string;
   nonce?: string;
   nowSeconds?: number;
+  consent?: CurrentPolicyConsent;
+  signupRole?: AppleWebSignupRole;
+  native?: AppleNativeOAuthIntent;
 };
+
+function normalizeStateConsent(
+  value: unknown,
+  expires: number,
+): CurrentPolicyConsent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid OAuth consent.");
+  }
+  const consent = value as Record<string, unknown>;
+  const acceptedAt = typeof consent.acceptedAt === "string"
+    ? consent.acceptedAt
+    : "";
+  const acceptedSeconds = new Date(acceptedAt).getTime() / 1000;
+  const termsVersion = typeof consent.termsVersion === "string"
+    ? consent.termsVersion
+    : "";
+  const privacyVersion = typeof consent.privacyVersion === "string"
+    ? consent.privacyVersion
+    : "";
+  if (
+    !Number.isFinite(acceptedSeconds) || acceptedSeconds < expires - 605 ||
+    acceptedSeconds > expires || !termsVersion || termsVersion.length > 64 ||
+    !privacyVersion || privacyVersion.length > 64
+  ) {
+    throw new Error("Invalid OAuth consent.");
+  }
+  return { acceptedAt, termsVersion, privacyVersion };
+}
 
 function base64UrlFromBytes(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll(
+    "=",
+    "",
+  );
 }
 
 function base64UrlFromString(value: string): string {
@@ -42,7 +129,9 @@ function normalizeAllowedFinalRedirect(value: unknown): string | null {
   try {
     const url = new URL(String(value || ""));
     const host = url.hostname.replace(/^www\./i, "").toLowerCase();
-    if (url.protocol === "https:" && host === "weddingwin.ca") return url.toString();
+    if (url.protocol === "https:" && host === "weddingwin.ca") {
+      return url.toString();
+    }
     if (url.protocol === "weddingwin:") {
       const nativeHost = url.hostname.toLowerCase();
       const nativePath = url.pathname.replace(/\/+$/, "");
@@ -76,17 +165,40 @@ async function importHmacKey(secret: string, usages: KeyUsage[]) {
 
 export async function createSignedAppleOAuthState(
   options: CreateAppleOAuthStateOptions,
-): Promise<{ state: string; nonce: string; redirectTo: string; expiresAt: number }> {
+): Promise<
+  { state: string; nonce: string; redirectTo: string; expiresAt: number }
+> {
   const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
   const nonce = (options.nonce || crypto.randomUUID()).trim();
   if (!nonce) throw new Error("OAuth state nonce is required.");
+  const native = options.native === undefined
+    ? undefined
+    : requireAppleNativeOAuthIntent(options.native);
+  if (native && options.redirectTo !== native.returnTo) {
+    throw new Error("Invalid OAuth native redirect.");
+  }
 
   const payload: VerifiedAppleOAuthState = {
     p: "apple",
-    r: allowedFinalRedirect(options.redirectTo),
+    r: native?.returnTo || allowedFinalRedirect(options.redirectTo),
     n: nonce,
     exp: now + 600,
   };
+  if (options.consent !== undefined) {
+    payload.c = normalizeStateConsent(options.consent, payload.exp);
+  }
+  if (options.signupRole !== undefined) {
+    payload.s = requireAppleWebSignupRole(options.signupRole);
+  }
+  if (native) {
+    if (payload.s && payload.s !== "vendor" && payload.s !== "couple") {
+      throw new Error("Invalid OAuth native signup role.");
+    }
+    if (!!payload.s !== !!payload.c) {
+      throw new Error("Invalid OAuth native consent.");
+    }
+    payload.native = native;
+  }
   const payloadText = JSON.stringify(payload);
   const key = await importHmacKey(options.secret, ["sign"]);
   const signature = await crypto.subtle.sign(
@@ -121,11 +233,19 @@ export async function verifySignedAppleOAuthState(
   }
 
   const provider = parsed.p;
-  const redirect = normalizeAllowedFinalRedirect(parsed.r);
+  const native = Object.hasOwn(parsed, "native")
+    ? requireAppleNativeOAuthIntent(parsed.native)
+    : undefined;
+  const redirect = native
+    ? (parsed.r === native.returnTo ? native.returnTo : null)
+    : normalizeAllowedFinalRedirect(parsed.r);
   const nonce = typeof parsed.n === "string" ? parsed.n.trim() : "";
   const expires = Number(parsed.exp || 0);
   const signature = typeof parsed.h === "string" ? parsed.h.trim() : "";
-  if (provider !== "apple" || !redirect || !nonce || !signature || !Number.isInteger(expires)) {
+  if (
+    provider !== "apple" || !redirect || !nonce || !signature ||
+    !Number.isInteger(expires)
+  ) {
     throw new Error("Invalid OAuth state.");
   }
   if (expires < nowSeconds || expires > nowSeconds + 600) {
@@ -138,6 +258,26 @@ export async function verifySignedAppleOAuthState(
     n: nonce,
     exp: expires,
   };
+  // Preserve older in-flight sign-ins, but never invent missing acceptance.
+  // New member creation still enforces the current policy-consent requirement.
+  if (Object.hasOwn(parsed, "c")) {
+    signedPayload.c = normalizeStateConsent(parsed.c, expires);
+  }
+  if (Object.hasOwn(parsed, "s")) {
+    signedPayload.s = requireAppleWebSignupRole(parsed.s);
+  }
+  if (native) {
+    if (
+      signedPayload.s && signedPayload.s !== "vendor" &&
+      signedPayload.s !== "couple"
+    ) {
+      throw new Error("Invalid OAuth native signup role.");
+    }
+    if (!!signedPayload.s !== !!signedPayload.c) {
+      throw new Error("Invalid OAuth native consent.");
+    }
+    signedPayload.native = native;
+  }
   let valid = false;
   try {
     const key = await importHmacKey(secret, ["verify"]);

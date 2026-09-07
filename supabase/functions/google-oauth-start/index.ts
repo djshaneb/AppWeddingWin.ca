@@ -3,6 +3,11 @@ import {
   createOAuthLoginAttempt,
   prepareOAuthBinding,
 } from "../_shared/oauth_attempt.ts";
+import {
+  NativeSignupIntentError,
+  nativeSignupRoleFromQuery,
+  nativeSignupSubscriptionId,
+} from "../_shared/native_signup_intent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -98,11 +103,13 @@ Deno.serve(async (req: Request) => {
 
   try {
     const url = new URL(req.url);
+    const signupRole = nativeSignupRoleFromQuery(url.searchParams);
     const finalRedirect = allowedFinalRedirect(
       url.searchParams.get("redirect_to") || "https://www.weddingwin.ca/",
     );
     const requestedCodeChallenge = String(url.searchParams.get("code_challenge") || "").trim();
     const nativeRedirect = finalRedirect.startsWith("weddingwin:");
+    if (signupRole && !nativeRedirect) throw new Error("Please start app signup again in WeddingWin.");
     if (nativeRedirect && !/^[A-Za-z0-9_-]{43,128}$/.test(requestedCodeChallenge)) {
       return new Response(JSON.stringify({ error: "A valid native PKCE code challenge is required" }), {
         status: 400,
@@ -110,7 +117,7 @@ Deno.serve(async (req: Request) => {
       });
     }
     const stateCodeChallenge = requestedCodeChallenge || b64urlBytes(crypto.getRandomValues(new Uint8Array(32)));
-    const subscriptionId = requestedSubscriptionId(url.searchParams.get("subscription_id"));
+    const subscriptionId = signupRole ? nativeSignupSubscriptionId(signupRole) : requestedSubscriptionId(url.searchParams.get("subscription_id"));
     const consent = consentFromUrl(url);
 
     const { data, error } = await admin
@@ -136,6 +143,7 @@ Deno.serve(async (req: Request) => {
       c: consent,
       p: stateCodeChallenge,
       exp: expiresAt,
+      ...(signupRole ? { g: signupRole } : {}),
     };
     const state = await signState(statePayload);
     const binding = prepareOAuthBinding(req, "google");
@@ -173,7 +181,7 @@ Deno.serve(async (req: Request) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
+      status: e instanceof NativeSignupIntentError ? 400 : 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

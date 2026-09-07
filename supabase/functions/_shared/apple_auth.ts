@@ -3,7 +3,8 @@ import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from "npm:jose@5.
 import { verifiedAppleEmail } from "./apple_identity.ts";
 import { ensureStableBdIdentity } from "./bd_identity.ts";
 import { requireCurrentPolicyConsent } from "./policy_consent.ts";
-import { allowedFinalRedirect } from "./oauth_state.ts";
+import { allowedFinalRedirect, type AppleWebSignupRole } from "./oauth_state.ts";
+import { appleSignupSubscriptionId, assertAppleSignupAccountType } from "./apple_signup_role.ts";
 import { createOneTimeAppLoginUrl } from "./auth_exchange.ts";
 import { findAuthUserByEmail } from "./auth_users.ts";
 
@@ -204,6 +205,7 @@ export async function upsertAppleUser(args: {
   claims: AppleClaims;
   email?: string | null;
   fullName?: string | null;
+  expectedProfileId?: string;
 }): Promise<{ userId: string; email: string; appleSub: string; fullName: string }> {
   const appleSub = args.claims.sub;
   const providedEmail = verifiedAppleEmail(args.claims.email, args.email);
@@ -217,8 +219,19 @@ export async function upsertAppleUser(args: {
   if (profileErr) throw new Error(`profile lookup failed: ${profileErr.message}`);
 
   let userId = profileByApple?.id || "";
-  let email = profileByApple?.email || providedEmail;
+  let email = providedEmail || profileByApple?.email || "";
   const resolvedFullName = fullName || profileByApple?.display_name || "";
+
+  // Profile fields are user-editable. A provider subject on that row alone is
+  // not authority to bind an Apple permission to a different account.
+  if (args.expectedProfileId && userId !== args.expectedProfileId) throw new Error("Apple could not verify the account owner. Please contact WeddingWin for help.");
+  if (userId && (providedEmail || args.expectedProfileId)) {
+    const actual = await admin.auth.admin.getUserById(userId);
+    if (actual.error || !actual.data.user?.email || !args.expectedProfileId && actual.data.user.email.trim().toLowerCase() !== providedEmail.trim().toLowerCase()) throw new Error("Apple could not verify the account owner. Please contact WeddingWin for help.");
+    // Once a private identity is enrolled, its immutable profile UUID is the
+    // authority even when the member later changes their contact email.
+    if (args.expectedProfileId) email = actual.data.user.email;
+  }
 
   if (!userId) {
     if (!email) {
@@ -432,6 +445,7 @@ async function createBdUserForApple(
   fullName?: string | null,
   subscriptionId = BD_DEFAULT_SUBSCRIPTION_ID,
   consent: SignupConsent = null,
+  expectedSignupRole?: AppleWebSignupRole,
 ): Promise<BdUser | undefined> {
   const policyConsent = requireCurrentPolicyConsent(consent);
 
@@ -444,7 +458,9 @@ async function createBdUserForApple(
     first_name: firstName || "WeddingWin",
     last_name: lastName,
     active: "2",
-    subscription_id: requestedSubscriptionId(subscriptionId),
+    subscription_id: expectedSignupRole
+      ? appleSignupSubscriptionId(expectedSignupRole)
+      : requestedSubscriptionId(subscriptionId),
     password: base64UrlFromBytes(passwordBytes),
     send_email_notifications: "0",
     signup_terms_accepted: "1",
@@ -511,20 +527,29 @@ async function makeDirectBdAppleLoginResult(args: {
   email: string;
   fullName?: string | null;
   subscriptionId?: string;
+  expectedSignupRole?: AppleWebSignupRole;
+  expectedBdMemberId?: string;
   consent?: SignupConsent;
   includeWebsiteRedirect?: boolean;
 }): Promise<{ redirectUrl: string; user: Record<string, unknown>; nativeSession: BdNativeSession }> {
   const email = args.email.trim().toLowerCase();
-  let user = await fetchBdUserByEmail(email);
+  let user = args.expectedBdMemberId ? await fetchFullBdUserById(args.expectedBdMemberId) : await fetchBdUserByEmail(email);
+  if (args.expectedBdMemberId && String(user?.user_id || "") !== args.expectedBdMemberId) throw new Error("Your previous Apple permission is being removed. Please try signing in again shortly.");
+  assertAppleSignupAccountType(user, args.expectedSignupRole);
   if (!user?.user_id) {
     user = await createBdUserForApple(
       email,
       args.fullName,
       args.subscriptionId,
       args.consent || null,
+      args.expectedSignupRole,
     );
   }
 
+  // Also check after creation: a concurrent signup can return an existing
+  // member from the duplicate-email recovery branch. Never issue the wrong
+  // account session or silently change that member's plan.
+  assertAppleSignupAccountType(user, args.expectedSignupRole);
   user = await ensureBdSessionCookie(user);
   const nativeSession = buildBdNativeSession(user, email);
   if (!nativeSession.user_id || !nativeSession.token) {
@@ -547,6 +572,8 @@ export async function makeBdAppleLoginResult(args: {
   fullName?: string | null;
   finalRedirect: string;
   subscriptionId?: string;
+  expectedSignupRole?: AppleWebSignupRole;
+  expectedBdMemberId?: string;
   consent?: SignupConsent;
   includeWebsiteRedirect?: boolean;
 }): Promise<{ redirectUrl: string; user: Record<string, unknown>; nativeSession: BdNativeSession }> {
@@ -555,12 +582,21 @@ export async function makeBdAppleLoginResult(args: {
   }
   const finalRedirect = allowedFinalRedirect(args.finalRedirect);
 
+  // Typed website checkout requires the direct member API so that we can
+  // enforce the exact public plan and check existing accounts before login.
+  // Legacy external bridges and Supabase-only fallback cannot guarantee this.
+  if ((args.expectedSignupRole || args.expectedBdMemberId) && (BD_APPLE_LOGIN_URL || !BD_API_KEY)) {
+    throw new Error("APPLE_SIGNUP_ROLE_UNAVAILABLE");
+  }
+
   if (!BD_APPLE_LOGIN_URL) {
     if (BD_API_KEY) {
       return await makeDirectBdAppleLoginResult({
         email: args.email,
         fullName: args.fullName,
         subscriptionId: args.subscriptionId,
+        expectedSignupRole: args.expectedSignupRole,
+        expectedBdMemberId: args.expectedBdMemberId,
         consent: args.consent || null,
         includeWebsiteRedirect: args.includeWebsiteRedirect,
       });

@@ -164,6 +164,7 @@ test('successful Google sign-in uses stable callback, PKCE-only exchange, and re
   assert.equal(url.searchParams.get('redirect_to'), callbackBase);
   assert.equal(url.searchParams.get('code_challenge'), codeChallenge);
   assert.equal(url.searchParams.get('subscription_id'), '18');
+  assert.equal(url.searchParams.has('signup_role'), false);
   assert(!url.searchParams.has('code_verifier'));
   assert.equal(redirect, callbackBase);
   assert.equal(h.state.exchanges[0][0], 'https://backend.example.invalid/functions/v1/google-native-exchange');
@@ -178,6 +179,7 @@ test('vendor signup forwards selected role and supplied consent without inventin
   await h.run('vendor', consent);
   const url = new URL(h.state.browsers[0][0]);
   assert.equal(url.searchParams.get('subscription_id'), '17');
+  assert.equal(url.searchParams.get('signup_role'), 'vendor');
   assert.equal(url.searchParams.get('accepted_terms'), '1');
   assert.equal(url.searchParams.get('accepted_privacy'), '1');
   assert.equal(url.searchParams.get('accepted_at'), consent.acceptedAt);
@@ -185,6 +187,35 @@ test('vendor signup forwards selected role and supplied consent without inventin
   const login = harness();
   await login.run();
   assert(!new URL(login.state.browsers[0][0]).searchParams.has('accepted_terms'));
+  assert(!new URL(login.state.browsers[0][0]).searchParams.has('signup_role'));
+});
+
+test('couple signup is explicit while either ordinary-login picker remains untyped', async () => {
+  const consent = { acceptedAt: '2026-09-06T00:00:00.000Z', termsVersion: 'fixture-terms', privacyVersion: 'fixture-privacy' };
+  const signup = harness();
+  await signup.run('couple', consent);
+  const url = new URL(signup.state.browsers[0][0]);
+  assert.equal(url.searchParams.get('signup_role'), 'couple');
+  assert.equal(url.searchParams.get('subscription_id'), '18');
+  for (const role of ['vendor', 'couple']) {
+    const login = harness();
+    await login.run(role);
+    const start = new URL(login.state.browsers[0][0]);
+    assert.equal(start.searchParams.has('signup_role'), false);
+    assert.equal(start.searchParams.has('accepted_terms'), false);
+    assert.equal(login.state.saved.length, 1);
+  }
+});
+
+test('Google signup account-type mismatch is shown without signing in or retrying as another plan', async () => {
+  const message = 'This Apple or Google account already has a different WeddingWin membership. Please sign in to your existing account.';
+  const h = harness({ browser: async () => ({ type: 'success', url: `${callbackBase}?error_description=${encodeURIComponent(message)}` }) });
+  await h.run('vendor', { acceptedAt: '2026-09-06T00:00:00.000Z', termsVersion: 'fixture-terms', privacyVersion: 'fixture-privacy' });
+  released(h);
+  noSession(h);
+  assert.equal(h.state.exchanges.length, 0);
+  assert.equal(h.state.browsers.length, 1);
+  assert.equal(h.state.alerts[0][1], message);
 });
 
 for (const stage of ['redirect', 'pkce', 'browser', 'exchange']) {

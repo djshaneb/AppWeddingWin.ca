@@ -250,8 +250,11 @@ Deno.test("OAuth callbacks redeem before exchange and Apple never trusts a brows
   const google = await Deno.readTextFile(
     new URL("../google-oauth-callback/index.ts", import.meta.url),
   );
-  const apple = await Deno.readTextFile(
+  const appleCallback = await Deno.readTextFile(
     new URL("../apple-oauth-callback/index.ts", import.meta.url),
+  );
+  const apple = await Deno.readTextFile(
+    new URL("./apple_web_oauth.ts", import.meta.url),
   );
   const migration = await Deno.readTextFile(
     new URL(
@@ -272,9 +275,14 @@ Deno.test("OAuth callbacks redeem before exchange and Apple never trusts a brows
     "Google must redeem before exchange",
   );
 
-  const appleRedeem = apple.indexOf("await redeemOAuthLoginAttempt");
-  const appleExchange = apple.indexOf(
-    'fetch("https://appleid.apple.com/auth/token"',
+  assert(
+    appleCallback.includes("redeemOAuthLoginAttempt({") &&
+      appleCallback.includes("return handleCallback(req)"),
+    "Apple endpoint must wire its callback handler to real browser-bound attempt redemption",
+  );
+  const appleRedeem = apple.indexOf("await deps.redeemAttempt(req, stateRaw)");
+  const appleExchange = apple.search(
+    /deps\.fetch\(\s*"https:\/\/appleid\.apple\.com\/auth\/token"/,
   );
   assert(
     appleRedeem >= 0 && appleRedeem < appleExchange,
@@ -285,9 +293,8 @@ Deno.test("OAuth callbacks redeem before exchange and Apple never trusts a brows
     "Apple must ignore browser-supplied id_token",
   );
   assert(
-    apple.includes(
-      'if (!code) return errorPage("Missing Apple authorization code.")',
-    ),
+    apple.indexOf("if (!code)") > appleRedeem &&
+      apple.indexOf("if (!code)") < appleExchange,
     "Apple must require an authorization code",
   );
 

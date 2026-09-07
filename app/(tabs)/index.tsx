@@ -475,7 +475,13 @@ const WEBSITE_LOGOUT_URL = `${TARGET_URL}/account/logout`;
 const DEFAULT_BRIDGE_TARGET_PATH = '/account/home';
 const COUPLE_MEMBERSHIP_PLAN_ID = '18';
 const VENDOR_MEMBERSHIP_PLAN_ID = '17';
-const VENDOR_MEMBERSHIP_PLAN_IDS = new Set(['17', '27', '28']);
+// Verified BD vendor membership plans, including the website-only signup
+// plans. A known plan takes precedence over a stale cached account_role.
+// Keep admin, beta, and unknown plans out of this UI classification allowlist.
+const VENDOR_MEMBERSHIP_PLAN_IDS = new Set([
+  '11', '13', '14', '15', '16', '17', '19', '20', '21', '22', '23', '24',
+  '25', '26', '27', '28', '29', '30', '31', '32', '33', '35', '36', '37', '38',
+]);
 const TERMS_URL = `${TARGET_URL}/about/terms`;
 const QR_BINGO_TERMS_URL = `${TERMS_URL}#qr-bingo`;
 const PRIVACY_URL = `${TARGET_URL}/about/privacy`;
@@ -689,6 +695,25 @@ function isGoogleIdentityUrl(url: string): boolean {
   }
 }
 
+// A patched native build reports actual requested/granted scopes. Older builds
+// and Expo Go remain unknown; these flags must never become auth evidence.
+function appleNativeScopeDiagnostics(value: unknown) {
+  const input = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const supported = input.diagnosticVersion === 1;
+  const flag = (key: string): boolean | null =>
+    supported && typeof input[key] === 'boolean' ? input[key] as boolean : null;
+  return {
+    diagnosticVersion: supported ? 1 : null,
+    requestedEmail: flag('requestedEmail'),
+    requestedName: flag('requestedName'),
+    authorizedEmail: flag('authorizedEmail'),
+    authorizedName: flag('authorizedName'),
+    credentialEmailPresent: flag('credentialEmailPresent'),
+  };
+}
+
 function membershipPlanForRole(role: SignupRole) {
   return role === 'vendor'
     ? VENDOR_MEMBERSHIP_PLAN_ID
@@ -706,6 +731,9 @@ function buildNativeGoogleStartUrl(
   url.searchParams.set('subscription_id', membershipPlanForRole(role));
   url.searchParams.set('code_challenge', codeChallenge);
   if (consent) {
+    // The picker is signup intent only when the user explicitly creates an
+    // account. Ordinary login must open the existing member's actual plan.
+    url.searchParams.set('signup_role', role);
     url.searchParams.set('accepted_terms', '1');
     url.searchParams.set('accepted_privacy', '1');
     url.searchParams.set('accepted_at', consent.acceptedAt);
@@ -713,6 +741,87 @@ function buildNativeGoogleStartUrl(
     url.searchParams.set('privacy_version', consent.privacyVersion);
   }
   return url.toString();
+}
+
+const APPLE_BROWSER_RETURN_URL = 'weddingwin://bd-apple-return';
+
+function buildNativeAppleStartUrl(
+  role: SignupRole,
+  codeChallenge: string,
+  consent?: SignupConsent,
+): string {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
+    throw new Error('Invalid Apple sign-in challenge.');
+  }
+  const url = new URL('/functions/v1/apple-native-oauth-start', APP_BACKEND_URL);
+  url.searchParams.set('return_to', APPLE_BROWSER_RETURN_URL);
+  url.searchParams.set('code_challenge', codeChallenge);
+  if (consent) {
+    if (
+      (role !== 'couple' && role !== 'vendor') ||
+      consent.acceptedTerms !== true || consent.acceptedPrivacy !== true ||
+      !consent.termsVersion || !consent.privacyVersion ||
+      !Number.isFinite(Date.parse(consent.acceptedAt))
+    ) throw new Error('Please accept the current signup agreement.');
+    // Browser recovery keeps explicit signup intent, not a role guessed from
+    // the Apple account or the login picker. Ordinary sign-in sends neither.
+    url.searchParams.set('signup_role', role);
+    url.searchParams.set('accepted_terms', '1');
+    url.searchParams.set('accepted_privacy', '1');
+    url.searchParams.set('accepted_at', consent.acceptedAt);
+    url.searchParams.set('terms_version', consent.termsVersion);
+    url.searchParams.set('privacy_version', consent.privacyVersion);
+  }
+  return url.toString();
+}
+
+function parseNativeAppleReturnUrl(value: string):
+  { code: string; error?: never } |
+  { code?: never; error: 'cancelled' | 'retry' | 'account_type_mismatch' | 'email_unavailable' | 'signup_required' | 'failed' } | null {
+  try {
+    const actual = new URL(value);
+    const expected = new URL(APPLE_BROWSER_RETURN_URL);
+    if (
+      actual.protocol !== expected.protocol || actual.hostname !== expected.hostname ||
+      actual.port !== expected.port || actual.pathname !== expected.pathname ||
+      actual.username || actual.password || actual.hash
+    ) return null;
+    const allowed = new Set(['provider', 'exchange_code', 'error', 'error_description', 'diagnostic_id']);
+    for (const key of actual.searchParams.keys()) {
+      if (!allowed.has(key) || actual.searchParams.getAll(key).length !== 1) return null;
+    }
+    if (actual.searchParams.get('provider') !== 'apple') return null;
+    const code = actual.searchParams.get('exchange_code');
+    const error = actual.searchParams.get('error');
+    if (error) {
+      if (code !== null) return null;
+      // Never show arbitrary callback text or treat a callback as identity proof.
+      return { error: error === 'access_denied' ? 'cancelled' :
+        error === 'cleanup_pending' ? 'retry' :
+        error === 'account_type_mismatch' || error === 'email_unavailable' || error === 'signup_required' ? error : 'failed' };
+    }
+    if (actual.searchParams.has('error') || actual.searchParams.has('error_description')) return null;
+    return code && /^[A-Za-z0-9_-]{43}$/.test(code) ? { code } : null;
+  } catch { return null; }
+}
+
+function shouldOfferAppleBrowserRecovery(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const failure = data as { error?: unknown; code?: unknown };
+  return failure.code === 'APPLE_EMAIL_UNAVAILABLE' ||
+    failure.code === 'APPLE_GRANT_CLEANUP_PENDING' ||
+    failure.error === 'Apple could not verify your account email. Please start again with Apple.' ||
+    failure.error === 'Apple did not provide an email and this Apple account is not linked yet.' ||
+    failure.error === 'Your previous Apple permission is being removed. Please try signing in again shortly.' ||
+    failure.error === 'Apple sign-in is temporarily unavailable. Please try again shortly.';
+}
+
+function isConfirmedNativeSessionExpiry(status: number, data: unknown): boolean {
+  if (status !== 401 || !data || typeof data !== 'object' || Array.isArray(data)) return false;
+  // Only the authenticated session endpoint's specific rejection is final.
+  // Network errors, generic 401s, denied features and outages are not logout.
+  return (data as { error?: unknown }).error ===
+    'Stored session expired. Please sign in again.';
 }
 
 async function createGooglePkcePair() {
@@ -3277,11 +3386,14 @@ function NativeHome({
   qrContactCompletionRequested,
   onCancelQrContactCompletion,
   onAppleSignIn,
+  onAuthIntentChange,
   onGoogleSignIn,
   onEmailLogin,
   onMemberSignup,
   onCompleteProfile,
   googleLoginLoading,
+  appleBrowserLoginLoading,
+  expiredSessionLoginRequest,
   emailLoginLoading,
   signupLoading,
   profileSaveLoading,
@@ -3303,11 +3415,14 @@ function NativeHome({
   qrContactCompletionRequested: boolean;
   onCancelQrContactCompletion: () => void;
   onAppleSignIn: (role: SignupRole, consent?: SignupConsent) => void;
+  onAuthIntentChange: () => void;
   onGoogleSignIn: (role: SignupRole, consent?: SignupConsent) => void;
   onEmailLogin: (credentials: LoginCredentials) => Promise<void>;
   onMemberSignup: (signup: MemberSignup) => Promise<void>;
   onCompleteProfile: (profile: ContactProfile) => Promise<void>;
   googleLoginLoading: boolean;
+  appleBrowserLoginLoading: boolean;
+  expiredSessionLoginRequest: { id: number; role: SignupRole } | null;
   emailLoginLoading: boolean;
   signupLoading: boolean;
   profileSaveLoading: boolean;
@@ -3329,6 +3444,7 @@ function NativeHome({
   const [role, setRole] = useState<'couple' | 'vendor'>('couple');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const passwordInputRef = useRef<TextInput>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [wizardStep, setWizardStep] = useState<1 | 2>(1);
@@ -3493,9 +3609,26 @@ function NativeHome({
   };
 
   const startAppleSignup = () => {
+    if (appleBrowserLoginLoading) return;
     if (!requireSignupConsent()) return;
     onAppleSignIn(role, buildSignupConsent());
   };
+
+  useEffect(() => {
+    if (!expiredSessionLoginRequest) return;
+    setRole(expiredSessionLoginRequest.role);
+    setAuthMode('login');
+    setWizardStep(2);
+    setSignupConsentAccepted(false);
+    setPassword('');
+    setShowPassword(false);
+  }, [expiredSessionLoginRequest]);
+
+  // Changing the selected account path or withdrawing agreement retires a
+  // pending browser result; it must never sign the user into a stale path.
+  useEffect(() => {
+    onAuthIntentChange();
+  }, [role, authMode, wizardStep, signupConsentAccepted, onAuthIntentChange]);
 
   const openLogin = () => {
     if (emailLoginLoading) return;
@@ -3508,6 +3641,7 @@ function NativeHome({
       );
       return;
     }
+    Keyboard.dismiss();
     onEmailLogin({ email: cleanEmail, password: password.trim(), role });
   };
 
@@ -3535,6 +3669,7 @@ function NativeHome({
 
     if (!requireSignupConsent()) return;
 
+    Keyboard.dismiss();
     onMemberSignup({
       role,
       firstName: '',
@@ -3647,6 +3782,11 @@ function NativeHome({
   // details never block normal app use; the QR flow requests its own required
   // contact fields only when the couple chooses QR Bingo.
   const shouldCompleteProfile = memberIsCouple && qrContactCompletionRequested;
+  // Use the native iOS inset/focus adjustment only for editable entry forms.
+  // Chat has its own keyboard handling and the signed-in menus need no inset.
+  const adjustEntryKeyboardInsets =
+    Platform.OS === 'ios' &&
+    ((!member && wizardStep === 2) || shouldCompleteProfile);
   const usesApplePrivateRelayEmail = isApplePrivateRelayEmail(member?.email);
   const isVendorRole = role === 'vendor';
   const showCoupleMenu = !!member && memberIsCouple;
@@ -5450,9 +5590,13 @@ function NativeHome({
   return (
     <SafeAreaView style={styles.nativeContainer} edges={['top']}>
       <ScrollView
+        // Reset form-owned native insets on exit, including during keyboard hide.
+        key={adjustEntryKeyboardInsets ? 'native-entry-form' : 'native-menu'}
         scrollEnabled
         contentContainerStyle={[styles.nativeContent]}
-        showsVerticalScrollIndicator={false}
+        showsVerticalScrollIndicator={adjustEntryKeyboardInsets}
+        automaticallyAdjustKeyboardInsets={adjustEntryKeyboardInsets}
+        keyboardDismissMode={adjustEntryKeyboardInsets ? 'interactive' : 'none'}
         keyboardShouldPersistTaps="handled"
       >
         <ImageBackground
@@ -6222,9 +6366,10 @@ function NativeHome({
                           cornerRadius={8}
                           style={[
                             styles.appleButton,
-                            !signupConsentAccepted &&
+                            (!signupConsentAccepted || appleBrowserLoginLoading) &&
                               styles.appleButtonDisabled,
                           ]}
+                          accessibilityState={{ busy: appleBrowserLoginLoading }}
                           onPress={startAppleSignup}
                         />
                       ) : null}
@@ -6257,6 +6402,8 @@ function NativeHome({
                       accessibilityLabel="Email"
                       style={styles.textInput}
                       returnKeyType="next"
+                      submitBehavior="submit"
+                      onSubmitEditing={() => passwordInputRef.current?.focus()}
                     />
                   </View>
 
@@ -6266,12 +6413,17 @@ function NativeHome({
                   <View style={styles.inputShell}>
                     <LockKeyhole size={22} color="#7D7D80" strokeWidth={1.7} />
                     <TextInput
+                      ref={passwordInputRef}
                       value={password}
                       onChangeText={setPassword}
                       placeholder="Enter your password"
                       placeholderTextColor="#A8A8AD"
                       secureTextEntry={!showPassword}
-                      textContentType="password"
+                      textContentType={
+                        authMode === 'signup' ? 'newPassword' : 'password'
+                      }
+                      autoCapitalize="none"
+                      autoCorrect={false}
                       accessibilityLabel="Password"
                       style={styles.textInput}
                       returnKeyType="done"
@@ -6402,8 +6554,14 @@ function NativeHome({
                         AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
                       }
                       cornerRadius={8}
-                      style={styles.appleButton}
-                      onPress={() => onAppleSignIn(role)}
+                      style={[
+                        styles.appleButton,
+                        appleBrowserLoginLoading && styles.appleButtonDisabled,
+                      ]}
+                      accessibilityState={{ busy: appleBrowserLoginLoading }}
+                      onPress={() => {
+                        if (!appleBrowserLoginLoading) onAppleSignIn(role);
+                      }}
                     />
                   ) : null}
                 </>
@@ -9261,6 +9419,9 @@ export default function HomeScreen() {
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [googleLoginLoading, setGoogleLoginLoading] = useState(false);
+  const [appleBrowserLoginLoading, setAppleBrowserLoginLoading] = useState(false);
+  const [expiredSessionLoginRequest, setExpiredSessionLoginRequest] =
+    useState<{ id: number; role: SignupRole } | null>(null);
   const [emailLoginLoading, setEmailLoginLoading] = useState(false);
   const [signupLoading, setSignupLoading] = useState(false);
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
@@ -9432,7 +9593,10 @@ export default function HomeScreen() {
 
   const commitNativeMember = useCallback(
     (member: NativeMember | null) => {
-      if (member) pendingAppLogoutRef.current = false;
+      if (member) {
+        pendingAppLogoutRef.current = false;
+        setExpiredSessionLoginRequest(null);
+      }
       nativeMemberRef.current = member;
       setNativeMember(member);
       queueNativeSessionStorageMutation(() =>
@@ -9982,6 +10146,7 @@ true;
     commitNativeMember(null);
     commitNativeBridgeSession(null);
     setGoogleLoginLoading(false);
+    setAppleBrowserLoginLoading(false);
     setEmailLoginLoading(false);
     setSignupLoading(false);
     setProfileSaveLoading(false);
@@ -10412,6 +10577,38 @@ true;
     [commitNativeBridgeSession, commitNativeMember],
   );
 
+  const expireNativeSessionIfCurrent = useCallback(
+    (
+      rejectedSession: NativeBridgeSession,
+      sessionGeneration: number,
+      status: number,
+      data: unknown,
+    ): boolean => {
+      if (!isConfirmedNativeSessionExpiry(status, data)) return false;
+      const current = nativeBridgeSessionRef.current;
+      if (
+        nativeSessionGenerationRef.current !== sessionGeneration ||
+        !current?.user_id || !current.token ||
+        String(current.user_id) !== String(rejectedSession.user_id || '') ||
+        current.token !== rejectedSession.token
+      ) return false;
+      // Clear only the exact rejected generation, once. Retire pending browser,
+      // chat and auth callbacks before exposing the signed-out screen.
+      invalidateNavigationIntent();
+      const role = memberAccountRole(nativeMemberRef.current);
+      setExpiredSessionLoginRequest((previous) => ({ id: (previous?.id || 0) + 1, role }));
+      clearNativeSession();
+      setShowNativeQrScanner(false);
+      clearWebsiteStorage();
+      resetWebsiteBrowser();
+      hideWebsiteBrowser();
+      Alert.alert('Please sign in again', 'Your session has ended. Please sign in again to continue.');
+      return true;
+    },
+    [clearNativeSession, clearWebsiteStorage, hideWebsiteBrowser,
+      invalidateNavigationIntent, resetWebsiteBrowser],
+  );
+
   const createWebsiteLoginBridge = useCallback(
     async (
       session: NativeBridgeSession,
@@ -10452,6 +10649,9 @@ true;
         clearTimeout(timeout);
       }
       const data = await response.json().catch(() => ({}));
+      if (expireNativeSessionIfCurrent(session, sessionGeneration, response.status, data)) {
+        throw new Error('Please sign in again.');
+      }
       const bridgeUrl =
         typeof data?.app_login_url === 'string' ? data.app_login_url : '';
       let parsedBridge: URL | null = null;
@@ -10484,7 +10684,7 @@ true;
       }
       return parsedBridge.toString();
     },
-    [commitNativeBridgeSession],
+    [commitNativeBridgeSession, expireNativeSessionIfCurrent],
   );
 
   const createCoalescedWebsiteLoginBridge = useCallback(
@@ -10993,6 +11193,7 @@ true;
             },
           );
           const data = await response.json();
+          if (expireNativeSessionIfCurrent(bridgeSession, sessionGeneration, response.status, data)) return null;
           if (!response.ok || !data?.ok || !data?.native_session) return null;
           const activeSession = nativeBridgeSessionRef.current;
           if (
@@ -11031,7 +11232,7 @@ true;
       nativeSessionRefreshPromisesRef.current.set(refreshKey, request);
       return request;
     },
-    [commitNativeBridgeSession, commitNativeMember],
+    [commitNativeBridgeSession, commitNativeMember, expireNativeSessionIfCurrent],
   );
 
   const handleNativeQrScan = useCallback(
@@ -11291,6 +11492,7 @@ true;
         ) {
           const backendRefreshedSession =
             await refreshNativeBridgeSession(activeNativeSession);
+          if (!requestIsCurrent()) return null;
           if (hasNativeBridgeSession(backendRefreshedSession)) {
             return syncNativeChat(action, {
               ...options,
@@ -11301,6 +11503,7 @@ true;
           }
 
           const refreshedSession = await waitForWebsiteSessionBridge(1200);
+          if (!requestIsCurrent()) return null;
           if (hasNativeBridgeSession(refreshedSession)) {
             return syncNativeChat(action, {
               ...options,
@@ -12204,6 +12407,89 @@ true;
     return () => clearInterval(poll);
   }, [showNativeChat, syncNativeChat]);
 
+  const runAppleLoginInSystemBrowser = useCallback(
+    async (role: SignupRole = 'couple', consent?: SignupConsent) => {
+      if (browserAuthInFlightRef.current) return;
+      const authGeneration = beginAuthOperation('apple-browser-login');
+      if (authGeneration === null) return;
+      browserAuthInFlightRef.current = true;
+      setAppleBrowserLoginLoading(true);
+      const navigationIntent = beginNavigationIntent();
+      const sessionGeneration = nativeSessionGenerationRef.current;
+      const isCurrent = () =>
+        authOperationIsCurrent('apple-browser-login', authGeneration) &&
+        navigationIntentGenerationRef.current === navigationIntent &&
+        nativeSessionGenerationRef.current === sessionGeneration;
+      try {
+        // The verifier lives only in this invocation, never in storage, URLs,
+        // debug output or WebView messages. Apple and Google exchanges differ.
+        const { codeVerifier, codeChallenge } = await createGooglePkcePair();
+        if (!isCurrent()) return;
+        const result = await WebBrowser.openAuthSessionAsync(
+          buildNativeAppleStartUrl(role, codeChallenge, consent),
+          APPLE_BROWSER_RETURN_URL,
+          { showInRecents: true },
+        );
+        if (result.type !== 'success' || !result.url || !isCurrent()) return;
+        const callback = parseNativeAppleReturnUrl(result.url);
+        if (!callback) {
+          Alert.alert('Apple sign-in failed', 'This sign-in link could not be verified. Please start again.');
+          return;
+        }
+        if (callback.error) {
+          if (callback.error === 'cancelled') return;
+          if (callback.error === 'signup_required') {
+            Alert.alert(
+              'No WeddingWin account yet',
+              `Choose Sign up to create your ${role === 'vendor' ? 'vendor' : 'couple'} account, then continue with Apple.`,
+            );
+            return;
+          }
+          const message = callback.error === 'retry'
+            ? 'Your previous Apple sign-in is still being cleared. Please try again shortly.'
+            : callback.error === 'account_type_mismatch'
+              ? 'This Apple account already has a different WeddingWin account type. Please use Sign in instead.'
+              : callback.error === 'email_unavailable'
+                ? 'Apple did not share a verified email. Please try again with Apple or use another sign-in option.'
+                : 'Apple sign-in could not be completed. Please start again.';
+          Alert.alert('Apple sign-in failed', message);
+          return;
+        }
+        const { response, data } = await fetchAppJsonWithTimeout<any>(
+          `${APP_BACKEND_URL}/functions/v1/apple-native-exchange`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+              apikey: APP_BACKEND_PUBLISHABLE_KEY,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ code: callback.code, code_verifier: codeVerifier }),
+          },
+          'Apple sign-in took too long. Check your connection and try again.',
+        );
+        if (!isCurrent()) return;
+        if (!response.ok || !data?.ok || !data?.user?.email || !hasNativeTokenSession(data?.native_session)) {
+          Alert.alert('Apple sign-in failed', 'WeddingWin could not create a secure app session. Please start again.');
+          return;
+        }
+        saveNativeSession(data.user, data.native_session, role);
+        hideWebsiteBrowser();
+      } catch {
+        if (isCurrent()) Alert.alert('Apple sign-in failed', 'Please try again.');
+      } finally {
+        browserAuthInFlightRef.current = false;
+        setAppleBrowserLoginLoading(false);
+        finishAuthOperation('apple-browser-login', authGeneration);
+      }
+    },
+    [authOperationIsCurrent, beginAuthOperation, beginNavigationIntent,
+      finishAuthOperation, hideWebsiteBrowser, saveNativeSession],
+  );
+
+  // Retain the direct-native request for offline scope/security regression tests.
+  // User-facing Apple buttons use the system-browser PKCE flow, not this path.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const runNativeAppleLogin = useCallback(
     async (role: SignupRole = 'couple', consent?: SignupConsent) => {
       if (Platform.OS !== 'ios') {
@@ -12216,30 +12502,63 @@ true;
 
       const authGeneration = beginAuthOperation('apple-login');
       if (authGeneration === null) return;
+      const recoveryNavigationIntent = navigationIntentGenerationRef.current;
+      const recoverySessionGeneration = nativeSessionGenerationRef.current;
+      const browserRecoveryButtons = () => [
+        { text: 'Not now', style: 'cancel' as const },
+        {
+          text: 'Use Apple in browser',
+          onPress: () => {
+            // An old alert must not revive login after logout, another login,
+            // navigation, changed signup intent or replacement of the session.
+            if (
+              authOperationGenerationRef.current !== authGeneration ||
+              navigationIntentGenerationRef.current !== recoveryNavigationIntent ||
+              nativeSessionGenerationRef.current !== recoverySessionGeneration
+            ) return;
+            void runAppleLoginInSystemBrowser(role, consent);
+          },
+        },
+      ];
       try {
         const available = await AppleAuthentication.isAvailableAsync();
         if (!authOperationIsCurrent('apple-login', authGeneration)) return;
         if (!available) {
           Alert.alert(
             'Apple sign-in unavailable',
-            'This device is not ready for Sign in with Apple.',
+            'You can continue securely with Apple in your browser.',
+            browserRecoveryButtons(),
           );
           return;
         }
 
+        const appleState = Crypto.randomUUID();
+        const appleNonce = Crypto.randomUUID();
         const credential = await AppleAuthentication.signInAsync({
           requestedScopes: [
             AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
             AppleAuthentication.AppleAuthenticationScope.EMAIL,
           ],
+          state: appleState,
+          nonce: appleNonce,
         });
         if (!authOperationIsCurrent('apple-login', authGeneration)) return;
+
+        if (credential.state !== appleState) {
+          Alert.alert('Apple sign-in failed', 'Apple could not verify this sign-in request. Please try again.');
+          return;
+        }
 
         if (!credential.identityToken) {
           Alert.alert(
             'Apple sign-in failed',
             'Apple did not return a sign-in token.',
           );
+          return;
+        }
+
+        if (!credential.authorizationCode) {
+          Alert.alert('Apple sign-in failed', 'Apple did not complete the sign-in request. Please try again.');
           return;
         }
 
@@ -12254,12 +12573,15 @@ true;
             },
             body: JSON.stringify({
               id_token: credential.identityToken,
+              authorization_code: credential.authorizationCode,
+              apple_nonce: appleNonce,
               apple_user: credential.user,
               email: credential.email,
               given_name: credential.fullName?.givenName,
               family_name: credential.fullName?.familyName,
               redirect_to: TARGET_URL,
               subscription_id: membershipPlanForRole(role),
+              ...(consent ? { signup_role: role } : {}),
               accepted_terms: consent?.acceptedTerms || false,
               accepted_privacy: consent?.acceptedPrivacy || false,
               accepted_at: consent?.acceptedAt || '',
@@ -12270,6 +12592,10 @@ true;
                 platform: Platform.OS,
                 nativeAppVersion: Constants.nativeAppVersion,
                 runtimeVersion: Constants.expoConfig?.runtimeVersion,
+                appleScopeDiagnostics: appleNativeScopeDiagnostics(
+                  (credential as typeof credential & { weddingWinScopeDiagnostics?: unknown })
+                    .weddingWinScopeDiagnostics,
+                ),
               },
             }),
           },
@@ -12287,6 +12613,7 @@ true;
           Alert.alert(
             'Apple sign-in failed',
             `${data?.error || 'WeddingWin could not create a secure app session. Please try again.'}${diagnostic}`,
+            shouldOfferAppleBrowserRecovery(data) ? browserRecoveryButtons() : undefined,
           );
           return;
         }
@@ -12308,6 +12635,7 @@ true;
       beginAuthOperation,
       finishAuthOperation,
       hideWebsiteBrowser,
+      runAppleLoginInSystemBrowser,
       saveNativeSession,
     ],
   );
@@ -13397,12 +13725,15 @@ true;
             onOpenQrScanner={openNativeQrScanner}
             qrContactCompletionRequested={qrContactCompletionRequested}
             onCancelQrContactCompletion={cancelQrContactCompletion}
-            onAppleSignIn={runNativeAppleLogin}
+            onAppleSignIn={runAppleLoginInSystemBrowser}
+            onAuthIntentChange={invalidateNavigationIntent}
             onGoogleSignIn={runBdGoogleLoginInSystemBrowser}
             onEmailLogin={runEmailLogin}
             onMemberSignup={runMemberSignup}
             onCompleteProfile={runCompleteProfile}
             googleLoginLoading={googleLoginLoading}
+            appleBrowserLoginLoading={appleBrowserLoginLoading}
+            expiredSessionLoginRequest={expiredSessionLoginRequest}
             emailLoginLoading={emailLoginLoading}
             signupLoading={signupLoading}
             profileSaveLoading={profileSaveLoading}

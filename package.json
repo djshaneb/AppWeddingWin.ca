@@ -8,6 +8,7 @@
     "node": "^20.19.4 || ^22.13.0 || ^24.3.0"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-apple-scope-diagnostics.mjs",
     "dev": "EXPO_NO_TELEMETRY=1 expo start",
     "build:web": "expo export --platform web",
     "lint": "expo lint --no-cache",
@@ -18,8 +19,13 @@
     "test:edge": "deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts",
     "test:video": "node scripts/test-webview-video-playback.mjs && node scripts/test-home-video-player.mjs",
     "test:google-login": "node scripts/test-native-google-login.mjs",
+    "test:apple-native": "node --test scripts/test-native-apple-login.mjs scripts/test-native-apple-browser-login.mjs scripts/test-apple-scope-diagnostics.mjs",
+    "test:member-role": "node --test scripts/test-native-member-role.mjs",
+    "test:session-expiry": "node --test scripts/test-native-session-expiry.mjs",
+    "test:auth-keyboard": "node --test scripts/test-native-auth-keyboard.mjs",
+    "test:apple-web": "node --test scripts/test-website-apple-sign-in.mjs scripts/test-website-apple-routing.mjs",
     "audit:production": "node scripts/check-production-audit.mjs",
-    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs && npm run test:video && npm run test:google-login",
+    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs && npm run test:video && npm run test:google-login && npm run test:apple-native && npm run test:member-role && npm run test:session-expiry && npm run test:auth-keyboard && npm run test:apple-web",
     "android": "expo run:android",
     "ios": "expo run:ios"
   },

@@ -9,6 +9,12 @@ import {
   verifyAppleIdentityToken,
 } from "../_shared/apple_auth.ts";
 import { allowedFinalRedirect } from "../_shared/oauth_state.ts";
+import { withAppleGrantSignin } from "../_shared/apple_grant_store.ts";
+import { preflightAppleAccountLogin } from "../_shared/apple_login_preflight_store.ts";
+import {
+  AppleLoginPreflightUnavailableError,
+  AppleSignupRequiredError,
+} from "../_shared/apple_login_preflight.ts";
 
 type AppleWebUser = {
   email?: string;
@@ -46,10 +52,13 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const idToken = String(body.id_token || body.idToken || "");
     if (!idToken) {
-      return new Response(JSON.stringify({ error: "Missing Apple identity token" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ error: "Missing Apple identity token" }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
     }
 
     const finalRedirect = allowedFinalRedirect(
@@ -58,36 +67,87 @@ Deno.serve(async (req: Request) => {
     const appleUser = parseAppleUser(body.user);
     const cfg = await getAppleConfig(admin);
     const claims = await verifyAppleIdentityToken(idToken, [cfg.serviceId]);
-    const providedEmail = String(appleUser.email || body.email || claims.email || "");
-    const providedName =
-      String(body.full_name || body.fullName || "") ||
-      [appleUser.name?.firstName, appleUser.name?.lastName].filter(Boolean).join(" ");
+    const providedEmail = String(
+      appleUser.email || body.email || claims.email || "",
+    );
+    const providedName = String(body.full_name || body.fullName || "") ||
+      [appleUser.name?.firstName, appleUser.name?.lastName].filter(Boolean)
+        .join(" ");
 
-    const user = await upsertAppleUser({
+    let preflightComplete = false;
+    let preflightBdMemberId: string | undefined;
+    const login = await withAppleGrantSignin({
       claims,
-      email: providedEmail,
-      fullName: providedName,
+      clientId: cfg.serviceId,
+      preflight: async (context) => {
+        const result = await preflightAppleAccountLogin({
+          claims: context.verifiedClaims || claims,
+          consent: null,
+          expectedBdMemberId: context.expectedBdMemberId,
+          expectedProfileId: context.expectedProfileId,
+        });
+        preflightBdMemberId = context.expectedBdMemberId ||
+          result.expectedBdMemberId;
+        preflightComplete = true;
+      },
+      login: async (
+        { expectedBdMemberId, expectedProfileId, verifiedClaims },
+      ) => {
+        if (!preflightComplete) throw new AppleLoginPreflightUnavailableError();
+        const user = await upsertAppleUser({
+          claims: verifiedClaims || claims,
+          expectedProfileId,
+          email: providedEmail,
+          fullName: providedName,
+        });
+        const login = await makeBdAppleLoginResult({
+          appleSub: user.appleSub,
+          email: user.email,
+          fullName: user.fullName,
+          finalRedirect,
+          expectedBdMemberId: expectedBdMemberId || preflightBdMemberId,
+        });
+        if (login.nativeSession.user_id) {
+          await linkProfileToBdMember(user.userId, login.nativeSession);
+        }
+        return {
+          value: login,
+          bdMemberId: String(login.nativeSession.user_id || ""),
+          profileId: user.userId,
+          email: user.email,
+        };
+      },
     });
-    const login = await makeBdAppleLoginResult({
-      appleSub: user.appleSub,
-      email: user.email,
-      fullName: user.fullName,
-      finalRedirect,
-    });
-    if (login.nativeSession.user_id) {
-      await linkProfileToBdMember(user.userId, login.nativeSession);
-    }
 
     return new Response(JSON.stringify(login), {
       status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      },
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const signupRequired = e instanceof AppleSignupRequiredError;
+    const msg = signupRequired
+      ? "No WeddingWin account was found. Choose Sign up to create your account."
+      : e instanceof Error
+      ? e.message
+      : String(e);
     console.error("apple-web-login:error", msg);
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
-    });
+    return new Response(
+      JSON.stringify({
+        error: msg,
+        ...(signupRequired ? { error_code: "signup_required" } : {}),
+      }),
+      {
+        status: e instanceof AppleLoginPreflightUnavailableError ? 503 : 400,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+      },
+    );
   }
 });

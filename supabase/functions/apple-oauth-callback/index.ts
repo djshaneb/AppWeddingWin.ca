@@ -4,106 +4,47 @@ import {
   errorPage,
   getAppleConfig,
   linkProfileToBdMember,
-  makeBdAppleLoginResult,
   makeAppleClientSecret,
+  makeBdAppleLoginResult,
   upsertAppleUser,
   verifyAppleIdentityToken,
 } from "../_shared/apple_auth.ts";
-import {
-  assertAppleOAuthNonce,
-  verifySignedAppleOAuthState,
-} from "../_shared/oauth_state.ts";
 import { redeemOAuthLoginAttempt } from "../_shared/oauth_attempt.ts";
+import { createAppleWebCallbackHandler } from "../_shared/apple_web_oauth.ts";
+import { withAppleGrantSignin } from "../_shared/apple_grant_store.ts";
+import { createValidatedAppleNativeExchange } from "../_shared/apple_native_exchange_store.ts";
+import { preflightAppleAccountLogin } from "../_shared/apple_login_preflight_store.ts";
 
-const APPLE_RETURN_URL =
-  Deno.env.get("APPLE_RETURN_URL") || "https://www.weddingwin.ca/auth/apple-callback";
-const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
+const APPLE_RETURN_URL = Deno.env.get("APPLE_RETURN_URL") ||
+  "https://www.weddingwin.ca/auth/apple-callback";
+const handleCallback = createAppleWebCallbackHandler({
+  secret: Deno.env.get("APP_LOGIN_SECRET") || "",
+  returnUrl: APPLE_RETURN_URL,
+  redeemAttempt: (request, state) =>
+    redeemOAuthLoginAttempt({ admin, request, provider: "apple", state }),
+  getCredentials: async () => {
+    const cfg = await getAppleConfig(admin);
+    return {
+      serviceId: cfg.serviceId,
+      clientSecret: await makeAppleClientSecret(cfg, cfg.serviceId),
+    };
+  },
+  fetch,
+  verifyIdentity: (token, serviceId) =>
+    verifyAppleIdentityToken(token, [serviceId]),
+  upsertUser: upsertAppleUser,
+  preflightLogin: preflightAppleAccountLogin,
+  makeLogin: makeBdAppleLoginResult,
+  linkProfile: linkProfileToBdMember,
+  withGrant: withAppleGrantSignin,
+  createNativeExchange: createValidatedAppleNativeExchange,
+  errorPage,
+});
 
-Deno.serve(async (req: Request) => {
+Deno.serve((req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
-  try {
-    const form = await req.formData();
-    const code = String(form.get("code") || "");
-    const stateRaw = String(form.get("state") || "");
-    const appleError = String(form.get("error") || "");
-
-    if (!stateRaw) return errorPage("Missing Apple sign-in state.");
-
-    const state = await verifySignedAppleOAuthState(stateRaw, APP_LOGIN_SECRET);
-    const finalRedirect = state.r;
-    await redeemOAuthLoginAttempt({
-      admin,
-      request: req,
-      provider: "apple",
-      state: stateRaw,
-    });
-    if (appleError) return errorPage(`Apple returned: ${appleError}`);
-    if (!code) return errorPage("Missing Apple authorization code.");
-
-    const cfg = await getAppleConfig(admin);
-    const clientSecret = await makeAppleClientSecret(cfg, cfg.serviceId);
-    const tokenRes = await fetch("https://appleid.apple.com/auth/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: cfg.serviceId,
-        client_secret: clientSecret,
-        redirect_uri: APPLE_RETURN_URL,
-        grant_type: "authorization_code",
-      }),
-    });
-    if (!tokenRes.ok) {
-      const text = await tokenRes.text();
-      return errorPage(`Apple token exchange failed: ${text.slice(0, 300)}`);
-    }
-    const tokenJson = (await tokenRes.json()) as { id_token?: string };
-    const idToken = tokenJson.id_token || "";
-    if (!idToken) return errorPage("Apple did not return an identity token.");
-
-    const claims = await verifyAppleIdentityToken(idToken, [cfg.serviceId]);
-    assertAppleOAuthNonce(state.n, claims.nonce);
-    const userJson = String(form.get("user") || "");
-    let providedName = "";
-    let providedEmail = claims.email || "";
-    if (userJson) {
-      try {
-        const parsed = JSON.parse(userJson);
-        providedEmail = parsed.email || providedEmail;
-        providedName = [parsed.name?.firstName, parsed.name?.lastName].filter(Boolean).join(" ");
-      } catch {
-        // Apple only sends this on first authorization; ignore malformed user blob.
-      }
-    }
-
-    const user = await upsertAppleUser({
-      claims,
-      email: providedEmail,
-      fullName: providedName,
-    });
-    const login = await makeBdAppleLoginResult({
-      appleSub: user.appleSub,
-      email: user.email,
-      fullName: user.fullName,
-      finalRedirect,
-    });
-    if (login.nativeSession.user_id) {
-      await linkProfileToBdMember(user.userId, login.nativeSession);
-    }
-
-    return new Response(null, {
-      status: 302,
-      headers: {
-        ...corsHeaders,
-        Location: login.redirectUrl,
-        "Cache-Control": "no-store",
-      },
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return errorPage(msg);
-  }
+  return handleCallback(req);
 });

@@ -7,6 +7,13 @@ import {
 import { findAuthUserByEmail } from "../_shared/auth_users.ts";
 import { redeemOAuthLoginAttempt } from "../_shared/oauth_attempt.ts";
 import { requireCurrentPolicyConsent } from "../_shared/policy_consent.ts";
+import { assertAppleSignupAccountType } from "../_shared/apple_signup_role.ts";
+import {
+  type NativeSignupRole,
+  nativeSignupErrorMessage,
+  nativeSignupSubscriptionId,
+  requireNativeSignupRole,
+} from "../_shared/native_signup_intent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -113,9 +120,10 @@ type VerifiedGoogleState = {
   c: SignupConsent;
   p: string;
   exp: number;
+  g?: NativeSignupRole;
 };
 
-async function verifyGoogleState(encoded: string): Promise<VerifiedGoogleState> {
+export async function verifyGoogleState(encoded: string): Promise<VerifiedGoogleState> {
   if (!APP_LOGIN_SECRET) throw new Error("APP_LOGIN_SECRET is not configured");
   const parsed = JSON.parse(b64urlDecode(encoded)) as Record<string, unknown>;
   const redirect = allowedFinalRedirect(parsed.r);
@@ -149,7 +157,11 @@ async function verifyGoogleState(encoded: string): Promise<VerifiedGoogleState> 
     c: consent,
     p: codeChallenge,
     exp: expires,
+    ...(Object.hasOwn(parsed, "g") ? { g: requireNativeSignupRole(parsed.g) } : {}),
   };
+  if (signedPayload.g && (!redirect.startsWith("weddingwin:") || String(parsed.s) !== nativeSignupSubscriptionId(signedPayload.g))) {
+    throw new Error("Invalid Google signup account type.");
+  }
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(APP_LOGIN_SECRET),
@@ -271,6 +283,7 @@ async function createBdUserForGoogle(
   fullName?: string | null,
   subscriptionId = BD_DEFAULT_SUBSCRIPTION_ID,
   consent: SignupConsent = null,
+  expectedSignupRole?: NativeSignupRole,
 ): Promise<BdUser | undefined> {
   const policyConsent = requireCurrentPolicyConsent(consent);
 
@@ -283,7 +296,7 @@ async function createBdUserForGoogle(
     first_name: firstName || "WeddingWin",
     last_name: lastName,
     active: "2",
-    subscription_id: requestedSubscriptionId(subscriptionId),
+    subscription_id: expectedSignupRole ? nativeSignupSubscriptionId(expectedSignupRole) : requestedSubscriptionId(subscriptionId),
     password: base64UrlFromBytes(passwordBytes),
     send_email_notifications: "0",
     signup_terms_accepted: "1",
@@ -332,18 +345,22 @@ async function makeDirectBdGoogleLoginResult(args: {
   fullName?: string | null;
   subscriptionId?: string;
   consent?: SignupConsent;
+  expectedSignupRole?: NativeSignupRole;
 }): Promise<{ user: Record<string, unknown>; nativeSession: BdNativeSession }> {
   const email = args.email.trim().toLowerCase();
   let user = await fetchBdUserByEmail(email);
+  assertAppleSignupAccountType(user, args.expectedSignupRole);
   if (!user?.user_id) {
     user = await createBdUserForGoogle(
       email,
       args.fullName,
       args.subscriptionId,
       args.consent || null,
+      args.expectedSignupRole,
     );
   }
 
+  assertAppleSignupAccountType(user, args.expectedSignupRole);
   user = await ensureBdSessionCookie(user);
   const nativeSession = buildBdNativeSession(user, email);
   if (!nativeSession.user_id || !nativeSession.token) {
@@ -513,6 +530,7 @@ Deno.serve(async (req: Request) => {
           fullName: claims.name || "",
           subscriptionId,
           consent,
+          expectedSignupRole: state.g,
         });
 
         const exchangeCode = await createNativeAuthExchange({
@@ -538,7 +556,7 @@ Deno.serve(async (req: Request) => {
           },
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = nativeSignupErrorMessage(err instanceof Error ? err.message : String(err));
         return appRedirectWithError(appRedirect, message);
       }
     }

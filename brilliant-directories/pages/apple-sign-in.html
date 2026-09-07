@@ -1,0 +1,22 @@
+<section class="ww-apple-signin" aria-labelledby="ww-apple-signin-title">
+  <div class="ww-apple-signin-card">
+    <a class="ww-apple-signin-brand" href="/" aria-label="WeddingWin home"><img src="/images/CoralLogoTransB.png" alt="WeddingWin"></a>
+    <h1 id="ww-apple-signin-title">Continue with Apple</h1>
+    <p id="ww-apple-signin-intro" class="ww-apple-signin-intro">Sign in or create your WeddingWin account.</p>
+    <p id="ww-apple-signin-error" class="ww-apple-signin-error" role="alert" hidden></p>
+    <form id="ww-apple-signin-form" method="post" action="https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/apple-oauth-start">
+      <input type="hidden" name="redirect_to" value="https://www.weddingwin.ca/account/home">
+      <input type="hidden" name="signup_role" value="" disabled>
+      <input type="hidden" name="terms_version" value="2026-09-01">
+      <input type="hidden" name="privacy_version" value="2026-09-01">
+      <label class="ww-apple-signin-agreement" for="ww-apple-signin-accepted">
+        <input id="ww-apple-signin-accepted" type="checkbox" name="policy_accepted" value="1" required>
+        <span>I agree to the <a href="/about/terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="/about/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
+      </label>
+      <button class="ww-apple-signin-continue" type="submit" disabled>Continue with Apple</button>
+      <noscript>Please enable JavaScript to continue with Apple, or use the other sign-in options below.</noscript>
+      <p class="ww-apple-signin-status" aria-live="polite"></p>
+    </form>
+    <a class="ww-apple-signin-back" href="/login">Back to other sign-in options</a>
+  </div>
+</section>

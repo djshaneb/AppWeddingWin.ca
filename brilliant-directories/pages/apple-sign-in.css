@@ -1,0 +1,19 @@
+.ww-apple-signin{box-sizing:border-box;min-height:60vh;display:flex;justify-content:center;align-items:center;padding:32px 16px;background:#fff8f7;color:#2b2b2f;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.ww-apple-signin *{box-sizing:border-box}
+.ww-apple-signin-card{width:100%;max-width:500px;background:#fff;border:1px solid #ecd5d1;border-radius:20px;padding:36px 30px;box-shadow:0 10px 35px rgba(44,31,31,.06);text-align:center}
+.ww-apple-signin-brand{display:inline-block;max-width:230px;width:70%;margin-bottom:24px}
+.ww-apple-signin-brand img{display:block;width:100%;height:auto}
+.ww-apple-signin h1{font-size:28px;line-height:1.2;margin:0 0 12px;font-weight:750;color:#2b2b2f}
+.ww-apple-signin-intro{font-size:16px;line-height:1.5;color:#6e625f;margin:0 0 26px}
+.ww-apple-signin-agreement{display:flex;align-items:flex-start;gap:12px;text-align:left;font-size:16px;line-height:1.6;font-weight:400;margin:0 0 24px;cursor:pointer}
+.ww-apple-signin-agreement input{flex:0 0 22px;width:22px;height:22px;margin:3px 0 0;accent-color:#bc6466;cursor:pointer}
+.ww-apple-signin-agreement a,.ww-apple-signin-back{color:#98484d;text-decoration:underline;text-underline-offset:3px}
+.ww-apple-signin a:focus-visible,.ww-apple-signin button:focus-visible,.ww-apple-signin input:focus-visible{outline:3px solid #c76d70;outline-offset:4px}
+.ww-apple-signin-continue{appearance:none;display:block;width:100%;min-height:50px;border:0;border-radius:10px;background:#000;color:#fff;font:600 17px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:14px 18px;cursor:pointer}
+.ww-apple-signin-continue:hover{background:#222}
+.ww-apple-signin-continue:disabled{opacity:.65;cursor:wait}
+.ww-apple-signin-status{font-size:14px;min-height:22px;line-height:22px;margin:8px 0 14px;color:#6e625f}
+.ww-apple-signin-error{border:1px solid #e8b9b8;background:#fff5f4;color:#8d3438;border-radius:8px;padding:12px;font-size:15px;line-height:1.5;text-align:left;margin:0 0 20px}
+.ww-apple-signin-error[hidden]{display:none}
+.ww-apple-signin-back{display:inline-block;padding:8px 0;font-size:15px;line-height:1.5}
+@media(max-width:480px){.ww-apple-signin{padding:20px 8px;min-height:0}.ww-apple-signin-card{padding:28px 20px;border-radius:16px}.ww-apple-signin h1{font-size:25px}.ww-apple-signin-brand{margin-bottom:20px}}

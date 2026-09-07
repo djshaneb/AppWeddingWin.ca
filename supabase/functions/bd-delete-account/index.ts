@@ -9,6 +9,7 @@ import {
   revokeAppleAuthorization,
 } from "../_shared/apple_revocation.ts";
 import { nativeSessionMatchesCachedBdIdentity } from "../_shared/bd_identity.ts";
+import { enqueueAppleMemberDeletion } from "../_shared/apple_grant_store.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -302,6 +303,10 @@ Deno.serve(async (req) => {
     await deleteBdUserMeta(bdUserMeta);
     diagnosticStage = "delete_bd_member";
     await deleteBdUser(userId);
+    if (appleSub) {
+      diagnosticStage = "queue_apple_permission_cleanup";
+      await enqueueAppleMemberDeletion(userId);
+    }
 
     // Delete GoTrue before the transactional public-data purge. If this step
     // or the later RPC fails, bd_users_cache remains available for an

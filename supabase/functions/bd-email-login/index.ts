@@ -7,6 +7,10 @@ import {
   createOneTimeAppLoginUrl,
   sha256Base64Url,
 } from "../_shared/auth_exchange.ts";
+import {
+  BdNativeSessionRefreshUnavailable,
+  resolveBdNativeSessionRefresh,
+} from "../_shared/bd_native_session_refresh.ts";
 
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") ||
   "https://www.weddingwin.ca";
@@ -139,18 +143,6 @@ async function callBd(path: string, init: RequestInit = {}) {
   return { response, body };
 }
 
-async function fetchFullUserById(userId: string | number) {
-  const fullUser = await callBd(
-    `/api/v2/user/get/${encodeURIComponent(String(userId))}`,
-  );
-
-  if (fullUser.response.ok && fullUser.body.status === "success") {
-    return unwrapBdUser(fullUser.body.message);
-  }
-
-  return undefined;
-}
-
 async function fetchCachedUserByVerifiedEmail(email: string) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error("BD identity cache is not configured.");
@@ -196,21 +188,6 @@ async function ensureBdSessionCookie(user: BdUser | undefined) {
   // bd_users_cache. Never regenerate a token for a user who already has one -
   // doing so orphans their chat threads from the website inbox.
   return (await ensureStableBdIdentity(user, callBd)) as BdUser | undefined;
-}
-
-async function nativeSessionCanRefreshUser(
-  session: NativeSession,
-  user: BdUser | undefined,
-) {
-  if (
-    !user?.user_id || String(user.user_id) !== String(session.user_id || "")
-  ) {
-    return false;
-  }
-
-  // BD strips token/cookie from v2 reads. Only the canonical identity issued
-  // at login and stored in bd_users_cache can authorize a native refresh.
-  return await nativeSessionMatchesCachedBdIdentity(session);
 }
 
 type LoginRateKey = {
@@ -336,11 +313,27 @@ Deno.serve(async (req) => {
 
     if (native_session && typeof native_session === "object") {
       const session = native_session as NativeSession;
-      let user = session.user_id
-        ? await fetchFullUserById(session.user_id)
-        : undefined;
+      let user = await resolveBdNativeSessionRefresh(session, {
+        fetchMember: (id) => {
+          // BD's single-record route returns a non-success envelope when a
+          // member is gone. Its exact-ID filter returns success + [] instead,
+          // matching the authoritative absence check used by account cleanup.
+          const query = new URLSearchParams({
+            property: "user_id",
+            property_operator: "eq",
+            property_value: id,
+            limit: "2",
+          });
+          return callBd(`/api/v2/user/get?${query}`, {
+            signal: AbortSignal.timeout(5000),
+          });
+        },
+        // Membership is checked live first. The cache supplies only the
+        // canonical token because BD's v2 API deliberately omits it.
+        matchesIdentity: nativeSessionMatchesCachedBdIdentity,
+      });
 
-      if (!await nativeSessionCanRefreshUser(session, user)) {
+      if (!user) {
         return jsonResponse({
           error: "Stored session expired. Please sign in again.",
         }, 401);
@@ -475,6 +468,6 @@ Deno.serve(async (req) => {
     });
     return jsonResponse({
       error: "Login is temporarily unavailable.",
-    }, 500);
+    }, error instanceof BdNativeSessionRefreshUnavailable ? 503 : 500);
   }
 });
