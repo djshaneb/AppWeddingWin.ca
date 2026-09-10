@@ -8,6 +8,15 @@ noindex as a security control, or describe a shared password as admin identity.
 
 ## Implementation
 
+September 10 clarification: the existing live password setup needs no action
+after a GitHub push. GitHub runs checks and does not publish widget 262. The
+environment lookup below belongs to the sanitized public source. For a future
+explicit CMS deployment, preserve the deployed private password helper in memory
+using the existing email-verification publisher pattern, or configure the PHP
+worker variable before publishing. No widget-262 publisher currently implements
+that preservation step. The live helper was confirmed still present on September
+10; the environment-based public template was not deployed.
+
 - Both HTML and JSON require a signed, one-hour Secure/HttpOnly/SameSite=Strict
   cookie scoped to `/qr_results`. Cookie signatures are bound to the password
   verifier and use the existing server-side BD credential, never a browser key.

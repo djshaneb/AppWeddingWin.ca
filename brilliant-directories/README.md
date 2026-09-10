@@ -43,11 +43,16 @@ names, member IDs, email addresses and phone numbers. The current event's active
 Bingo contacts (including admin corrections) take precedence over BD account
 details. Read-only signed calls reuse the admin contact-list endpoint; no new
 database permissions or public contact API were introduced.
-Before deploying this repository version, configure `WW_QR_RESULTS_PASSWORD_HASH`
-with the bcrypt verifier in the PHP worker environment through private server
-configuration. No verifier is stored in source. Missing or malformed configuration
-blocks both existing access cookies and password unlock. This source-only change
-does not alter the currently deployed widget or its server configuration.
+GitHub pushes run checks only; they do not deploy widget 262. The live widget
+already has its private password setup, and no server change is needed for a
+repository push. The public source reads `WW_QR_RESULTS_PASSWORD_HASH` from the
+PHP worker environment and blocks access if that value is missing or malformed.
+Before a future explicit CMS deployment, either configure that private setting
+or preserve the deployed `ww_qrr_password_hash()` helper in memory while preparing
+the payload, following the private-helper pattern in
+`scripts/deploy-website-email-verification.mjs`. A publisher for widget 262 has
+not yet been added. Never paste the unconfigured public template directly over
+the live widget, and never commit the deployed verifier to GitHub.
 A one-hour Secure/HttpOnly/SameSite=Strict cookie is signed using the existing
 server-side credential.
 Wrong guesses are limited to five per 15 minutes per server-observed IP.

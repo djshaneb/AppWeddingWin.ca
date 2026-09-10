@@ -2,8 +2,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const qr = readFileSync(new URL('../brilliant-directories/widgets/258-julian-qr-code-bingo.php', import.meta.url), 'utf8');
 const admin = readFileSync(new URL('../brilliant-directories/widgets/ww-qr-bingo-settings.php', import.meta.url), 'utf8');
@@ -15,10 +18,20 @@ const section = (source, start, end) => {
 const contactJs = readFileSync(new URL('../brilliant-directories/widgets/258-qr-bingo-contact-form.js', import.meta.url), 'utf8');
 const adminJs = readFileSync(new URL('../brilliant-directories/widgets/ww-qr-bingo-settings-data.js', import.meta.url), 'utf8');
 const b64 = value => Buffer.from(value).toString('base64');
+const phpCli = fileURLToPath(new URL('../node_modules/@php-wasm/cli/php-wasm.js', import.meta.url));
 function php(code) {
-  return JSON.parse(execFileSync('npm', ['exec', '--offline', '--package=@php-wasm/cli', '--', 'php-wasm-cli', '-r', code], {
-    encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
-  }));
+  // Use the lockfile-installed runtime; a fresh CI runner has no npx cache.
+  // The full-widget parse fixture exceeds Linux's per-argument size limit.
+  const directory = mkdtempSync(join(realpathSync(tmpdir()), 'weddingwin-qr-php-test-'));
+  try {
+    const fixture = join(directory, 'fixture.php');
+    writeFileSync(fixture, `<?php\n${code}`, 'utf8');
+    return JSON.parse(execFileSync(process.execPath, [phpCli, fixture], {
+      encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
+    }));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 class Node {
