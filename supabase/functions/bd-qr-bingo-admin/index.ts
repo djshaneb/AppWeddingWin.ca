@@ -1,5 +1,9 @@
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import {
+  handleQrAdminDrawReset,
+  QrAdminDrawResetError,
+} from "../_shared/qr_bingo_admin_draw_reset.ts";
+import {
   handleQrAdminData,
   QrAdminDataError,
 } from "../_shared/qr_bingo_admin_data.ts";
@@ -430,6 +434,21 @@ Deno.serve(async (request) => {
     await requireSignedAdminRequest(request, rawBody);
     const body = JSON.parse(rawBody || "{}") as Record<string, unknown>;
     const action = String(body.action || "");
+
+    if (action === "draw_reset") {
+      try {
+        return jsonResponse(await handleQrAdminDrawReset(requireAdmin(), body));
+      } catch (error) {
+        if (error instanceof QrAdminDrawResetError) {
+          return jsonResponse({
+            ok: false,
+            code: error.code,
+            error: error.message,
+          }, error.status);
+        }
+        throw error;
+      }
+    }
 
     if (["contact_add", "contact_remove", "contact_restore"].includes(action)) {
       try {

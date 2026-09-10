@@ -14,14 +14,17 @@
     const addPanel = byId('wwQrContactPanel'), addForm = byId('wwQrContactAddForm');
     const contactStatus = byId('wwQrContactStatus'), matches = byId('wwQrContactMatches');
     const confirmPanel = byId('wwQrContactConfirm');
+    const resetPanel = byId('wwQrDrawResetConfirm');
     let dataset = 'contacts', page = 1, hasMore = false, busy = false;
     let selectedMember = null, contactEvent = '', confirmation = null, pendingMutation = null;
+    let resetConfirmation = null, pendingReset = null;
     const validId = value => typeof value === 'string' && /^[1-9][0-9]{0,17}$/.test(value);
+    const validDrawId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
     const eventKey = () => byId('wwQrDataEvent').value.trim();
     const contactFilter = () => byId('wwQrDataContactStatus').value;
     function setBusy(value) {
       busy = value;
-      root.querySelectorAll('button,input,select').forEach(control => { control.disabled = value; });
+      root.querySelectorAll('button,input,select,textarea').forEach(control => { control.disabled = value; });
       previous.disabled = value || page <= 1;
       next.disabled = value || !hasMore;
     }
@@ -48,6 +51,7 @@
       } finally { clearTimeout(timeout); }
     }
     function closeConfirmation() { confirmation = null; confirmPanel.hidden = true; }
+    function closeReset() { resetConfirmation = null; if (resetPanel) resetPanel.hidden = true; }
     function closeAdd() { addPanel.hidden = true; byId('wwQrContactAddOpen').setAttribute('aria-expanded', 'false'); }
     function clearMember() { selectedMember = null; addForm.hidden = true; matches.replaceChildren(); }
     function errorText(error) { return error instanceof Error && error.name !== 'AbortError' ? error.message : 'The request could not be confirmed. Please try again.'; }
@@ -67,7 +71,7 @@
       button.setAttribute('aria-label', button.textContent + ' contact for ' + String(record.name || 'couple') + ' (member ' + record.couple_id + ')');
       button.addEventListener('click', () => {
         if (busy || dataset !== 'contacts' || selectedEvent !== eventKey()) return;
-        closeAdd();
+        closeAdd(); closeReset();
         confirmation = { action: record.removed ? 'contact_restore' : 'contact_remove', coupleId: record.couple_id, version: record.version, event: selectedEvent };
         byId('wwQrContactConfirmMessage').textContent = (record.removed ? 'Restore ' : 'Remove ') + String(record.name || 'this couple') + ' (member #' + record.couple_id + ') ' + (record.removed ? 'to' : 'from') + ' Bingo contacts for event “' + selectedEvent + '”?';
         byId('wwQrContactConfirmAction').textContent = record.removed ? 'Restore contact' : 'Remove contact';
@@ -76,8 +80,31 @@
       });
       column.appendChild(button); return column;
     }
+    function drawRowAction(record, selectedEvent) {
+      const column = document.createElement('td');
+      if (!resetPanel || !validId(record.vendor_id) || !validDrawId(record.id) || !Number.isSafeInteger(record.draw_generation) || record.draw_generation < 0 || !Number.isSafeInteger(record.current_generation) || record.current_generation < record.draw_generation || typeof record.is_current_generation !== 'boolean' || record.is_current_generation !== (record.draw_generation === record.current_generation) || typeof record.can_reset_draw !== 'boolean') {
+        column.textContent = 'Refresh to manage'; return column;
+      }
+      if (!record.is_current_generation) { column.textContent = 'Previous draw · retained in history'; return column; }
+      if (!record.can_reset_draw || !['potential', 'verified'].includes(record.selection_status)) {
+        column.textContent = typeof record.reset_block_reason === 'string' && record.reset_block_reason ? record.reset_block_reason : 'Reset unavailable'; return column;
+      }
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'ww-qrbs-button ww-qrbs-data-danger'; button.textContent = 'Reset draw';
+      button.setAttribute('aria-label', 'Reset draw for ' + String(record.vendor_name || 'vendor') + ' (vendor ' + record.vendor_id + ')');
+      button.addEventListener('click', () => {
+        if (busy || dataset !== 'winners' || selectedEvent !== eventKey()) return;
+        closeAdd(); closeConfirmation();
+        resetConfirmation = { event: selectedEvent, vendorId: record.vendor_id, drawId: record.id, generation: record.current_generation };
+        byId('wwQrDrawResetMessage').textContent = 'Reset draw #' + String(record.draw_number || '') + ' for ' + String(record.vendor_name || 'this vendor') + ' (vendor #' + record.vendor_id + ') in event “' + selectedEvent + '”? Previous selection: ' + String(record.name || 'couple') + '.';
+        byId('wwQrDrawResetReason').value = ''; resetPanel.hidden = false;
+        byId('wwQrDrawResetCancel').focus();
+      });
+      column.appendChild(button); return column;
+    }
     async function request(exporting, requestedPage) {
       if (busy || !form.reportValidity()) return;
+      if (!exporting) closeReset();
       const operator = exporting ? adminName('Enter your admin name for the download audit.', status) : byId('wwQrDataOperator').value.trim();
       if (exporting && !operator) return;
       const fields = fieldsFor(exporting ? 'data_export' : 'data_list');
@@ -104,10 +131,10 @@
         } else {
           if (!Array.isArray(result.columns) || result.columns.length > 50 || !Array.isArray(result.rows) || result.rows.length > 100 || !Number.isInteger(result.page) || result.page !== requestedPage || typeof result.has_more !== 'boolean') throw new Error('The returned list could not be verified.');
           clearRows(); const titleRow = document.createElement('tr');
-          if (dataset === 'contacts') titleRow.appendChild(cell('th', 'Actions'));
+          if (dataset === 'contacts' || dataset === 'winners') titleRow.appendChild(cell('th', 'Actions'));
           result.columns.forEach(column => { if (!column || typeof column.key !== 'string' || typeof column.label !== 'string') throw new Error('The list columns could not be verified.'); titleRow.appendChild(cell('th', column.label)); });
           head.appendChild(titleRow);
-          result.rows.forEach(record => { if (!record || typeof record !== 'object') throw new Error('The list records could not be verified.'); const row = document.createElement('tr'); if (dataset === 'contacts') row.appendChild(rowAction(record, result.event_key)); result.columns.forEach(column => row.appendChild(cell('td', record[column.key]))); rows.appendChild(row); });
+          result.rows.forEach(record => { if (!record || typeof record !== 'object') throw new Error('The list records could not be verified.'); const row = document.createElement('tr'); if (dataset === 'contacts') row.appendChild(rowAction(record, result.event_key)); if (dataset === 'winners') row.appendChild(drawRowAction(record, result.event_key)); result.columns.forEach(column => row.appendChild(cell('td', record[column.key]))); rows.appendChild(row); });
           page = result.page; hasMore = result.has_more;
           status.textContent = result.rows.length ? 'Page ' + page + ' · ' + result.total + ' matching records' : 'No matching records.';
         }
@@ -192,9 +219,34 @@
       output.textContent = message;
       if (succeeded || !adding) status.textContent = message;
     }
+    async function resetDraw() {
+      const target = resetConfirmation;
+      if (busy || !target || !resetPanel || resetPanel.hidden || dataset !== 'winners' || target.event !== eventKey() || !form.reportValidity()) return;
+      const operator = adminName('Enter your admin name before resetting a draw.', status); if (!operator) return;
+      const reason = byId('wwQrDrawResetReason').value.trim();
+      if (reason.length < 3 || reason.length > 500 || /[<>]/.test(reason) || Array.from(reason).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) { status.textContent = 'Enter a reason of 3–500 characters on one line.'; byId('wwQrDrawResetReason').focus(); return; }
+      const fields = fieldsFor('draw_reset');
+      fields.set('dataset', 'winners'); fields.set('event_key', target.event); fields.set('vendor_id', target.vendorId); fields.set('draw_id', target.drawId);
+      fields.set('expected_generation', String(target.generation)); fields.set('operator_identity', operator); fields.set('reason', reason);
+      let refresh = false, message = '';
+      try {
+        const fingerprint = fields.toString();
+        if (!pendingReset || pendingReset.fingerprint !== fingerprint) pendingReset = { fingerprint, id: requestId() };
+        fields.set('request_id', pendingReset.id); setBusy(true); status.textContent = 'Resetting the vendor draw…';
+        const result = await post(fields);
+        if (result.action !== 'draw_reset' || result.dataset !== 'winners' || result.event_key !== target.event || result.vendor_id !== target.vendorId || result.draw_id !== target.drawId || result.request_id !== fields.get('request_id') || result.from_generation !== target.generation || !Number.isSafeInteger(result.to_generation) || result.to_generation !== target.generation + 1 || typeof result.replayed !== 'boolean') throw new Error('The reset could not be verified. Refresh the list before trying again.');
+        pendingReset = null; closeReset(); refresh = true;
+        message = result.replayed ? 'This reset was already recorded. The current draw history is shown below.' : 'Draw reset. The vendor can choose a winner and send again. Existing entrants and previous winner/email records were kept.';
+      } catch (error) {
+        message = errorText(error);
+        if (error && error.httpStatus === 409) { closeReset(); refresh = true; message += ' Review the refreshed draw before trying again.'; }
+      } finally { setBusy(false); }
+      if (refresh && !await request(false, page)) message += ' The list could not be refreshed; select Show list before another change.';
+      status.textContent = message;
+    }
     tabs.forEach(tab => tab.addEventListener('click', function () {
       if (busy) return;
-      dataset = tab.dataset.dataset; page = 1; clearRows(); closeAdd(); closeConfirmation();
+      dataset = tab.dataset.dataset; page = 1; clearRows(); closeAdd(); closeConfirmation(); closeReset();
       tabs.forEach(item => item.setAttribute('aria-selected', item === tab ? 'true' : 'false'));
       document.getElementById('wwQrDataScanNote').hidden = dataset !== 'scans';
       byId('wwQrDataContactStatusGroup').hidden = dataset !== 'contacts'; byId('wwQrContactAddOpen').hidden = dataset !== 'contacts';
@@ -204,10 +256,10 @@
     document.getElementById('wwQrDataExport').addEventListener('click', () => { void request(true, 1); });
     previous.addEventListener('click', () => { if (page > 1) void request(false, page - 1); });
     next.addEventListener('click', () => { if (hasMore) void request(false, page + 1); });
-    ['wwQrDataEvent', 'wwQrDataVendor', 'wwQrDataSearch', 'wwQrDataContactStatus'].forEach(id => document.getElementById(id).addEventListener(id === 'wwQrDataContactStatus' ? 'change' : 'input', () => { if (!busy) { page = 1; clearRows(); closeConfirmation(); if (id === 'wwQrDataEvent') { closeAdd(); clearMember(); } status.textContent = 'Filters changed. Select Show list.'; } }));
+    ['wwQrDataEvent', 'wwQrDataVendor', 'wwQrDataSearch', 'wwQrDataContactStatus'].forEach(id => document.getElementById(id).addEventListener(id === 'wwQrDataContactStatus' ? 'change' : 'input', () => { if (!busy) { page = 1; clearRows(); closeConfirmation(); closeReset(); if (id === 'wwQrDataEvent') { closeAdd(); clearMember(); } status.textContent = 'Filters changed. Select Show list.'; } }));
     byId('wwQrContactAddOpen').addEventListener('click', () => {
       if (busy || dataset !== 'contacts' || !form.reportValidity()) return;
-      closeConfirmation(); clearMember(); contactEvent = eventKey(); addPanel.hidden = false;
+      closeConfirmation(); closeReset(); clearMember(); contactEvent = eventKey(); addPanel.hidden = false;
       byId('wwQrContactEvent').textContent = 'Event: ' + contactEvent; byId('wwQrContactAddOpen').setAttribute('aria-expanded', 'true');
       byId('wwQrContactLookup').value = ''; contactStatus.textContent = ''; byId('wwQrContactLookup').focus();
     });
@@ -218,6 +270,10 @@
     addForm.addEventListener('submit', event => { event.preventDefault(); if (!busy && !addPanel.hidden && selectedMember && addForm.reportValidity()) void mutate({ action: 'contact_add', coupleId: selectedMember.coupleId, version: 0, event: contactEvent }); });
     byId('wwQrContactConfirmAction').addEventListener('click', () => { if (confirmation) void mutate(confirmation); });
     byId('wwQrContactConfirmCancel').addEventListener('click', () => { if (!busy) closeConfirmation(); });
+    if (resetPanel) {
+      byId('wwQrDrawResetAction').addEventListener('click', () => { void resetDraw(); });
+      byId('wwQrDrawResetCancel').addEventListener('click', () => { if (!busy) closeReset(); });
+    }
   }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initializeQrAdminData, { once: true });
     else initializeQrAdminData();

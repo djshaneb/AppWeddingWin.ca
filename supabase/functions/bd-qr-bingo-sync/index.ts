@@ -270,6 +270,7 @@ type RaffleSettings = {
   max_winners: number;
   exclude_previous_winners: boolean;
   draw_opens_at: string;
+  draw_generation?: number;
   updated_at?: string | null;
 };
 type VendorOfferSnapshot = {
@@ -365,6 +366,7 @@ type RaffleEntry = {
 type RaffleDraw = {
   id: string;
   event_key: string;
+  draw_generation?: number;
   entry_id: string;
   vendor_bingo_id: string;
   vendor_bd_user_id: string;
@@ -1318,10 +1320,49 @@ async function archivedLegacyEntryIds(eventKey: string, vendorId: string) {
   return new Set(rows.map((row) => String(row.entry_id || "")));
 }
 
+function currentDrawGeneration(value: unknown) {
+  // Older fixture snapshots predate the migration and belong to generation 0.
+  const generation = value === undefined ? 0 : value;
+  if (!Number.isSafeInteger(generation) || Number(generation) < 0) {
+    throw new Error("The vendor draw generation could not be verified.");
+  }
+  return Number(generation);
+}
+
+async function drawIsCurrentGeneration(
+  vendor: QrVendor,
+  eventKey: string,
+  draw: Pick<RaffleDraw, "draw_generation">,
+) {
+  const settings = await getSettings(vendor, eventKey);
+  return Boolean(settings && currentDrawGeneration(draw.draw_generation) ===
+    currentDrawGeneration(settings.draw_generation));
+}
+
+async function staleDrawGenerationResponse(
+  vendor: QrVendor,
+  user: BdRow | undefined,
+  eventKey: string,
+  allowEarlyDraw: boolean,
+  suppressOutboundEmail: boolean,
+  isolatedFixture?: IsolatedRaffleFixture | null,
+) {
+  return jsonResponse({
+    ...await getVendorRaffleDashboard(
+      vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture,
+    ),
+    ok: false,
+    conflict: true,
+    code: "stale_draw_generation",
+    error: "An administrator reset this vendor draw. Refresh to view the current draw.",
+  }, 409);
+}
+
 async function loadVendorDrawRows(
   eventKey: string,
   vendorId: string,
   vendorBdUserId: string,
+  drawGeneration: number,
 ) {
   const db = requireAdmin();
   return await collectExactPostgrestRows<RaffleDraw>(
@@ -1332,13 +1373,15 @@ async function loadVendorDrawRows(
         .select("id", { count: "exact", head: true })
         .eq("event_key", eventKey)
         .eq("vendor_bingo_id", vendorId)
-        .eq("vendor_bd_user_id", vendorBdUserId),
+        .eq("vendor_bd_user_id", vendorBdUserId)
+        .eq("draw_generation", drawGeneration),
     (from, to) =>
       db.from("qr_bingo_raffle_draws")
         .select("*")
         .eq("event_key", eventKey)
         .eq("vendor_bingo_id", vendorId)
         .eq("vendor_bd_user_id", vendorBdUserId)
+        .eq("draw_generation", drawGeneration)
         .order("draw_number", { ascending: true })
         .order("id", { ascending: true })
         .range(from, to),
@@ -1694,6 +1737,7 @@ function vendorVisibleDraw(
     isolatedFixturePurpose(isolatedFixture) === "app_review";
   return {
     id: draw.id,
+    draw_generation: draw.draw_generation ?? 0,
     prize_title: draw.prize_title,
     draw_number: draw.draw_number,
     draw_reason: draw.draw_reason,
@@ -1796,10 +1840,12 @@ async function loadVendorEntryPool(
   vendor: QrVendor,
   eventKey: string,
   isolatedFixture?: IsolatedRaffleFixture | null,
+  currentSettings?: RaffleSettings,
 ) {
   const db = requireAdmin();
   const vendorBdUserId = String(vendor.user_id || vendor.id);
-  const settings = await getSettings(vendor, eventKey);
+  const settings = currentSettings ?? await getSettings(vendor, eventKey);
+  const drawGeneration = currentDrawGeneration(settings?.draw_generation);
   const excludePreviousWinners = true;
   const entryRows = await collectExactPostgrestRows<RaffleEntry>(
     "Named-vendor contact QR Bingo entrants",
@@ -1841,7 +1887,7 @@ async function loadVendorEntryPool(
   const [archivedIds, stateRows, drawRows] = await Promise.all([
     archivedLegacyEntryIds(eventKey, vendor.id),
     loadVendorSelectionStateRows(eventKey, vendor.id, vendorBdUserId),
-    loadVendorDrawRows(eventKey, vendor.id, vendorBdUserId),
+    loadVendorDrawRows(eventKey, vendor.id, vendorBdUserId, drawGeneration),
   ]);
   const controlledFixture = isolatedFixtureMatchesSettings(
     settings,
@@ -1954,6 +2000,7 @@ async function loadVendorEntryPool(
   return {
     rows,
     publicRows,
+    draw_generation: drawGeneration,
     entry_count: rows.length,
     included_entry_count:
       rows.filter((row) => row.selection_eligible && row.included).length,
@@ -1975,6 +2022,7 @@ async function vendorRaffleEntriesResponse(
   const pool = await loadVendorEntryPool(vendor, eventKey, isolatedFixture);
   return {
     entries: pool.publicRows,
+    draw_generation: pool.draw_generation,
     entry_count: pool.entry_count,
     included_entry_count: pool.included_entry_count,
     excluded_entry_count: pool.excluded_entry_count,
@@ -2644,6 +2692,7 @@ async function getVendorRaffleDashboard(
     vendor,
     eventKey,
     isolatedFixture,
+    settings,
   );
   const activeEntryCount = await activeVendorEntryCount(eventKey, vendor.id);
   const offerActivated = await activatedVendorOfferExists(eventKey, vendor.id);
@@ -2658,6 +2707,7 @@ async function getVendorRaffleDashboard(
     eventKey,
     vendor.id,
     String(vendor.user_id || vendor.id),
+    currentDrawGeneration(settings.draw_generation),
   );
 
   const activeWinnerCount =
@@ -2709,6 +2759,7 @@ async function getVendorRaffleDashboard(
   return {
     vendor,
     event_key: eventKey,
+    draw_generation: currentDrawGeneration(settings.draw_generation),
     event_revision: qrBingoConfig().revision,
     settings: {
       ...settings,
@@ -2718,7 +2769,8 @@ async function getVendorRaffleDashboard(
     },
     // The dashboard never returns the full entrant list. Draw history contains
     // only the selected person's contact snapshot and is scoped above to this
-    // authenticated vendor and event. The separately audited CSV action remains
+    // authenticated vendor, event, and current draw generation. Archived draws
+    // remain in the database audit history. The separately audited CSV action remains
     // the only way to retrieve all currently consented entrants.
     entries: [],
     entry_count: entryPool.entry_count,
@@ -3403,6 +3455,23 @@ async function replacePotentialWinner(
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(drawId)) {
     return jsonResponse({ ok: false, error: "A valid potential-winner selection is required." }, 400);
   }
+  const { data: ownedDraw, error: drawError } = await requireAdmin()
+    .from("qr_bingo_raffle_draws")
+    .select("id,draw_generation")
+    .eq("id", drawId)
+    .eq("event_key", eventKey)
+    .eq("vendor_bingo_id", vendor.id)
+    .eq("vendor_bd_user_id", String(vendor.user_id || vendor.id))
+    .maybeSingle();
+  if (drawError) throw drawError;
+  if (!ownedDraw) {
+    return jsonResponse({ ok: false, error: "This selection does not belong to the signed-in vendor." }, 403);
+  }
+  if (!await drawIsCurrentGeneration(vendor, eventKey, ownedDraw)) {
+    return staleDrawGenerationResponse(
+      vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture,
+    );
+  }
   const skillChallenge = await newSkillTestingChallenge();
   const { data, error } = await requireAdmin().rpc(
     "replace_qr_bingo_potential_winner_by_vendor",
@@ -3497,7 +3566,7 @@ async function reviewPotentialWinner(
 
   const { data: ownedDraw, error: drawError } = await requireAdmin()
     .from("qr_bingo_raffle_draws")
-    .select("id,selection_status")
+    .select("id,selection_status,draw_generation")
     .eq("id", drawId)
     .eq("event_key", eventKey)
     .eq("vendor_bingo_id", vendor.id)
@@ -3509,6 +3578,11 @@ async function reviewPotentialWinner(
       ok: false,
       error: "This selection does not belong to the signed-in vendor.",
     }, 403);
+  }
+  if (!await drawIsCurrentGeneration(vendor, eventKey, ownedDraw)) {
+    return staleDrawGenerationResponse(
+      vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture,
+    );
   }
   if (ownedDraw.selection_status !== "potential") {
     return jsonResponse({
@@ -3631,6 +3705,11 @@ async function sendVerifiedWinnerNotice(
       error: "This selection does not belong to the signed-in vendor.",
     }, 403);
   }
+  if (!await drawIsCurrentGeneration(vendor, eventKey, ownedDraw)) {
+    return staleDrawGenerationResponse(
+      vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture,
+    );
+  }
   if (ownedDraw.selection_status === "potential") {
     if (body.winner_checks_confirmed !== true) {
       return jsonResponse({
@@ -3678,6 +3757,11 @@ async function sendVerifiedWinnerNotice(
   }
   if (!ownedDraw) {
     return jsonResponse({ ok: false, error: "The confirmed selection could not be reloaded. Please refresh." }, 409);
+  }
+  if (!await drawIsCurrentGeneration(vendor, eventKey, ownedDraw)) {
+    return staleDrawGenerationResponse(
+      vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture,
+    );
   }
   if (ownedDraw.selection_status !== "verified" ||
     !hasQrBingoSkillVerification(ownedDraw) ||
@@ -3732,6 +3816,14 @@ async function sendVerifiedWinnerNotice(
       user, ownedDraw as RaffleDraw, signingKey, vendor, isolatedFixture,
     );
   } catch (_error) {
+    // A reset may commit after the delivery ledger is finalized but before
+    // email_error bookkeeping. The database preserves the historical row;
+    // return the current draw state instead of asking to resend that notice.
+    if (!await drawIsCurrentGeneration(vendor, eventKey, ownedDraw)) {
+      return staleDrawGenerationResponse(
+        vendor, user, eventKey, allowEarlyDraw, suppressOutboundEmail, isolatedFixture,
+      );
+    }
     return jsonResponse({
       ok: false, partial_delivery: true,
       error: "Your winner confirmation is saved, but the email delivery was not confirmed. Please try sending again.",

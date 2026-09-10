@@ -190,11 +190,56 @@ export async function handleQrAdminData(
         503,
       );
     }
-    return Object.fromEntries(
+    const clean: Record<string, unknown> = Object.fromEntries(
       columns.map((
         { key },
       ) => [key, key === "removed_at" ? row[key] ?? null : row[key] ?? ""]),
     );
+    if (filter.dataset === "winners" && !exporting) {
+      const draw = row.draw_generation;
+      const current = row.current_generation;
+      if (
+        !Number.isSafeInteger(draw) || Number(draw) < 0 ||
+        !Number.isSafeInteger(current) || Number(current) < Number(draw) ||
+        typeof row.is_current_generation !== "boolean" ||
+        row.is_current_generation !== (draw === current) ||
+        typeof row.can_reset_draw !== "boolean" ||
+        (row.can_reset_draw && (!row.is_current_generation ||
+          !["potential", "verified"].includes(String(row.selection_status)))) ||
+        (row.can_reset_draw && row.reset_block_reason !== "") ||
+        typeof row.reset_block_reason !== "string" ||
+        row.reset_block_reason.length > 400
+      ) {
+        throw new QrAdminDataError(
+          "Winner reset state could not be verified. Reload and try again.",
+          503,
+        );
+      }
+      for (
+        const key of [
+          "draw_generation",
+          "current_generation",
+          "is_current_generation",
+          "can_reset_draw",
+          "reset_block_reason",
+        ]
+      ) clean[key] = row[key];
+      const resetReasons: Record<string, string> = {
+        draw_not_current: "Previous draw retained in history.",
+        draw_not_active:
+          "Only the current potential or verified winner can be reset.",
+        event_unavailable: "Reset is unavailable for this event.",
+        draw_delivery_uncertain:
+          "An email outcome needs administrator review before reset.",
+        draw_delivery_in_progress:
+          "An email is still being processed. Try again after it finishes.",
+      };
+      if (row.reset_block_reason) {
+        clean.reset_block_reason = resetReasons[row.reset_block_reason] ||
+          "Reset is temporarily unavailable. Refresh the winner list.";
+      }
+    }
+    return clean;
   });
   if (exporting) {
     if (data.total > 5000 || rows.length !== data.total) {

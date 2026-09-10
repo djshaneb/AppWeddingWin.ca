@@ -944,6 +944,43 @@ if (!function_exists('ww_qrbs_escape')) {
     }
     /* WW_QR_ADMIN_CONTACT_HELPERS_END */
 
+    /* WW_QR_ADMIN_DRAW_RESET_HELPERS_START */
+    function ww_qrbs_draw_reset_request($source) {
+        $allowed = array('csrf_token', 'action', 'dataset', 'event_key', 'vendor_id', 'draw_id', 'expected_generation', 'request_id', 'operator_identity', 'reason');
+        if (!is_array($source)) throw new Exception('Review the draw reset details and try again.');
+        foreach ($source as $key => $value) {
+            if (!in_array($key, $allowed, true) || !is_string($value)) throw new Exception('Review the draw reset details and try again.');
+        }
+        foreach ($allowed as $key) {
+            if (!isset($source[$key])) throw new Exception('Review the draw reset details and try again.');
+        }
+        $event = trim($source['event_key']);
+        $vendor = trim($source['vendor_id']);
+        $operator = trim($source['operator_identity']);
+        $reason = trim($source['reason']);
+        if ($source['action'] !== 'draw_reset' || $source['dataset'] !== 'winners' || strlen($event) > 100 || !preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/D', $event)) throw new Exception('Choose a valid event winner list.');
+        if (!preg_match('/^[1-9][0-9]{0,17}$/D', $vendor)) throw new Exception('Choose a valid vendor.');
+        if (!preg_match('/^(?:0|[1-9][0-9]{0,14})$/D', $source['expected_generation'])) throw new Exception('Refresh the winner list before resetting this draw.');
+        foreach (array('draw_id', 'request_id') as $key) {
+            if (!preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iD', $source[$key])) throw new Exception('Refresh the winner list before resetting this draw.');
+        }
+        if (!ww_qrbs_is_plain_text($operator, 3, 160, false)) throw new Exception('Enter your admin name for the reset history.');
+        if (!ww_qrbs_is_plain_text($reason, 3, 500, false)) throw new Exception('Enter a reason for the reset using 3 to 500 characters on one line.');
+        return array('action' => 'draw_reset', 'dataset' => 'winners', 'event_key' => $event, 'vendor_id' => $vendor, 'draw_id' => strtolower($source['draw_id']), 'expected_generation' => (int)$source['expected_generation'], 'request_id' => strtolower($source['request_id']), 'operator_identity' => $operator, 'reason' => $reason);
+    }
+
+    function ww_qrbs_draw_reset_response($reply, $payload) {
+        if (!is_array($reply)) return false;
+        foreach (array('ok', 'action', 'dataset', 'event_key', 'vendor_id', 'draw_id', 'request_id', 'from_generation', 'to_generation', 'replayed') as $key) {
+            if (!isset($reply[$key])) return false;
+        }
+        foreach (array('action', 'dataset', 'event_key', 'vendor_id', 'draw_id', 'request_id') as $key) {
+            if ($reply[$key] !== $payload[$key]) return false;
+        }
+        return $reply['ok'] === true && is_bool($reply['replayed']) && is_int($reply['from_generation']) && is_int($reply['to_generation']) && $reply['from_generation'] === $payload['expected_generation'] && $reply['to_generation'] === $payload['expected_generation'] + 1;
+    }
+    /* WW_QR_ADMIN_DRAW_RESET_HELPERS_END */
+
     /* WW_QR_ADMIN_DATA_HELPERS_START */
     function ww_qrbs_data_filters($source) {
         $allowed = array('csrf_token', 'action', 'dataset', 'event_key', 'vendor_id', 'search', 'page', 'page_size', 'operator_identity', 'contact_status');
@@ -1257,6 +1294,31 @@ if ($ww_qrbs_method === 'POST') {
         }
     }
     /* WW_QR_ADMIN_CONTACT_REQUEST_END */
+
+    /* WW_QR_ADMIN_DRAW_RESET_REQUEST_START */
+    if ($ww_qrbs_post_action === 'draw_reset') {
+        $resetRequestValidated = false;
+        try {
+            $origin = isset($_SERVER['HTTP_ORIGIN']) ? strtolower((string)$_SERVER['HTTP_ORIGIN']) : '';
+            $host = isset($_SERVER['HTTP_HOST']) ? strtolower((string)$_SERVER['HTTP_HOST']) : '';
+            if (!in_array($host, array('www.weddingwin.ca', 'weddingwin.ca', 'ww2.managemydirectory.com'), true) || $origin !== 'https://' . $host) throw new Exception('Open the draw reset tool in the signed-in WeddingWin admin.');
+            $payload = ww_qrbs_draw_reset_request($_POST);
+            $resetRequestValidated = true;
+            $result = ww_qrbs_edge_call($ww_qrbs_database, $payload);
+            if (!ww_qrbs_response_succeeded($result)) {
+                $status = isset($result['http_status']) ? (int)$result['http_status'] : 503;
+                $error = isset($result['payload']['error']) && is_string($result['payload']['error']) ? $result['payload']['error'] : '';
+                if (!in_array($status, array(400, 401, 403, 404, 409, 422, 429, 503), true)) $status = 503;
+                if (!ww_qrbs_is_plain_text($error, 1, 400, false)) $error = 'The reset could not be confirmed. Retry the same request or refresh the winner list.';
+                ww_qrbs_data_json(array('ok' => false, 'error' => $error), $status);
+            }
+            if (!ww_qrbs_draw_reset_response($result['payload'], $payload)) throw new Exception('The reset response could not be verified. Retry the same request or refresh the winner list.');
+            ww_qrbs_data_json($result['payload'], 200);
+        } catch (Exception $error) {
+            ww_qrbs_data_json(array('ok' => false, 'error' => $error->getMessage()), $resetRequestValidated ? 503 : 400);
+        }
+    }
+    /* WW_QR_ADMIN_DRAW_RESET_REQUEST_END */
 
     /* WW_QR_ADMIN_DATA_REQUEST_START */
     if ($ww_qrbs_post_action === 'data_list' || $ww_qrbs_post_action === 'data_export') {
@@ -1771,7 +1833,7 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
 
   <details class="ww-qrbs-data" id="wwQrData">
     <summary>QR Bingo data &amp; downloads</summary>
-    <p class="ww-qrbs-data-note">View saved QR contact details, booth scans, opted-in draw entries, and winners. Downloads use the selected filters and are recorded in the admin audit. Nothing here sends an email or enters a draw.</p>
+    <p class="ww-qrbs-data-note">View saved QR contact details, booth scans, opted-in draw entries, and winners. Use Winners to reset a vendor draw so they can choose and send again. Downloads use the selected filters and are recorded in the admin audit. Nothing here sends an email or enters a draw.</p>
     <div class="ww-qrbs-data-tabs" role="tablist" aria-label="QR Bingo data lists">
       <button type="button" role="tab" data-dataset="contacts" aria-selected="true">Contacts</button>
       <button type="button" role="tab" data-dataset="scans" aria-selected="false">Scans</button>
@@ -1817,6 +1879,13 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
       <p id="wwQrContactConfirmMessage"></p>
       <p class="ww-qrbs-data-note">Only this event's Bingo contact list changes. Accounts, scans, draw entries, consent records, and winner history stay unchanged. Removed contacts can be restored from the Removed contacts list.</p>
       <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button" id="wwQrContactConfirmAction" type="button">Remove contact</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrContactConfirmCancel" type="button">Cancel</button></div>
+    </section>
+    <section class="ww-qrbs-contact-panel" id="wwQrDrawResetConfirm" aria-labelledby="wwQrDrawResetHeading" hidden>
+      <h3 id="wwQrDrawResetHeading">Reset vendor draw</h3>
+      <p id="wwQrDrawResetMessage"></p>
+      <p class="ww-qrbs-data-note">The vendor can choose a winner and send again using the existing entrants. Previous winner and email records stay in the history. Resetting does not send an email or recall one already sent.</p>
+      <div class="ww-qrbs-data-fields"><div><label for="wwQrDrawResetReason">Reason for reset</label><input id="wwQrDrawResetReason" type="text" minlength="3" maxlength="500" required></div></div>
+      <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button ww-qrbs-data-danger" id="wwQrDrawResetAction" type="button">Reset draw</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrDrawResetCancel" type="button">Cancel</button></div>
     </section>
     <p class="ww-qrbs-data-note" id="wwQrDataScanNote" hidden>Scans show the latest recorded visit per couple/vendor in the current published event window. Older visits may have been replaced by a later scan. Scan rows use account names; saved QR contact details are in Contacts.</p>
     <p class="ww-qrbs-data-status" id="wwQrDataStatus" role="status" aria-live="polite">Choose a list and select Show list.</p>

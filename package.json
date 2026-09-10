@@ -26,10 +26,11 @@
     "test:auth-keyboard": "node --test scripts/test-native-auth-keyboard.mjs",
     "test:wedding-date": "node --test scripts/test-native-wedding-date-input.mjs",
     "test:bingo-contacts": "node --test scripts/test-native-bingo-contact-profile.mjs scripts/test-native-wedding-date-input.mjs scripts/test-qr-contact-admin-ui.mjs",
+    "test:draw-reset": "node --test scripts/test-qr-admin-draw-reset-ui.mjs scripts/test-qr-admin-draw-reset-proxy.mjs && node scripts/test-qr-draw-reset-migration.mjs",
     "test:apple-web": "node --test scripts/test-website-apple-sign-in.mjs scripts/test-website-apple-routing.mjs",
     "test:apple-gateway": "node --test scripts/test-app-apple-sign-in-gateway.mjs",
     "audit:production": "node scripts/check-production-audit.mjs",
-    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --node-modules-dir=none --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs && npm run test:video && npm run test:google-login && npm run test:apple-native && npm run test:member-role && npm run test:contact-email && npm run test:session-expiry && npm run test:auth-keyboard && npm run test:apple-web && npm run test:apple-gateway && npm run test:bingo-contacts",
+    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --node-modules-dir=none --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs && npm run test:video && npm run test:google-login && npm run test:apple-native && npm run test:member-role && npm run test:contact-email && npm run test:session-expiry && npm run test:auth-keyboard && npm run test:apple-web && npm run test:apple-gateway && npm run test:bingo-contacts && npm run test:draw-reset",
     "android": "expo run:android",
     "ios": "expo run:ios"
   },
@@ -87,6 +88,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@electric-sql/pglite": "0.5.8",
     "@expo/ngrok": "^4.1.0",
     "@php-wasm/cli": "3.1.52",
     "@types/react": "~19.1.10",
