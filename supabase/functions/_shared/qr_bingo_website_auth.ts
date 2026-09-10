@@ -12,7 +12,7 @@ export const WEBSITE_VENDOR_ACTIONS = [
   "vendor_raffle_send_notice",
 ] as const;
 export type WebsiteVendorAction = typeof WEBSITE_VENDOR_ACTIONS[number];
-export const WEBSITE_COUPLE_ACTIONS = ["fixture_context", "scan", "raffle_offer", "raffle_opt_in"] as const;
+export const WEBSITE_COUPLE_ACTIONS = ["fixture_context", "scan", "raffle_offer", "raffle_opt_in", "contact_profile_get", "contact_profile_save"] as const;
 export type WebsiteCoupleAction = typeof WEBSITE_COUPLE_ACTIONS[number];
 export type WebsitePrincipal = {
   userId: string; action: WebsiteVendorAction | WebsiteCoupleAction;

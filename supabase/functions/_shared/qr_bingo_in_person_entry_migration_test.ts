@@ -126,7 +126,7 @@ Deno.test(
       const optIn = sourceFunction(source, "optInToRaffle");
       const actionStart = source.indexOf('if (action === "raffle_opt_in")');
       const scanCheck = source.indexOf(
-        "if (!scanned.includes(vendor.id))",
+        "if (!inShowScanned.includes(vendor.id))",
         actionStart,
       );
       const optInCall = source.indexOf("await optInToRaffle(", actionStart);

@@ -162,7 +162,7 @@ export default function EmailConfirmedScreen() {
   return (
     <View style={styles.container}>
       <ActivityIndicator size="large" color={BRAND_COLOR} />
-      <Text style={styles.title}>Email confirmed</Text>
+      <Text style={styles.title}>Checking your email</Text>
       <Text style={styles.message}>Taking you back to WeddingWin...</Text>
     </View>
   );

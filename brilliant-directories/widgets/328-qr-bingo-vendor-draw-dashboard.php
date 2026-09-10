@@ -252,26 +252,10 @@ if ($ww_qrvd_is_bridge) {
           <small>For a discount, enter the most the winner can save.</small>
         </label>
 
-        <label class="ww-qrvd-field">
-          <span>Number of winners</span>
-          <select data-field="max_winners" aria-label="Number of winners">
-            <option value="1">1 winner</option>
-            <option value="2">2 winners</option>
-            <option value="3">3 winners</option>
-          </select>
-          <small>Choose 1, 2, or 3.</small>
-        </label>
-
-        <label class="ww-qrvd-switch ww-qrvd-switch-compact">
-          <input type="checkbox" data-field="exclude_previous_winners" checked>
-          <span>
-            <strong>A different couple each time</strong>
-            <small>Previous winners stay in your contacts, but cannot win this draw again.</small>
-          </span>
-        </label>
+        <p class="ww-qrvd-small">One couple wins your draw. You can edit your prize until you send the winner email.</p>
 
         <p class="ww-qrvd-lock is-hidden" data-role="material-lock">
-          Prize details are locked. See Rules &amp; responsibilities in Step 2.
+          Prize details are locked for the winner email.
         </p>
 
         <div class="ww-qrvd-actions">
@@ -300,8 +284,8 @@ if ($ww_qrvd_is_bridge) {
             <p>Couples who enter accept this vendor's draw and wedding-related marketing terms. Honour unsubscribe requests and protect their contact information under the Vendor Draw Rules.</p>
           </details>
           <details class="ww-qrvd-responsibility">
-            <summary><strong>Why prize details lock after opening</strong></summary>
-            <p>Once a promotion opens or receives an entry, its prize, winner count, and repeat-winner rule stay fixed so every entrant receives the offer they accepted. Close the current draw before creating a materially different prize under a new rules version.</p>
+            <summary><strong>Editing your prize</strong></summary>
+            <p>Each draw has one winner. You can edit the prize details and value until you send the winner email. They stay locked while the email is sending and afterward. Event dates, eligibility, and the other draw rules still apply.</p>
           </details>
           <details class="ww-qrvd-disclosures" aria-label="Current draw terms">
             <summary>View event dates, eligibility, odds, admission, and entry rules</summary>

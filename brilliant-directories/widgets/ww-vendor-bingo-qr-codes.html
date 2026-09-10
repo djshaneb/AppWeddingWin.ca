@@ -1,0 +1,64 @@
+<main class="ww-vendor-codes" id="wwVendorCodes" data-feed-url="/vendor-bingo-qr-codes?format=json" data-print-layout="letter-eight" data-card-orientation="standard" data-print-page="letter-portrait">
+  <header class="ww-vendor-codes-header">
+    <p class="ww-vendor-codes-brand">WeddingWin</p>
+    <h1>Wedding Show Vendor QR Codes</h1>
+    <p class="ww-vendor-codes-intro">Find a vendor or print the full set. Scan these codes with WeddingWin at the show.</p>
+    <div class="ww-vendor-codes-event" aria-label="Wedding show details">
+      <h2 id="wwVendorCodesEventName">Loading wedding show details…</h2>
+      <p id="wwVendorCodesEventDetails"></p>
+    </div>
+  </header>
+  <section class="ww-vendor-codes-tools" aria-label="Find and print vendor codes">
+    <div class="ww-vendor-codes-search">
+      <label for="wwVendorCodesSearch">Find a vendor</label>
+      <input id="wwVendorCodesSearch" type="search" maxlength="200" placeholder="Search vendor names" autocomplete="off">
+    </div>
+    <div class="ww-vendor-codes-print-options">
+      <label for="wwVendorCodesPrintLayout">Print layout</label>
+      <select id="wwVendorCodesPrintLayout" aria-label="Print layout" aria-describedby="wwVendorCodesPrintHelp">
+        <optgroup label="Letter · 8.5 × 11 inches">
+          <option value="letter-eight">3.74 × 2.56 cards · 8 per Letter sheet</option>
+          <option value="letter-six">3 × 4 cards · 6 per Letter sheet</option>
+          <option value="letter-four">3.5 × 5 cards · 4 per Letter sheet</option>
+          <option value="letter-two">4 × 6 cards · 2 per Letter sheet</option>
+          <option value="letter-custom">Custom card size · Letter paper</option>
+        </optgroup>
+        <optgroup label="Tabloid · 11 × 17 inches">
+          <option value="tabloid-sixteen">3.74 × 2.56 cards · 16 per 11 × 17 sheet</option>
+          <option value="tabloid-twelve">3 × 4 cards · 12 per 11 × 17 sheet</option>
+          <option value="tabloid-nine">3.5 × 5 cards · 9 per 11 × 17 sheet</option>
+          <option value="tabloid-four">4 × 6 cards · 4 per 11 × 17 sheet</option>
+          <option value="tabloid-custom">Custom card size · 11 × 17 paper</option>
+        </optgroup>
+      </select>
+    </div>
+    <div class="ww-vendor-codes-orientation">
+      <label for="wwVendorCodesCardOrientation">Card orientation</label>
+      <select id="wwVendorCodesCardOrientation" aria-label="Card orientation" aria-describedby="wwVendorCodesPrintHelp">
+        <option value="standard">Standard</option>
+        <option value="horizontal">Horizontal (wide)</option>
+      </select>
+    </div>
+    <div class="ww-vendor-codes-custom" id="wwVendorCodesCustomSize" hidden>
+      <div><label for="wwVendorCodesCardWidth">Width (inches)</label><input id="wwVendorCodesCardWidth" type="number" inputmode="decimal" min="1.5" max="16.5" step="0.01" value="3.74" aria-describedby="wwVendorCodesLayoutError"></div>
+      <div><label for="wwVendorCodesCardHeight">Height (inches)</label><input id="wwVendorCodesCardHeight" type="number" inputmode="decimal" min="1.5" max="16.5" step="0.01" value="2.56" aria-describedby="wwVendorCodesLayoutError"></div>
+    </div>
+    <div class="ww-vendor-codes-buttons">
+      <button id="wwVendorCodesRefresh" type="button">Refresh</button>
+      <button class="ww-vendor-codes-primary" id="wwVendorCodesPrint" type="button" disabled>Print all QR codes</button>
+      <button id="wwVendorCodesDownload" type="button" disabled>Download PDF</button>
+    </div>
+  </section>
+  <p class="ww-vendor-codes-layout-error" id="wwVendorCodesLayoutError" role="alert" hidden></p>
+  <p class="ww-vendor-codes-print-help" id="wwVendorCodesPrintHelp" aria-live="polite">Letter paper, portrait: eight 3.74 × 2.56 inch cards per sheet.</p>
+  <p class="ww-vendor-codes-print-help">Choose <strong>Letter (8.5 × 11 inches)</strong> or <strong>Tabloid (11 × 17 inches)</strong> to match your paper. Print at <strong>100% / Actual size</strong>, with 0.25-inch margins and headers and footers off. Cut along the card outlines.</p>
+  <div class="ww-vendor-codes-summary">
+    <p id="wwVendorCodesCount">Loading vendor list…</p>
+    <p id="wwVendorCodesChecked">Not checked yet</p>
+  </div>
+  <p class="ww-vendor-codes-status" id="wwVendorCodesStatus" role="status" aria-live="polite">Loading QR codes…</p>
+  <p class="ww-vendor-codes-print-summary" id="wwVendorCodesPrintSummary"></p>
+  <div class="ww-vendor-codes-grid" id="wwVendorCodesGrid" aria-label="Participating vendor QR codes" aria-busy="true"></div>
+  <p class="ww-vendor-codes-empty" id="wwVendorCodesEmpty" hidden></p>
+  <noscript><p class="ww-vendor-codes-empty">Enable JavaScript to load the current vendor QR codes.</p></noscript>
+</main>

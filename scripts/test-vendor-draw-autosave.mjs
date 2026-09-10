@@ -37,12 +37,29 @@ function transpile(source) {
 }
 const saveProgram = transpile([
   functionSource('normalizeRaffleMaxWinners'),
+  functionSource('areVendorPrizeDetailsLocked'),
   functionSource('isCompleteVendorRaffleDashboard'),
   variable('vendorRaffleSignature'),
   variable('saveVendorRaffle'),
   'globalThis.tested = { save: saveVendorRaffle, signature: vendorRaffleSignature };',
 ].join('\n'));
 const normalized = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+test('couple email preview uses the full edited description and current value', () => {
+  const context = {
+    rafflePrizeDescription: 'Updated gift\nNew conditions apply.',
+    rafflePrizeTitle: 'Old title',
+    rafflePrizeApproxValueCad: '275.5',
+  };
+  vm.runInNewContext(transpile([
+    variable('vendorDrawPrizePreview'), variable('vendorDrawPrizeValuePreview'),
+    'globalThis.preview = { description: vendorDrawPrizePreview, value: vendorDrawPrizeValuePreview };',
+  ].join('\n')), context);
+  assert.equal(context.preview.description, context.rafflePrizeDescription);
+  assert.equal(context.preview.value, '$275.50 CAD');
+  assert.match(appSource, /Approximate value:\s*\{vendorDrawPrizeValuePreview\}/);
+});
+
 const originalDescription = 'TEST ONLY — 50% off a photography package\nMaximum savings $500. No real prize is awarded.';
 const rulesVersion = '2026-09-01-in-person-entry';
 const timestampBefore = '2026-09-04T20:00:00.000001Z';
@@ -287,8 +304,69 @@ test('material locks keep request fields canonical while permitting current rule
   assert.equal(h.state.vendorRaffle.material_terms_locked, true);
 });
 
-test('text inputs remain editable during autosave only, while material and opening/action locks still apply', () => {
-  const start = appSource.indexOf('const vendorRaffleMaterialLocked =');
+test('every save uses one winner even when a legacy draft has multiple slots and repeat winners', async () => {
+  const legacy = dashboard();
+  legacy.settings.max_winners = 3;
+  legacy.settings.exclude_previous_winners = false;
+  const h = harness({ state: { vendorRaffle: legacy, raffleMaxWinners: 3, raffleExcludePreviousWinners: false } });
+  assert.equal(await h.save({ silent: true }), true);
+  assert.equal(h.requests[0].max_winners, 1);
+  assert.equal(h.requests[0].exclude_previous_winners, true);
+  assert.doesNotMatch(appSource, /Number of winners|A different couple each time|vendor-draw-no-repeat-winners|vendor-draw-winner-count-/);
+});
+
+test('open draw with a selected couple saves edited prize and value before its winner email', async () => {
+  const current = dashboard({ material_terms_locked: true, prize_details_locked: false, active_winner_count: 1 });
+  const draft = 'Updated test prize\nUpdated conditions';
+  const h = harness({ state: {
+    vendorRaffle: current, raffleEnabled: true,
+    rafflePrizeDescription: draft, rafflePrizeApproxValueCad: '275.50',
+  } });
+  assert.equal(await h.save({ silent: true }), true);
+  assert.equal(h.requests[0].prize_title, 'Updated test prize');
+  assert.equal(h.requests[0].prize_description, draft);
+  assert.equal(h.requests[0].prize_approx_value_cad, 275.5);
+  assert.equal(h.requests[0].max_winners, 1);
+  assert.equal(h.state.vendorRaffleLastSavedRef.current, h.currentSignature());
+});
+
+test('sent and in-flight winner emails keep canonical prize fields even when material lock is false', async () => {
+  for (const reason of ['sent', 'sending', 'unconfirmed']) {
+    const locked = dashboard({ material_terms_locked: false, prize_details_locked: true, prize_details_lock_reason: reason });
+    const h = harness({ state: {
+      vendorRaffle: locked, rafflePrizeDescription: 'Must not replace sent prize', rafflePrizeApproxValueCad: '1',
+    } });
+    assert.equal(await h.save({ silent: true }), true);
+    assert.equal(h.requests[0].prize_title, locked.settings.prize_title);
+    assert.equal(h.requests[0].prize_description, locked.settings.prize_description);
+    assert.equal(h.requests[0].prize_approx_value_cad, locked.settings.prize_approx_value_cad);
+  }
+});
+
+test('a definitively failed email can permit edits again when the server releases its lock', async () => {
+  const current = dashboard({ material_terms_locked: true, prize_details_locked: false });
+  const h = harness({ state: { vendorRaffle: current, rafflePrizeDescription: 'New prize after failed send' } });
+  assert.equal(await h.save({ silent: true }), true);
+  assert.equal(h.requests[0].prize_description, 'New prize after failed send');
+});
+
+test('legacy server slot counts cannot offer a second winner and historical counts are preserved', () => {
+  const program = transpile([
+    functionSource('normalizeRaffleMaxWinners'), variable('vendorRaffleDrawCount'),
+    variable('vendorRaffleMaxDraws'), variable('vendorRaffleDrawsRemaining'),
+    'globalThis.result = { count: vendorRaffleDrawCount, max: vendorRaffleMaxDraws, remaining: vendorRaffleDrawsRemaining };',
+  ].join('\n'));
+  for (const active of [0, 1, 3]) {
+    const context = { vendorRaffle: { max_winners: 3, active_winner_count: active, remaining_winner_slots: 3 - active } };
+    vm.runInNewContext(program, context);
+    assert.equal(context.result.count, active);
+    assert.equal(context.result.max, 1);
+    assert.equal(context.result.remaining, active === 0 ? 1 : 0);
+  }
+});
+
+test('prize inputs stay editable after opening and selection until email is sent without losing autosave focus', () => {
+  const start = appSource.indexOf('const vendorRafflePrizeDetailsLocked =');
   const end = appSource.indexOf('const vendorRaffleSaveMessageLower =', start);
   assert.ok(start >= 0 && end > start, 'App draft-input guard section missing');
   for (const testId of ['vendor-draw-prize-details', 'vendor-draw-prize-value']) {
@@ -297,7 +375,7 @@ test('text inputs remain editable during autosave only, while material and openi
     const editable = input.attributes.properties.find(attr => ts.isJsxAttribute(attr) && attr.name.text === 'editable');
     const expression = editable?.initializer?.expression?.getText(parsed);
     assert.ok(expression, `${testId} must expose its editability guard`);
-    const code = transpile(`${appSource.slice(start, end)}\nglobalThis.editableResult = (${expression});`);
+    const code = transpile(`${functionSource('areVendorPrizeDetailsLocked')}\n${appSource.slice(start, end)}\nglobalThis.editableResult = (${expression});`);
     const defaults = {
       vendorRaffle: { material_terms_locked: false }, raffleEnabled: false, raffleLegalAccepted: false,
       vendorRaffleSaving: true, vendorRaffleDrawing: false, vendorRaffleSendingDrawId: '',
@@ -310,11 +388,16 @@ test('text inputs remain editable during autosave only, while material and openi
     };
     assert.equal(evaluate({}), true, `${testId} must not lose focus when only autosave starts`);
     assert.equal(evaluate({ raffleLegalAccepted: true }), true, `${testId} remains editable after rules acceptance while the draw is still closed and unlocked`);
+    assert.equal(evaluate({ raffleEnabled: true }), true, `${testId} stays editable when entries open`);
+    assert.equal(evaluate({ vendorRaffle: { material_terms_locked: true, prize_details_locked: false, active_winner_count: 1 } }), true, `${testId} stays editable with entries and a selected couple before sending email`);
     for (const override of [
-      { vendorRaffle: { material_terms_locked: true } }, { raffleEnabled: true },
+      { vendorRaffle: { material_terms_locked: true } },
+      { vendorRaffle: { material_terms_locked: false, prize_details_locked: true, prize_details_lock_reason: 'sent' } },
+      { vendorRaffle: { prize_details_locked: true, prize_details_lock_reason: 'sending' } },
+      { vendorRaffle: { prize_details_locked: true, prize_details_lock_reason: 'unconfirmed' } },
       { vendorRaffleDrawing: true }, { vendorRaffleSendingDrawId: 'test-draw' },
       { vendorRaffleReviewing: true }, { vendorRaffleExporting: true }, { vendorRaffleEntryUpdatingReference: 'test-entry' },
-    ]) assert.equal(evaluate(override), false, `${testId} must retain opening/material/action guard ${JSON.stringify(override)}`);
+    ]) assert.equal(evaluate(override), false, `${testId} must retain email/legacy/action guard ${JSON.stringify(override)}`);
   }
 });
 

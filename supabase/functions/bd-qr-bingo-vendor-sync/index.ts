@@ -1,6 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { qrBingoScannerWindowOpen, qrBingoInShowScannedIds } from "../_shared/qr_bingo_scan_schedule.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import { nativeSessionMatchesCachedBdIdentity } from "../_shared/bd_identity.ts";
+import { normalizeContactEmail } from "../_shared/contact_email.ts";
+import {
+  isApplePrivateRelayEmail,
+} from "../_shared/member_email_verification.ts";
+import {
+  loadQrContactProfile, saveQrContactProfile, syncQrContactWeddingDate,
+  qrContactUser, validateQrContactSave, QrContactError, type QrContactProfile,
+} from "../_shared/qr_bingo_contacts.ts";
 import {
   hasQrBingoWebsiteProof, verifyQrBingoWebsiteRequest, resolveWebsiteSigningSecret,
   WebsiteAuthenticationError, type WebsitePrincipal,
@@ -135,9 +144,11 @@ function isolatedEmailTestRecipient(fixture?: IsolatedRaffleFixture | null) {
     !isEmailTestFixture(fixture) ||
     new Date(fixture.expires_at).getTime() <= Date.now()
   ) return "";
-  const recipient = String(fixture.outbound_recipient_email || "").trim()
-    .toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient) ? recipient : "";
+  try {
+    return qrContactEmail(fixture.outbound_recipient_email);
+  } catch {
+    return "";
+  }
 }
 
 function qrDrawEmailsEnabled(fixture?: IsolatedRaffleFixture | null) {
@@ -145,6 +156,30 @@ function qrDrawEmailsEnabled(fixture?: IsolatedRaffleFixture | null) {
   const config = qrBingoConfig();
   return config.email_delivery_mode === "production_verified_fulfillment" &&
     (config.send_vendor_email || config.send_couple_email);
+}
+
+function isolatedEmailTestContactMatches(
+  fixture: EmailTestRaffleFixture,
+  profile: QrContactProfile | null,
+  authenticatedMemberId: string,
+) {
+  // QR Bingo deliberately has its own saved contact email. A login alias must
+  // not override it, but the isolated test still pins that contact to one
+  // authenticated couple, one event and one explicitly allowlisted recipient.
+  const expiresAt = new Date(fixture.expires_at).getTime();
+  if (
+    !fixture.enabled || !Number.isFinite(expiresAt) || expiresAt <= Date.now() ||
+    fixture.couple_bd_user_id !== authenticatedMemberId ||
+    !profile?.saved || !profile.complete ||
+    profile.event_key !== fixture.event_key ||
+    profile.couple_id !== authenticatedMemberId
+  ) return false;
+  const recipient = isolatedEmailTestRecipient(fixture);
+  try {
+    return Boolean(recipient && qrContactEmail(profile.email) === recipient);
+  } catch {
+    return false;
+  }
 }
 
 const corsHeaders = {
@@ -196,7 +231,8 @@ type EmailTestRaffleFixture =
   & Omit<AppReviewRaffleFixture, "suppress_outbound_email">
   & {
     outbound_recipient_email: string;
-    send_vendor_email: false;
+    // False by default. Only an explicitly authorized isolated fixture opts in.
+    send_vendor_email: boolean;
     send_couple_email: true;
   };
 type IsolatedRaffleFixture = AppReviewRaffleFixture | EmailTestRaffleFixture;
@@ -282,6 +318,7 @@ type RaffleEntry = {
   couple_email: string;
   couple_phone: string;
   couple_wedding_date: string;
+  couple_wedding_venue?: string;
   consented_at: string;
   created_at: string;
   prize_title?: string;
@@ -367,6 +404,12 @@ type DrawEmailClaim = {
   status: string;
   delivery_key: string;
   claim_token: string;
+  prize_snapshot?: {
+    prize_title?: unknown;
+    prize_description?: unknown;
+    prize_approx_value_cad?: unknown;
+    vendor_offer_version?: unknown;
+  } | null;
 };
 
 const admin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -725,7 +768,18 @@ async function loginWebsiteSession(session: NativeSession) {
 
     const location = response.headers.get("location");
     if (!location) break;
-    nextUrl = new URL(location, nextUrl).toString();
+    const destination = new URL(location, nextUrl);
+    // The caller loads /qr once and verifies the member and session CSRF.
+    // Do not bootstrap that expensive page again during token login.
+    if (
+      destination.protocol === "https:" &&
+      destination.hostname === "www.weddingwin.ca" &&
+      (!destination.port || destination.port === "443") &&
+      !destination.username && !destination.password &&
+      ["/qr", "/account/qr"].includes(destination.pathname) &&
+      !destination.search && !destination.hash
+    ) break;
+    nextUrl = destination.toString();
   }
 
   if (!cookieJar.size) {
@@ -766,6 +820,26 @@ function normalizeVendor(value: unknown): QrVendor | null {
 }
 
 async function getQrPage(cookieJar: Map<string, string>, expectedMemberId?: string) {
+  let bootstrapCsrf = "";
+  if (expectedMemberId) {
+    // The standalone GET may render CSS before PHP can set a session cookie.
+    // This read-only authenticated POST initializes that cookie before output.
+    const bootstrapResponse = await fetchWithCookies(`${BD_API_BASE_URL}/qr`, cookieJar, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Origin: "https://www.weddingwin.ca",
+      },
+      body: new URLSearchParams({ action: "scanner_session" }).toString(),
+    });
+    const bootstrapBody = await bootstrapResponse.json().catch(() => null);
+    if (!bootstrapResponse.ok || bootstrapBody?.status !== "success" ||
+      bootstrapBody?.authenticated_member_id !== expectedMemberId ||
+      typeof bootstrapBody?.qr_csrf !== "string" || !/^[0-9a-f]{64}$/.test(bootstrapBody.qr_csrf)) {
+      throw new Error("Website QR session could not be initialized for the authenticated member.");
+    }
+    bootstrapCsrf = bootstrapBody.qr_csrf;
+  }
   const response = await fetchWithCookies(`${BD_API_BASE_URL}/qr`, cookieJar);
   const html = await response.text();
 
@@ -778,7 +852,7 @@ async function getQrPage(cookieJar: Map<string, string>, expectedMemberId?: stri
 
   const memberId = extractJsonAssignment<string>(html, "QR_AUTHENTICATED_MEMBER_ID", "");
   const requestCsrf = extractJsonAssignment<string>(html, "QR_WEBSITE_CSRF", "");
-  if (expectedMemberId && (memberId !== expectedMemberId || !/^[0-9a-f]{64}$/.test(requestCsrf))) {
+  if (expectedMemberId && (memberId !== expectedMemberId || !/^[0-9a-f]{64}$/.test(requestCsrf) || requestCsrf !== bootstrapCsrf)) {
     throw new Error("Website scan history does not match the authenticated member.");
   }
   const vendors = extractJsonAssignment<unknown[]>(html, "VENDORS", [])
@@ -932,6 +1006,35 @@ function materialSettingsFingerprint(settings: Partial<RaffleSettings>) {
   });
 }
 
+// Prize wording/value may change until email claim; other terms stay immutable.
+function lockedMaterialSettingsFingerprint(settings: Partial<RaffleSettings>) {
+  return materialSettingsFingerprint({
+    ...settings,
+    prize_title: "",
+    prize_description: "",
+    prize_approx_value_cad: null,
+    max_winners: 1,
+    exclude_previous_winners: true,
+  });
+}
+
+async function vendorPrizeDetailsLock(vendor: QrVendor, eventKey: string) {
+  const { data, error } = await requireAdmin().rpc(
+    "qr_bingo_prize_details_lock",
+    {
+      p_event_key: eventKey,
+      p_vendor_bingo_id: vendor.id,
+      p_vendor_bd_user_id: String(vendor.user_id || vendor.id),
+    },
+  );
+  if (error) throw error;
+  if (
+    data === null || data === "sent" || data === "sending" ||
+    data === "unconfirmed"
+  ) return data;
+  throw new Error("The prize email status could not be checked safely.");
+}
+
 function nonConsentMaterialSettingsFingerprint(
   settings: Partial<RaffleSettings>,
 ) {
@@ -1011,13 +1114,28 @@ function phoneForUser(user: BdRow | undefined) {
   );
 }
 
+function qrContactEmail(value: unknown) {
+  const raw = String(value ?? "");
+  // An address is an identity, not display text: reject unsafe input before
+  // normalization instead of shortening it into a different recipient.
+  if (/[\u0000-\u001f\u007f,;]/.test(raw)) {
+    throw new Error("Enter a valid email address.");
+  }
+  return normalizeContactEmail(raw);
+}
+
 function qrContactProfile(user: BdRow | undefined) {
   const name = [
     cleanText(user?.first_name, 80),
     cleanText(user?.last_name, 80),
   ].filter(Boolean).join(" ");
   const normalizedName = name.toLowerCase();
-  const email = cleanText(user?.email, 254).toLowerCase();
+  let email = "";
+  try {
+    email = qrContactEmail(user?.email);
+  } catch {
+    // Keep invalid addresses in the existing friendly contact-completion gate.
+  }
   const phone = phoneForUser(user);
   const phoneDigits = phone.replace(/\D/g, "");
   const missingFields: string[] = [];
@@ -1028,7 +1146,7 @@ function qrContactProfile(user: BdRow | undefined) {
   ) {
     missingFields.push("name");
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) missingFields.push("email");
+  if (!email || isApplePrivateRelayEmail(email)) missingFields.push("email");
   if (phoneDigits.length < 7 || phoneDigits.length > 15) {
     missingFields.push("phone number");
   }
@@ -1112,11 +1230,15 @@ async function getFreshScanned(cookieJar: Map<string, string>, page: QrPage) {
     page.requestCsrf,
   )
     .catch(() => undefined);
-  return Array.isArray(serverScanned?.scanned)
+  const scanned = Array.isArray(serverScanned?.scanned)
     ? serverScanned.scanned.map((value) => String(value || "").trim()).filter(
       Boolean,
     )
     : page.scanned;
+  // Only the trusted website can establish an in-show booth visit. An early
+  // Bingo scan (or a failed/legacy progress response) is not draw-entry proof.
+  const inShowScanned = qrBingoInShowScannedIds(serverScanned, scanned);
+  return { scanned, inShowScanned };
 }
 
 async function getSettings(
@@ -1556,8 +1678,10 @@ function vendorVisibleDraw(
 ) {
   const status = draw.selection_status || "legacy";
   const emailTestRecipient = isolatedEmailTestRecipient(isolatedFixture);
-  const vendorNoticeRequired = !emailTestRecipient &&
-    qrBingoConfig().send_vendor_email;
+  const vendorNoticeRequired = emailTestRecipient
+    ? Boolean(isolatedFixture && "send_vendor_email" in isolatedFixture &&
+      isolatedFixture.send_vendor_email === true)
+    : qrBingoConfig().send_vendor_email;
   const coupleNoticeRequired = emailTestRecipient
     ? true
     : qrBingoConfig().send_couple_email;
@@ -1676,7 +1800,7 @@ async function loadVendorEntryPool(
   const db = requireAdmin();
   const vendorBdUserId = String(vendor.user_id || vendor.id);
   const settings = await getSettings(vendor, eventKey);
-  const excludePreviousWinners = settings?.exclude_previous_winners !== false;
+  const excludePreviousWinners = true;
   const entryRows = await collectExactPostgrestRows<RaffleEntry>(
     "Named-vendor contact QR Bingo entrants",
     (row) => String(row.id || ""),
@@ -1806,6 +1930,7 @@ async function loadVendorEntryPool(
       couple_email: entry.couple_email,
       couple_phone: entry.couple_phone,
       couple_wedding_date: entry.couple_wedding_date,
+      couple_wedding_venue: entry.couple_wedding_venue || "",
       entered_at: entry.consented_at || entry.created_at,
       entry_method: entry.entry_method || "qr_scan_opt_in",
       rules_version: entry.consent_version || "",
@@ -2041,6 +2166,7 @@ async function buildVendorParticipationReport(
     entry.couple_email,
     entry.couple_phone,
     entry.couple_wedding_date,
+    entry.couple_wedding_venue || "",
     participationReportTime(entry.entered_at),
     entry.entry_method === "alternate_free_entry"
       ? "Alternate free entry"
@@ -2060,6 +2186,7 @@ async function buildVendorParticipationReport(
     "Email",
     "Phone",
     "Wedding Date",
+    "Wedding Venue",
     "Entered At",
     "Entry Method",
     "Rules Version",
@@ -2159,9 +2286,10 @@ async function buildRaffleOffer(
       snapshot!.vendor_name,
     vendor_profile_url: absoluteWeddingWinUrl(vendor.full_filename),
     vendor_offer_version: snapshot!.vendor_offer_version,
-    prize_count: raffleMaxWinners(snapshot!.max_winners),
-    max_winners: raffleMaxWinners(snapshot!.max_winners),
-    exclude_previous_winners: snapshot!.exclude_previous_winners !== false,
+    // Current operational limit; immutable historical snapshots stay unchanged.
+    prize_count: 1,
+    max_winners: 1,
+    exclude_previous_winners: true,
     prize_title: snapshot!.prize_title,
     prize_description: snapshot!.prize_description,
     prize_approx_value_cad: positiveCadValue(snapshot!.prize_approx_value_cad),
@@ -2353,9 +2481,10 @@ async function optInToRaffle(
       currentSnapshot!.exclude_previous_winners !== false,
     couple_bd_user_id: String(user?.user_id || ""),
     couple_name: displayName(user),
-    couple_email: cleanText(user?.email, 160),
+    couple_email: qrContactEmail(user?.email),
     couple_phone: phoneForUser(user),
     couple_wedding_date: weddingDateForUser(user),
+    couple_wedding_venue: weddingDateForUser(user) ? cleanText(user?.wedding_venue || "", 200) : "",
     consent_share_contact: true,
     contact_share_scope: CONTACT_SHARE_SCOPE,
     consent_text: consentText(currentSnapshot!),
@@ -2518,6 +2647,7 @@ async function getVendorRaffleDashboard(
   );
   const activeEntryCount = await activeVendorEntryCount(eventKey, vendor.id);
   const offerActivated = await activatedVendorOfferExists(eventKey, vendor.id);
+  const prizeLockReason = await vendorPrizeDetailsLock(vendor, eventKey);
   const alternateEntryClosure = await alternateEntryClosureStatus(
     eventKey,
     vendor.id,
@@ -2537,7 +2667,7 @@ async function getVendorRaffleDashboard(
     ).length;
   const verifiedWinnerCount =
     draws.filter((draw) => draw.selection_status === "verified").length;
-  const maxDraws = raffleMaxWinners(settings.max_winners);
+  const maxDraws = 1;
   const drawsRemaining = Math.max(0, maxDraws - activeWinnerCount);
   const availableAt = drawAvailableAt(settings);
   const drawTimeOpen = allowEarlyDraw ||
@@ -2546,7 +2676,9 @@ async function getVendorRaffleDashboard(
   const verifiedNoticePending = draws.some((draw) =>
     draw.selection_status === "verified" &&
     (emailTestRecipient
-      ? !draw.couple_email_sent_at
+      ? !draw.couple_email_sent_at ||
+        Boolean(isolatedFixture && "send_vendor_email" in isolatedFixture &&
+          isolatedFixture.send_vendor_email === true && !draw.vendor_email_sent_at)
       : (qrBingoConfig().send_vendor_email && !draw.vendor_email_sent_at) ||
         (qrBingoConfig().send_couple_email && !draw.couple_email_sent_at))
   );
@@ -2565,12 +2697,13 @@ async function getVendorRaffleDashboard(
       settings.rules_viewed_at &&
       settings.apple_non_sponsor_acknowledged &&
       settings.vendor_responsibility_acknowledged === true &&
-      settings.vendor_responsibility_version === qrBingoConfig().rules_version &&
+      settings.vendor_responsibility_version ===
+        qrBingoConfig().rules_version &&
       settings.vendor_responsibility_acknowledged_at &&
       cleanText(settings.vendor_responsibility_disclosure_text, 2000) ===
         currentVendorResponsibilityDisclosure &&
       cleanText(settings.participant_responsibility_disclosure_text, 2000) ===
-        participantResponsibilityDisclosure(vendor.name)
+        participantResponsibilityDisclosure(vendor.name),
   );
 
   return {
@@ -2579,6 +2712,8 @@ async function getVendorRaffleDashboard(
     event_revision: qrBingoConfig().revision,
     settings: {
       ...settings,
+      max_winners: 1,
+      exclude_previous_winners: true,
       legal_terms_accepted: vendorAcceptanceCurrent,
     },
     // The dashboard never returns the full entrant list. Draw history contains
@@ -2594,6 +2729,8 @@ async function getVendorRaffleDashboard(
     selection_in_progress: entryPool.selection_in_progress,
     can_update_entries: entryPool.can_update_entries,
     material_terms_locked: activeEntryCount > 0 || offerActivated,
+    prize_details_locked: Boolean(prizeLockReason),
+    prize_details_lock_reason: prizeLockReason,
     draws: draws.map((draw) =>
       vendorVisibleDraw(draw, isolatedFixture, suppressOutboundEmail)
     ),
@@ -2613,7 +2750,7 @@ async function getVendorRaffleDashboard(
     active_winner_count: activeWinnerCount,
     verified_winner_count: verifiedWinnerCount,
     remaining_winner_slots: drawsRemaining,
-    exclude_previous_winners: settings.exclude_previous_winners !== false,
+    exclude_previous_winners: true,
     can_draw: entryPool.eligible_entry_count > 0 &&
       isSettingsEnterable(settings, isolatedFixture) && drawTimeOpen &&
       !entryPool.selection_in_progress && alternateEntryClosure.ready &&
@@ -2700,9 +2837,11 @@ async function claimDrawEmailDelivery(
   isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
   const emailTestRecipient = isolatedEmailTestRecipient(isolatedFixture);
-  if (emailTestRecipient && channel !== "couple") {
+  if (emailTestRecipient && channel !== "couple" &&
+    (channel !== "vendor" || !isEmailTestFixture(isolatedFixture) ||
+      isolatedFixture.send_vendor_email !== true)) {
     throw new Error(
-      "The isolated email test permits only the allowlisted couple notice.",
+      "This isolated email test has not authorized a vendor copy.",
     );
   }
   const claimRpc = emailTestRecipient
@@ -2718,6 +2857,13 @@ async function claimDrawEmailDelivery(
     string,
     unknown
   >;
+  if (emailTestRecipient && (
+    claim.recipient !== emailTestRecipient || claim.channel !== channel ||
+    !isEmailTestFixture(isolatedFixture) ||
+    claim.email_test_fixture_id !== isolatedFixture.id
+  )) {
+    throw new Error("The isolated email claim does not match its exact fixture and recipient.");
+  }
   const status = claim.claimed === true
     ? "claimed"
     : claim.already_sent === true
@@ -2732,6 +2878,10 @@ async function claimDrawEmailDelivery(
     status,
     delivery_key: cleanText(claim.delivery_key, 200),
     claim_token: cleanText(claim.claim_token, 80),
+    prize_snapshot:
+      claim.prize_snapshot && typeof claim.prize_snapshot === "object"
+        ? claim.prize_snapshot as DrawEmailClaim["prize_snapshot"]
+        : null,
   } as DrawEmailClaim;
 }
 
@@ -2852,7 +3002,7 @@ async function sendDrawEmails(
       draw.vendor_bingo_id !== fixture.vendor_bingo_id ||
       draw.vendor_bd_user_id !== fixture.vendor_bd_user_id ||
       draw.couple_bd_user_id !== fixture.couple_bd_user_id ||
-      cleanText(draw.winner_email, 254).toLowerCase() !== emailTestRecipient
+      qrContactEmail(draw.winner_email) !== emailTestRecipient
     ) {
       throw new Error(
         "The isolated email-test draw does not match its allowlisted fixture.",
@@ -2860,7 +3010,8 @@ async function sendDrawEmails(
     }
   }
   const vendorRequested = emailTestRecipient
-    ? false
+    ? Boolean(isolatedFixture && "send_vendor_email" in isolatedFixture &&
+      isolatedFixture.send_vendor_email === true)
     : qrBingoConfig().send_vendor_email;
   const coupleRequested = emailTestRecipient
     ? true
@@ -2878,62 +3029,12 @@ async function sendDrawEmails(
     };
   }
 
-  const vendorEmail = cleanText(vendorUser?.email, 160);
-  const safePrize = cleanText(draw.prize_title, 200);
-  const safeVendorName = cleanText(draw.vendor_name, 160);
-  const safePrizeDescription = cleanText(draw.prize_description, 1000);
-  const safeDrawItem = safePrizeDescription || safePrize ||
-    "Prize details will be provided by the vendor.";
-  const safeEmailDrawItem = safeDrawItem.split(/\r?\n/)[0]?.trim() || safePrize ||
-    "Prize details will be provided by the vendor.";
-  const safeWinnerPhone = cleanText(draw.winner_phone, 120) || "Not provided";
-  const safeWinnerWeddingDate = cleanText(draw.winner_wedding_date, 120) ||
-    "Not provided";
-  const vendorProfileUrl = absoluteWeddingWinUrl(
-    vendor?.full_filename || vendorUser?.filename,
-  );
-  const profileLine = vendorProfileUrl
-    ? `Connect through WeddingWin.ca: ${vendorProfileUrl}`
-    : "You can connect with them through WeddingWin.ca.";
-  const vendorText = [
-    hasQrBingoVendorSkillAttestation(draw)
-      ? `Your business confirmed it independently completed the required winner verification and rules/release step for this potential winner in ${safeVendorName}'s prize draw. Wedding Win recorded your attestation and did not check the answer.`
-      : `Your business confirmed eligibility and the rules/release step for this potential winner in ${safeVendorName}'s prize draw, and Wedding Win confirmed the couple's answer to the required short math question was correct.`,
-    "",
-    "Winner details",
-    `Name: ${cleanText(draw.winner_name, 160)}`,
-    `Email: ${cleanText(draw.winner_email, 160)}`,
-    `Phone: ${safeWinnerPhone}`,
-    `Wedding date: ${safeWinnerWeddingDate}`,
-    "",
-    "Draw record",
-    "Prize details are included below for your reference.",
-    safeDrawItem,
-    "",
-    "Couple notification",
-    "WeddingWin.ca has informed the verified potential winner that your business may contact them about this prize and, under the terms they accepted when entering, wedding-related offers and promotions.",
-    "",
-    "Next step",
-    "This couple accepted your draw and named-vendor wedding-related marketing terms. Honour unsubscribe requests and protect the information under the Vendor Draw Rules.",
-  ].join("\n");
-  const coupleText = [
-    `Hi ${cleanText(draw.winner_name, 80) || "there"},`,
-    "",
-    `Congratulations, your name was selected by ${safeVendorName} for their draw.`,
-    "",
-    "Your draw",
-    `Vendor: ${safeVendorName}`,
-    `Draw item: ${safeEmailDrawItem}`,
-    "",
-    "What happens next",
-    `${safeVendorName} will follow up with the prize details and next steps.`,
-    profileLine,
-    "",
-    "Why you received this",
-    "You opted in after scanning this vendor's QR code at the wedding show.",
-    "",
-    "WeddingWin.ca",
-  ].join("\n");
+  // Test copies never use the real vendor account address, including retries
+  // where one channel was already sent. Both targets stay exactly allowlisted.
+  const vendorEmail = emailTestRecipient || (vendorAlreadySent
+    ? ""
+    : qrContactEmail(vendorUser?.email));
+  const winnerEmail = qrContactEmail(draw.winner_email);
 
   const claimOutcomes = await Promise.allSettled([
     vendorAlreadySent
@@ -3008,6 +3109,96 @@ async function sendDrawEmails(
     claim,
   ): claim is DrawEmailClaim => Boolean(claim));
 
+  // The database captures the current prize under the same lock as settings saves.
+  // Keep the older entry/draw prize unchanged as the original consent evidence.
+  const prizeSnapshot = claimed[0]?.prize_snapshot;
+  const invalidPrizeSnapshot = claimed.some((claim) =>
+    !claim.prize_snapshot ||
+    !cleanText(claim.prize_snapshot.prize_title, 200) ||
+    !cleanText(claim.prize_snapshot.prize_description, 1000) ||
+    !Number.isFinite(Number(claim.prize_snapshot.prize_approx_value_cad)) ||
+    Number(claim.prize_snapshot.prize_approx_value_cad) <= 0 ||
+    !String(claim.prize_snapshot.vendor_offer_version || "") ||
+    JSON.stringify(claim.prize_snapshot) !== JSON.stringify(prizeSnapshot)
+  );
+  if (invalidPrizeSnapshot) {
+    await Promise.all(
+      claimed.map((claim) =>
+        finalizeDrawEmailDelivery(
+          claim,
+          "retryable_failure",
+          "The current prize snapshot was unavailable before sending.",
+        )
+      ),
+    );
+    throw new Error(
+      "The current prize could not be checked. Refresh your draw and try again.",
+    );
+  }
+  const safePrize = cleanText(prizeSnapshot?.prize_title, 200);
+  const prizeValueLine = `Approximate value: $${
+    Number(prizeSnapshot?.prize_approx_value_cad || 0).toFixed(2)
+  } CAD`;
+  const safeVendorName = cleanText(draw.vendor_name, 160);
+  const safePrizeDescription = cleanText(
+    prizeSnapshot?.prize_description,
+    1000,
+  );
+  const safeDrawItem = safePrizeDescription || safePrize ||
+    "Prize details will be provided by the vendor.";
+  const safeEmailDrawItem = safeDrawItem;
+  const safeWinnerPhone = cleanText(draw.winner_phone, 120) || "Not provided";
+  const safeWinnerWeddingDate = cleanText(draw.winner_wedding_date, 120) ||
+    "Not provided";
+  const vendorProfileUrl = absoluteWeddingWinUrl(
+    vendor?.full_filename || vendorUser?.filename,
+  );
+  const profileLine = vendorProfileUrl
+    ? `Connect through WeddingWin.ca: ${vendorProfileUrl}`
+    : "You can connect with them through WeddingWin.ca.";
+  const vendorText = [
+    hasQrBingoVendorSkillAttestation(draw)
+      ? `Your business confirmed it independently completed the required winner verification and rules/release step for this potential winner in ${safeVendorName}'s prize draw. Wedding Win recorded your attestation and did not check the answer.`
+      : `Your business confirmed eligibility and the rules/release step for this potential winner in ${safeVendorName}'s prize draw, and Wedding Win confirmed the couple's answer to the required short math question was correct.`,
+    "",
+    "Winner details",
+    `Name: ${cleanText(draw.winner_name, 160)}`,
+    `Email: ${winnerEmail}`,
+    `Phone: ${safeWinnerPhone}`,
+    `Wedding date: ${safeWinnerWeddingDate}`,
+    "",
+    "Draw record",
+    "Prize details are included below for your reference.",
+    safePrize,
+    safeDrawItem,
+    prizeValueLine,
+    "",
+    "Couple notification",
+    "WeddingWin.ca has informed the verified potential winner that your business may contact them about this prize and, under the terms they accepted when entering, wedding-related offers and promotions.",
+    "",
+    "Next step",
+    "This couple accepted your draw and named-vendor wedding-related marketing terms. Honour unsubscribe requests and protect the information under the Vendor Draw Rules.",
+  ].join("\n");
+  const coupleText = [
+    `Hi ${cleanText(draw.winner_name, 80) || "there"},`,
+    "",
+    `Congratulations, your name was selected by ${safeVendorName} for their draw.`,
+    "",
+    "Your draw",
+    `Vendor: ${safeVendorName}`,
+    `Draw item: ${safeEmailDrawItem}`,
+    prizeValueLine,
+    "",
+    "What happens next",
+    `${safeVendorName} will follow up with the prize details and next steps.`,
+    profileLine,
+    "",
+    "Why you received this",
+    "You opted in after scanning this vendor's QR code at the wedding show.",
+    "",
+    "WeddingWin.ca",
+  ].join("\n");
+
   let emailSend: Awaited<ReturnType<typeof sendWebsiteDrawEmails>> | null =
     null;
   let transportError = "";
@@ -3022,10 +3213,18 @@ async function sendDrawEmails(
           ? "isolated_verified_email_test"
           : qrBingoConfig().email_delivery_mode,
         email_test_fixture: emailTestRecipient ? "1" : "0",
+        email_test_vendor_copy: emailTestRecipient &&
+            isEmailTestFixture(isolatedFixture) &&
+            isolatedFixture.send_vendor_email === true
+          ? "1" : "0",
         fixture_id: isEmailTestFixture(isolatedFixture)
           ? isolatedFixture.id
           : "",
         verification_state: "verified_potential_winner",
+        // Signed structured fields are sourced only from the claimed snapshot,
+        // so multiline descriptions cannot be confused with template headings.
+        prize_description: String(prizeSnapshot?.prize_description || "").trim(),
+        prize_approx_value_cad: String(prizeSnapshot?.prize_approx_value_cad),
         send_vendor: vendorClaim ? "1" : "0",
         send_couple: coupleClaim ? "1" : "0",
         vendor_delivery_key: vendorClaim?.delivery_key || "",
@@ -3033,7 +3232,7 @@ async function sendDrawEmails(
         vendor_to: vendorEmail,
         vendor_subject: qrBingoConfig().vendor_email_subject,
         vendor_text: vendorText,
-        couple_to: emailTestRecipient || cleanText(draw.winner_email, 160),
+        couple_to: emailTestRecipient || winnerEmail,
         couple_subject: qrBingoConfig().couple_email_subject,
         couple_text: coupleText,
       }, signingKey);
@@ -3761,7 +3960,50 @@ Deno.serve(async (request) => {
               ? reviewFixture.couple_bd_user_id
               : reviewFixture.authenticated_couple_bd_user_id),
       );
-      const contactProfile = qrContactProfile(user);
+      const isContactProfileAction = ["contact_profile_get", "contact_profile_save"].includes(action);
+      const isCoupleContactAction = ["list", "scan", "raffle_offer", "raffle_opt_in", "contact_profile_get", "contact_profile_save"].includes(action);
+      const isCoupleAccount = ["4", "18"].includes(String(user.subscription_id)) && String(user.active) === "2";
+      if (isCoupleContactAction && action !== "list" && !isCoupleAccount) {
+        return jsonResponse({ok:false,error:"Sign in with a couple account to use QR Bingo."},403);
+      }
+      const contactEventKey = reviewFixture && isReviewCouple ? reviewFixture.event_key : qrBingoConfig().event_key;
+      let bingoContactProfile: QrContactProfile | null = isCoupleContactAction && isCoupleAccount
+        ? await loadQrContactProfile(requireAdmin(), contactEventKey, authenticatedMemberId, user) : null;
+      if (isContactProfileAction) {
+        if (body.expected_event_key !== undefined && body.expected_event_key !== contactEventKey) {
+          return jsonResponse({ok:false,code:"contact_event_changed",error:"The wedding show changed. Reload QR Bingo before saving."},409);
+        }
+        if (action === "contact_profile_save") {
+          const requested = validateQrContactSave(body.contact_profile, bingoContactProfile!);
+          if (reviewFixture && isReviewCouple && isEmailTestFixture(reviewFixture) &&
+            requested.email !== isolatedEmailTestRecipient(reviewFixture)) {
+            return jsonResponse({ok:false,error:"Use the allowlisted contact email for this isolated email test."},403);
+          }
+          bingoContactProfile = await saveQrContactProfile(requireAdmin(), contactEventKey, authenticatedMemberId, user, body.contact_profile);
+        }
+        let dateSyncWarning: string | undefined;
+        let dateSyncDiagnostic: string | undefined;
+        if (bingoContactProfile!.date_sync_pending) {
+          try {
+            bingoContactProfile = await syncQrContactWeddingDate(requireAdmin(), bingoContactProfile!, user, {
+              callBd, fetchUser: fetchFullBdUserById,
+            });
+          } catch (error) {
+            if (action !== "contact_profile_get" || !(error instanceof QrContactError) || error.code !== "contact_date_sync_pending") throw error;
+            console.warn("QR_BINGO_DATE_SYNC_PENDING", error.diagnostic || "unknown_stage");
+            // A provider date outage must not trap the user out of editing
+            // already-saved QR contacts. Retain the pending flag and warning.
+            bingoContactProfile = await loadQrContactProfile(requireAdmin(), contactEventKey, authenticatedMemberId, user);
+            dateSyncWarning = error.message;
+            dateSyncDiagnostic = error.diagnostic;
+          }
+        }
+        return jsonResponse({ok:true,event_key:contactEventKey,contact_profile:bingoContactProfile,
+          profile_complete:bingoContactProfile!.complete,missing_profile_fields:bingoContactProfile!.missing_fields,
+          requires_non_relay_email:true,participation_notice_version:qrParticipationNoticeVersion(),
+          date_sync_warning:dateSyncWarning,date_sync_diagnostic:dateSyncDiagnostic});
+      }
+      const contactProfile = bingoContactProfile || {complete:false,missing_fields:["contact details"]};
       if (
         ["scan", "raffle_offer", "raffle_opt_in"].includes(action) &&
         !contactProfile.complete
@@ -3769,11 +4011,14 @@ Deno.serve(async (request) => {
         return jsonResponse({
           ok: false,
           code: "profile_incomplete",
+          contact_profile: bingoContactProfile,
+          event_key: contactEventKey,
+          requires_non_relay_email: true,
           error: `Complete your ${
             contactProfile.missing_fields.join(", ")
           } before continuing with QR Bingo.`,
           missing_profile_fields: contactProfile.missing_fields,
-          profile_edit_url: contactProfile.profile_edit_url,
+          profile_edit_url: `${BD_API_BASE_URL}/qr`,
         }, 422);
       }
       if (
@@ -3791,13 +4036,15 @@ Deno.serve(async (request) => {
         reviewFixture &&
         isReviewCouple &&
         isEmailTestFixture(reviewFixture) &&
-        cleanText(user.email, 254).toLowerCase() !==
-          isolatedEmailTestRecipient(reviewFixture)
+        ["scan", "raffle_offer", "raffle_opt_in"].includes(action) &&
+        !isolatedEmailTestContactMatches(
+          reviewFixture, bingoContactProfile, authenticatedMemberId,
+        )
       ) {
         return jsonResponse({
           ok: false,
           error:
-            "The isolated email-test account no longer matches its allowlisted recipient.",
+            "Save the allowlisted contact email before continuing with this isolated email test.",
         }, 403);
       }
       // Website proof is the authentication. Only normal couple requests use
@@ -3826,6 +4073,7 @@ Deno.serve(async (request) => {
           : ({ vendors: [], scanned: [] } as QrPage)
         : await getQrPage(cookieJar, authenticatedMemberId);
       let scanned: string[];
+      let inShowScanned: string[];
       if (reviewFixture && isReviewCouple) {
         // The review account is a self-contained demonstration event. Never
         // expose the production roster/progress or allow its scan action to
@@ -3840,14 +4088,17 @@ Deno.serve(async (request) => {
             ),
           ),
         ];
+        inShowScanned = [...scanned];
       } else {
         // `get_scanned` is a couple-only website action. Vendor dashboards
         // authorize against the current BD member tag, never scan history.
-        scanned = [
-          ...new Set(
-            isVendorRaffleAction ? [] : await getFreshScanned(cookieJar, page),
-          ),
-        ];
+        const progress = isVendorRaffleAction ? { scanned: [], inShowScanned: [] }
+          // A normal scan does not use pre-save history. Its successful write
+          // is followed by the authoritative read and in-show draw proof.
+          : action === "scan" ? { scanned: page.scanned, inShowScanned: [] }
+          : await getFreshScanned(cookieJar, page);
+        scanned = [...new Set(progress.scanned)];
+        inShowScanned = [...new Set(progress.inShowScanned)];
       }
 
       if (action === "scan") {
@@ -3883,6 +4134,7 @@ Deno.serve(async (request) => {
             outbound_email_suppressed: !isEmailTestFixture(reviewFixture),
             vendors: page.vendors,
             scanned: freshScanned,
+            in_show_scanned: freshScanned,
             scanned_count: freshScanned.length,
             total_count: page.vendors.length,
             matched_vendor: matchedVendor,
@@ -3891,12 +4143,12 @@ Deno.serve(async (request) => {
           });
         }
 
-        if (!productionShowScanWindowOpen()) {
+        if (!qrBingoScannerWindowOpen(qrBingoConfig())) {
           return jsonResponse({
             ok: false,
             code: "show_scan_window_closed",
             error:
-              "QR Bingo booth scans are accepted only during the published wedding-show hours.",
+              "The QR Bingo scanner is closed. It opens at midnight on the wedding show date, or earlier when enabled by the organizer.",
           }, 403);
         }
 
@@ -3914,6 +4166,24 @@ Deno.serve(async (request) => {
         );
         if (scanResult.status !== "success") {
           const upstreamStatus = Number(scanResult.__http_status || 0);
+          const upstreamCode = String(scanResult.code || "");
+          const knownRejectionMessages = new Map([
+            ["Refresh QR Bingo before continuing.", "website_csrf_rejected"],
+            ["QR Bingo configuration is temporarily unavailable.", "website_config_unavailable"],
+            ["QR Bingo scanning is temporarily disabled.", "website_scanning_disabled"],
+            ["Your scan could not be checked. Please try again.", "website_scan_check_failed"],
+            ["Your scan could not be saved. Please try again.", "website_scan_write_failed"],
+            ["Invalid vendor ID", "website_vendor_not_found"],
+          ]);
+          const diagnosticCode = ["stale_event_config", "show_scan_window_closed",
+            "profile_incomplete", "participation_notice_required"].includes(upstreamCode)
+            ? upstreamCode
+            : knownRejectionMessages.get(String(scanResult.message || scanResult.error || "")) || "scan_failed";
+          console.warn("qr_bingo_website_scan_rejected", {
+            stage: "scan_vendor",
+            upstream_status: Number.isInteger(upstreamStatus) && upstreamStatus >= 100 && upstreamStatus <= 599 ? upstreamStatus : 0,
+            code: diagnosticCode,
+          });
           const safeStatus = [409, 422, 428].includes(upstreamStatus)
             ? upstreamStatus
             : 502;
@@ -3931,16 +4201,18 @@ Deno.serve(async (request) => {
           }, safeStatus);
         }
 
-        const freshScanned = [
-          ...new Set(await getFreshScanned(cookieJar, page)),
-        ];
-        const raffleOffer = await buildRaffleOffer(matchedVendor, user);
+        const progress = await getFreshScanned(cookieJar, page);
+        const freshScanned = [...new Set(progress.scanned)];
+        const raffleOffer = productionShowScanWindowOpen() &&
+            progress.inShowScanned.includes(matchedVendor.id)
+          ? await buildRaffleOffer(matchedVendor, user) : null;
         const completed = page.vendors.length > 0 &&
           freshScanned.length >= page.vendors.length;
         return jsonResponse({
           ok: true,
           vendors: page.vendors,
           scanned: freshScanned,
+          in_show_scanned: progress.inShowScanned,
           scanned_count: freshScanned.length,
           total_count: page.vendors.length,
           matched_vendor: matchedVendor,
@@ -3968,10 +4240,10 @@ Deno.serve(async (request) => {
             404,
           );
         }
-        if (!scanned.includes(vendor.id)) {
+        if (!inShowScanned.includes(vendor.id)) {
           return jsonResponse({
             ok: false,
-            error: "Scan this vendor before reviewing its draw.",
+            error: "Scan this vendor at the wedding show before reviewing its draw.",
           }, 403);
         }
         const raffleEventKey = reviewFixture && isReviewCouple &&
@@ -4015,10 +4287,10 @@ Deno.serve(async (request) => {
             404,
           );
         }
-        if (!scanned.includes(vendor.id)) {
+        if (!inShowScanned.includes(vendor.id)) {
           return jsonResponse({
             ok: false,
-            error: "Scan this vendor before entering the draw.",
+            error: "Scan this vendor at the wedding show before entering the draw.",
           }, 403);
         }
         const raffleEventKey = reviewFixture && isReviewCouple &&
@@ -4027,7 +4299,7 @@ Deno.serve(async (request) => {
           : qrBingoConfig().event_key;
         const result = await optInToRaffle(
           vendor,
-          user,
+          qrContactUser(user, bingoContactProfile!),
           body as Record<string, unknown>,
           raffleEventKey,
           reviewFixture && isReviewCouple &&
@@ -4290,32 +4562,9 @@ Deno.serve(async (request) => {
         const prizeApproxValueCad = positiveCadValue(
           body?.prize_approx_value_cad,
         );
-        const requestedMaxWinners = body?.max_winners === undefined
-          ? raffleMaxWinners(currentSettings.max_winners)
-          : Number(body.max_winners);
-        if (
-          !Number.isInteger(requestedMaxWinners) ||
-          requestedMaxWinners < 1 || requestedMaxWinners > MAX_RAFFLE_WINNERS
-        ) {
-          return jsonResponse({
-            ok: false,
-            error: "Choose from one through three winners before entries open.",
-          }, 400);
-        }
-        if (
-          body?.exclude_previous_winners !== undefined &&
-          typeof body.exclude_previous_winners !== "boolean"
-        ) {
-          return jsonResponse({
-            ok: false,
-            error:
-              "Choose whether previous winners in this vendor promotion are excluded.",
-          }, 400);
-        }
-        const excludePreviousWinners =
-          body?.exclude_previous_winners === undefined
-            ? currentSettings.exclude_previous_winners !== false
-            : body.exclude_previous_winners;
+        // Ignore legacy multi-winner controls; every new draw has one winner.
+        const requestedMaxWinners = 1;
+        const excludePreviousWinners = true;
         const entryClosesAt = isReviewVendor
           ? String(
             currentSettings.entry_closes_at || qrBingoConfig().entry_closes_at,
@@ -4420,8 +4669,8 @@ Deno.serve(async (request) => {
         const materialTermsLocked = entryCount > 0 ||
           await activatedVendorOfferExists(raffleEventKey, vendor.id);
         const materialFingerprintChanged =
-          materialSettingsFingerprint(currentSettings) !==
-            materialSettingsFingerprint(nextMaterialSettings);
+          lockedMaterialSettingsFingerprint(currentSettings) !==
+            lockedMaterialSettingsFingerprint(nextMaterialSettings);
         const permittedLockedRulesReacceptance = materialTermsLocked &&
           currentRulesAcceptanceRequested && materialFingerprintChanged &&
           isPermittedInPersonEntryRulesTransition(
@@ -4451,6 +4700,31 @@ Deno.serve(async (request) => {
           );
         const materialTermsChanged = materialFingerprintChanged &&
           !permittedLockedRulesReacceptance;
+        const prizeChanged =
+          cleanText(currentSettings.prize_title, 180) !== prizeTitle ||
+          cleanText(currentSettings.prize_description, 1000) !==
+            prizeDescription ||
+          positiveCadValue(currentSettings.prize_approx_value_cad) !==
+            prizeApproxValueCad;
+        if (
+          prizeChanged && await vendorPrizeDetailsLock(vendor, raffleEventKey)
+        ) {
+          const dashboard = await getVendorRaffleDashboard(
+            vendor,
+            user,
+            raffleEventKey,
+            allowEarlyDraw,
+            suppressOutboundEmail,
+            reviewFixture,
+          );
+          return jsonResponse({
+            ok: false,
+            code: "prize_details_locked",
+            error:
+              "Prize details are locked while the winner email is sending or after it has been sent.",
+            ...dashboard,
+          }, 409);
+        }
         if (
           materialTermsLocked && materialTermsChanged && !enabled &&
           !acceptanceRefreshRequested
@@ -4525,7 +4799,7 @@ Deno.serve(async (request) => {
               : "material_terms_locked",
             error: acceptanceRefreshRequested
               ? "The current rules could not be accepted because this saved draw no longer matches its locked prize and event terms. Reload the draw and contact Wedding Win support; no prize terms were changed."
-              : "Prize and draw terms cannot change after the first entry. Close this draw and create a separately versioned promotion instead.",
+              : "The draw schedule, eligibility and rules are locked after entries open. You can still edit prize details until the winner email is sent.",
           }, 409);
         }
         const settingsPatch: Partial<RaffleSettings> =
@@ -4756,12 +5030,16 @@ Deno.serve(async (request) => {
           ),
           vendors: page.vendors,
           scanned,
+          in_show_scanned: inShowScanned,
           scanned_count: scanned.length,
           total_count: page.vendors.length,
           completed,
           profile_complete: contactProfile.complete,
+          contact_profile: bingoContactProfile,
+          event_key: contactEventKey,
+          requires_non_relay_email: true,
           missing_profile_fields: contactProfile.missing_fields,
-          profile_edit_url: contactProfile.profile_edit_url,
+          profile_edit_url: `${BD_API_BASE_URL}/qr`,
           participation_notice_version: qrParticipationNoticeVersion(),
         });
       }
@@ -4772,6 +5050,10 @@ Deno.serve(async (request) => {
       );
     });
   } catch (error) {
+    if (error instanceof QrContactError) {
+      if (error.code === "contact_date_sync_pending") console.warn("QR_BINGO_DATE_SYNC_PENDING", error.diagnostic || "unknown_stage");
+      return jsonResponse({ok:false,code:error.code,error:error.message,retriable:error.status===503,diagnostic:error.diagnostic},error.status);
+    }
     const failure = error instanceof Error
       ? { name: error.name, message: error.message }
       : error && typeof error === "object"

@@ -1,0 +1,1522 @@
+[
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "couple_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "vendor_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "vendor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "vendor_qr_payload",
+    "data_type": "text"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "enabled",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "allow_early_draw",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "suppress_outbound_email",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "expires_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "app_review_raffle_fixtures",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "couple_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "vendor_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "vendor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "vendor_qr_payload",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "outbound_recipient_email",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "enabled",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "allow_early_draw",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "send_vendor_email",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "send_couple_email",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "expires_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "authorized_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "authorized_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_email_test_fixtures",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "revision",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "published",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "event_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "vendor_tag_id",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "history_starts_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "scan_enabled",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "vendor_draws_enabled",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "email_delivery_mode",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "send_vendor_email",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "send_couple_email",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "vendor_email_subject",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "couple_email_subject",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "rules_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "official_rules_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "alternate_free_entry_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "eligibility_region",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "draw_opens_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "entry_closes_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "draw_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "created_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "venue_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_event_configs",
+    "column_name": "app_card_enabled",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_legacy_qa_archives",
+    "column_name": "entry_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_legacy_qa_archives",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_legacy_qa_archives",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_legacy_qa_archives",
+    "column_name": "couple_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_legacy_qa_archives",
+    "column_name": "archived_reason",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_legacy_qa_archives",
+    "column_name": "archived_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_legacy_qa_archives",
+    "column_name": "archived_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "vendor_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "vendor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "entry_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "couple_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "winner_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "winner_email",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "winner_phone",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "winner_wedding_date",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "prize_title",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "prize_description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "claim_instructions",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "draw_number",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "draw_reason",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "drawn_by_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "drawn_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "vendor_email_sent_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "couple_email_sent_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "email_error",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "official_rules_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "rules_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "administrator_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "co_sponsor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "prize_provider_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "apple_non_sponsor_disclaimer",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "prize_approx_value_cad",
+    "data_type": "numeric(12,2)"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "eligibility_region",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "entry_closes_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "scheduled_draw_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "odds_basis",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "no_purchase_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "skill_testing_question_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "alternate_free_entry_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "selection_status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "eligibility_verified_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "skill_question_verified_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "verified_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "verified_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "verification_notes",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "disqualified_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "disqualification_reason",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "skill_question_prompt",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "skill_question_salt",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "skill_question_answer_hash",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "winner_rules_confirmed_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "max_winners",
+    "data_type": "smallint"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "exclude_previous_winners",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "skill_question_vendor_attested_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "skill_question_vendor_attested_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "skill_question_vendor_attestation",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "replaced_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "replaced_by_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "replacement_note",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_draws",
+    "column_name": "replaces_draw_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "vendor_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "vendor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "couple_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "couple_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "couple_email",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "couple_phone",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "couple_wedding_date",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "consent_share_contact",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "consent_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "consent_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "consented_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "official_rules_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "rules_viewed_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "administrator_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "co_sponsor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "prize_provider_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "apple_non_sponsor_acknowledged",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "prize_approx_value_cad",
+    "data_type": "numeric(12,2)"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "eligibility_region",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "entry_closes_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "draw_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "odds_basis",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "no_purchase_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "skill_testing_question_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "alternate_free_entry_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "prize_title",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "prize_description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "contact_share_scope",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "age_of_majority_attested",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "residency_attested",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "exclusions_attested",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "eligibility_attested_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "eligibility_attestation_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "entry_method",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "entrant_identity_hash",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "source_reference",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "source_form_id",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "source_submitted_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "reconciled_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "reconciled_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "promotion_responsibility_acknowledged",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "promotion_disclosure_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "promotion_responsibility_acknowledged_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "promotion_responsibility_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "vendor_offer_version",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "vendor_marketing_consent",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "vendor_marketing_consent_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "vendor_marketing_consented_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "draw_administration_contact_share_acknowledged",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "draw_administration_contact_share_acknowledged_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "draw_administration_contact_share_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "draw_administration_contact_share_consent_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "max_winners",
+    "data_type": "smallint"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "exclude_previous_winners",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "in_show_scan_verified",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entries",
+    "column_name": "in_show_scan_verified_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_identities",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_identities",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_identities",
+    "column_name": "entrant_identity_hash",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_identities",
+    "column_name": "first_entry_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_identities",
+    "column_name": "registered_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_identities",
+    "column_name": "expires_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "entry_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "vendor_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "included",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "exclusion_reason",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "updated_by_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "update_source",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "version",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_entry_selection_state",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "vendor_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "vendor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "enabled",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "prize_title",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "prize_description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "claim_instructions",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "legal_terms_accepted",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "legal_terms_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "legal_terms_accepted_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "draw_opens_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "official_rules_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "rules_viewed_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "administrator_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "co_sponsor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "prize_provider_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "apple_non_sponsor_acknowledged",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "prize_approx_value_cad",
+    "data_type": "numeric(12,2)"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "eligibility_region",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "entry_closes_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "draw_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "odds_basis",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "no_purchase_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "skill_testing_question_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "alternate_free_entry_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "vendor_responsibility_acknowledged",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "vendor_responsibility_disclosure_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "vendor_responsibility_acknowledged_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "vendor_responsibility_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "participant_responsibility_disclosure_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "max_winners",
+    "data_type": "smallint"
+  },
+  {
+    "table_name": "qr_bingo_raffle_settings",
+    "column_name": "exclude_previous_winners",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_bingo_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_offer_version",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "event_revision",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "event_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_tag_id",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "enabled",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "offer_enterable",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "activation_excluded_as_legacy_qa",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "history_starts_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "prize_title",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "prize_description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "prize_approx_value_cad",
+    "data_type": "numeric(12,2)"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "eligibility_region",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "entry_closes_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "draw_opens_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "draw_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "odds_basis",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "no_purchase_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "skill_testing_question_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "official_rules_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "alternate_free_entry_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "rules_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "legal_terms_accepted",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "legal_terms_accepted_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "rules_viewed_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "administrator_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "co_sponsor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "prize_provider_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "apple_non_sponsor_acknowledged",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_responsibility_acknowledged",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_responsibility_disclosure_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_responsibility_acknowledged_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "vendor_responsibility_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "participant_responsibility_disclosure_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "captured_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "isolated_fixture_early_draw",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "max_winners",
+    "data_type": "smallint"
+  },
+  {
+    "table_name": "qr_bingo_vendor_offer_versions",
+    "column_name": "exclude_previous_winners",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "event_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "couple_bd_user_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "couple_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "couple_email",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "couple_phone",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "couple_wedding_date",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "prize_title",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "prize_description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "prize_approx_value_cad",
+    "data_type": "numeric(12,2)"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "eligibility_region",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "entry_closes_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "draw_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "odds_basis",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "no_purchase_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "skill_testing_question_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "alternate_free_entry_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "age_of_majority_attested",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "residency_attested",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "exclusions_attested",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "eligibility_attested_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "eligibility_attestation_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "official_rules_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "rules_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "rules_viewed_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "consent_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "consented_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "administrator_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "sponsor_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "prize_provider_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "apple_non_sponsor_acknowledged",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "qr_bingo_grand_prize_entries",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  }
+]

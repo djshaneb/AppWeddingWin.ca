@@ -348,16 +348,15 @@ assert(
   'QR website and native flows do not keep vendor draw entry optional with explicit participant responsibility and contact-sharing acceptance'
 );
 assert(
-  qr.includes('Number of winners and prizes: ${offeredWinnerCount}') &&
+  qr.includes('One winning couple per draw.') &&
     qr.includes("typeof offer.exclude_previous_winners !== 'boolean'") &&
-    qr.includes('A couple who is confirmed as a winner is excluded only from later selections') &&
-    qr.includes("It does not affect another vendor's draw") &&
-    qr.includes('A confirmed winner remains eligible for another selection') &&
+    !qr.includes('Number of winners and prizes: ${offeredWinnerCount}') &&
+    !qr.includes('A confirmed winner remains eligible for another selection') &&
     qr.includes('aria-describedby="vendorDrawDescription vendorDrawPrivacy vendorDrawStatus"') &&
     qr.includes('vendorDrawReturnFocus') &&
     qr.includes("event.key !== 'Tab'") &&
     qr.includes('vendorDrawDialog.contains(document.activeElement)'),
-  'QR website opt-in does not disclose winner count and repeat policy or preserve accessible modal focus'
+  'QR website opt-in does not disclose one winner or preserve accessible modal focus'
 );
 assert(
   qr.includes('function trustedVendorOfferVersion') &&
@@ -550,7 +549,9 @@ assert(!/tag_id\s*=\s*['\"]?27/.test(qrResults), 'QR results widget still contai
 assert(
   qrResults.includes('COUNT(DISTINCT vv.vendor_id) AS scanned_count') &&
     qrResults.includes("participant.subscription_id IN (4, 18)") &&
+    qrResults.includes("$config['scan_history_starts_at_sql']") &&
     qrResults.includes("vv.scan_date >= '$historyStartsAt'") &&
+    qrResults.includes("vv.scan_date < '$entryClosesAt'") &&
     qrResults.includes('min(100, (int)round('),
   'QR results widget does not constrain and cap current-event couple progress'
 );
@@ -559,14 +560,15 @@ const scoreboardFunction = qrResults.match(
 )?.[1];
 assert(scoreboardFunction, 'QR results scoreboard function could not be located');
 assert(
-  scoreboardFunction.includes("'label' => 'Participant '") &&
-    scoreboardFunction.includes('shuffle($progressRows)') &&
+  scoreboardFunction.includes('ww_qrr_authorized()') &&
+    scoreboardFunction.includes("'member_id' =>") &&
+    scoreboardFunction.includes("'email' =>") &&
+    scoreboardFunction.includes("'phone' =>") &&
     !scoreboardFunction.includes("'participant_key' =>") &&
     !scoreboardFunction.includes("'last_activity' =>") &&
-    !scoreboardFunction.includes("'email' =>") &&
     !scoreboardFunction.includes("'company' =>") &&
     !scoreboardFunction.includes("'user_id' =>"),
-  'QR results scoreboard does not use fresh temporary aliases or exposes an identity/activity field'
+  'QR results contacts are missing their server-side access check or expected fields'
 );
 assert(
   !qrResults.includes('ww_qrr_participant_details') &&
@@ -580,8 +582,8 @@ assert(
   qrResultsScript.includes('document.createElement') &&
     qrResultsScript.includes('.textContent =') &&
     !qrResultsScript.includes('innerHTML') &&
-    !/\b(email|first_name|last_name|company|user_id)\b/.test(qrResultsScript),
-  'QR results browser rendering can expose or inject member fields'
+    qrResultsScript.includes('response.status === 401'),
+  'QR results rendering must use text-only cells and clear expired access'
 );
 assert(
   qrResultsStyle.includes('@media (max-width: 760px)') &&
@@ -593,14 +595,13 @@ assert(!qrResultsScript.includes('\\'), 'QR results script contains backslashes 
 
 assert(
   vendorDraw.includes('data-field="prize_approx_value_cad"') &&
-    vendorDraw.includes('data-field="max_winners"') &&
-    (vendorDraw.match(/<option value="[1-3]">/g) || []).length === 3 &&
-    vendorDraw.includes('data-field="exclude_previous_winners" checked') &&
-    vendorDraw.includes('A different couple each time') &&
-    vendorDraw.includes('Previous winners stay in your contacts, but cannot win this draw again.') &&
+    !vendorDraw.includes('data-field="max_winners"') &&
+    !vendorDraw.includes('data-field="exclude_previous_winners"') &&
+    !vendorDraw.includes('A different couple each time') &&
+    vendorDraw.includes('One couple wins your draw.') &&
     vendorDraw.includes('data-field="legal_terms_accepted"') &&
     vendorDraw.includes('View the current Official Rules'),
-  'Vendor dashboard omits prize value, winner count, repeat policy, or current-rules acceptance controls'
+  'Vendor dashboard must show prize value and current-rules acceptance without multiple-winner controls'
 );
 const vendorWizardUniqueSelectors = [
   'data-role="status"',
@@ -609,8 +610,6 @@ const vendorWizardUniqueSelectors = [
   'data-field="enabled"',
   'data-field="prize_description"',
   'data-field="prize_approx_value_cad"',
-  'data-field="max_winners"',
-  'data-field="exclude_previous_winners"',
   'data-field="legal_terms_accepted"',
   'data-action="save"',
   'data-action="reload"',
@@ -658,8 +657,8 @@ assert(
 assert(
     vendorDrawScript.includes("request(root, 'vendor_raffle_update'") &&
     vendorDrawScript.includes('prize_approx_value_cad: requestPrizeValue') &&
-    vendorDrawScript.includes('max_winners: requestMaxWinners') &&
-    vendorDrawScript.includes('exclude_previous_winners: requestExcludePreviousWinners') &&
+    vendorDrawScript.includes('max_winners: 1') &&
+    vendorDrawScript.includes('exclude_previous_winners: true') &&
     vendorDrawScript.includes('consent_version: rulesVersion') &&
     vendorDrawScript.includes('const combinedAcceptance = Boolean(requestLegalAccepted && rulesReviewed);') &&
     vendorDrawScript.includes('legal_terms_accepted: combinedAcceptance') &&
@@ -670,7 +669,9 @@ assert(
     vendorDrawScript.includes("client_platform: 'website'") &&
     vendorDraw.includes('data-role="vendor-responsibility-disclosure"') &&
     vendorDrawScript.includes('settings_updated_at:') &&
-    vendorDrawScript.includes('const materialTermsLocked = Boolean(state.data.material_terms_locked);') &&
+    vendorDrawScript.includes('const locked = prizeDetailsLocked(state.data);') &&
+    vendorDrawScript.includes("typeof data.prize_details_locked === 'boolean'") &&
+    vendorDrawScript.includes(': Boolean(data && data.material_terms_locked)') &&
     vendorDrawScript.includes('? text(settings.prize_title)') &&
     vendorDrawScript.includes('? text(settings.prize_description)') &&
     vendorDrawScript.includes('? number(settings.prize_approx_value_cad)'),
@@ -982,13 +983,16 @@ assert(
   'Vendor dashboard does not reconcile cached entrant cards or explain all non-selectable opted-in couples'
 );
 assert(
-  officialRules.includes('the configured number of winners and prizes (one, two, or three)') &&
-    officialRules.includes('selects potential winners one at a time') &&
+  officialRules.includes('one winner for that draw') &&
+    officialRules.includes('selects one potential winner at random') &&
     officialRules.includes('Selection never sends a') &&
-    officialRules.includes('confirmed as a winner is removed from later random selections') &&
-    officialRules.includes("It never excludes the couple from another") &&
+    officialRules.includes('Each draw has one winner.') &&
+    /cannot be selected\s+again for that same vendor's current draw/.test(officialRules) &&
+    /does not exclude the couple\s+from another vendor's draw/.test(officialRules) &&
     officialRules.includes("vendor's draw") &&
-    officialRules.includes("remains in the vendor's complete entrant CSV") &&
+    /remains in the vendor's complete\s+entrant CSV/.test(officialRules) &&
+    officialRules.includes('until the winner email starts sending') &&
+    /Eligibility, event dates,\s+entry limits, and the other draw terms remain locked/.test(officialRules) &&
     /mark an\s+entry excluded from random selection/.test(officialRules) &&
     /Entry-list\s+changes stay locked while a potential winner is waiting for review/.test(officialRules) &&
     officialRules.includes('<strong>Choose a different winner</strong>') &&
@@ -997,7 +1001,7 @@ assert(
     officialRules.includes('The previous selection and contact details are kept.') &&
     /If no\s+other eligible couple is available, the current selection stays unchanged\./.test(officialRules) &&
     officialRules.includes('Choosing another potential winner does not send an email.'),
-  'Official Rules do not disclose the multi-winner, no-repeat, entrant-management, CSV-retention, and separate-email behavior'
+  'Official Rules must disclose one winner, the email-specific prize lock, entrant management, CSV retention and separate email behavior'
 );
 
 for (const [label, source] of [['couple QR function', qrSync], ['vendor QR function', qrVendorSync]]) {

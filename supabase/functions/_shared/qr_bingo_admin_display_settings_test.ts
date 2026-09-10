@@ -7,7 +7,7 @@ const adminWidgetUrl = new URL(
   import.meta.url,
 );
 
-Deno.test("QR Bingo admin publishes the app card and venue settings", async () => {
+Deno.test("QR Bingo admin publishes app card, venue and separate early-scanner settings", async () => {
   const source = await Deno.readTextFile(adminWidgetUrl);
 
   assert(
@@ -22,14 +22,18 @@ Deno.test("QR Bingo admin publishes the app card and venue settings", async () =
       source.includes("'venue_name' => $venueName") &&
       source.includes(
         "'app_card_enabled' => ww_qrbs_post_boolean($source, 'app_card_enabled', $errors)",
+      ) &&
+      source.includes(
+        "'scan_open_early' => ww_qrbs_post_boolean($source, 'scan_open_early', $errors)",
       ),
-    "venue_name and app_card_enabled must be allowlisted, validated, and included in the published config",
+    "venue, card and early-scanner controls must be allowlisted, validated, and included in the published config",
   );
 
   assert(
     source.includes("$ww_qrbs_form_config = $ww_qrbs_current_config;") &&
       source.includes("'venue_name' => ''") &&
       source.includes("'app_card_enabled' => false") &&
+      source.includes("'scan_open_early' => false") &&
       source.includes(
         "value=\"<?php echo ww_qrbs_escape($ww_qrbs_form_config['venue_name']); ?>\"",
       ) &&
@@ -61,5 +65,13 @@ Deno.test("QR Bingo admin explains app-card status and show dates plainly", asyn
       !source.includes("Start counting booth visits</label>") &&
       !source.includes("Prize entries close</label>"),
     "the two operational timestamps must use clear wedding-show labels without changing their field names",
+  );
+  assert(
+    source.includes('name="scan_open_early" type="checkbox" value="1"') &&
+      source.includes('Open scanner early') &&
+      source.includes('opens automatically at midnight on the wedding show date, Toronto time') &&
+      source.includes('Pausing scanning still overrides this') &&
+      !source.includes('name="scan_early_access_starts_at"'),
+    "the admin toggle must explain automatic opening and master pause without accepting a client-supplied early-history timestamp",
   );
 });

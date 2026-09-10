@@ -13,6 +13,7 @@ import {
   AppState,
   Image,
   ImageBackground,
+  InputAccessoryView,
   Keyboard,
   Linking,
   Modal,
@@ -33,7 +34,7 @@ import {
   getAccountDeletionGeneration,
   subscribeToAccountDeleted,
 } from '@/lib/account_deletion_state';
-import { mutateNativeSessionStorage } from '@/lib/native_session_storage';
+import { getNativeSessionStorageGeneration, mutateNativeSessionStorage, readNativeSessionStorage } from '@/lib/native_session_storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { useNavigation } from 'expo-router';
 import { WebView, type WebViewNavigation } from 'react-native-webview';
@@ -69,6 +70,7 @@ import {
   LockKeyhole,
   LogOut,
   Mail,
+  MapPin,
   ImagePlus,
   MessageCircle,
   Phone,
@@ -107,6 +109,7 @@ type ContactProfile = {
   email: string;
   phone: string;
   weddingDate?: string;
+  weddingVenue?: string;
 };
 type SignupConsent = {
   acceptedTerms: true;
@@ -140,6 +143,9 @@ type NativeMember = {
   country_code?: string;
   zip_code?: string;
   wedding_date?: string;
+  email_confirmation_required?: boolean;
+  pending_email?: string | null;
+  email_verification_status?: string;
 };
 type NativeBridgeSession = {
   email?: string;
@@ -190,6 +196,9 @@ type NativeChatMessage = {
 };
 type NativeChatSyncResponse = {
   ok?: boolean;
+  code?: string;
+  email_confirmation_required?: boolean;
+  pending_email?: string | null;
   error?: string;
   detail?: string;
   threads?: NativeChatThread[];
@@ -226,6 +235,10 @@ type QrBingoEventConfig = {
   vendor_tag_id: number;
   app_card_enabled: boolean;
   scan_enabled: boolean;
+  scan_open_early: boolean;
+  scan_opens_at: string;
+  scan_history_starts_at?: string;
+  scan_early_access_starts_at?: string | null;
   vendor_draws_enabled: boolean;
   email_delivery_mode: string;
   official_rules_url: string;
@@ -275,17 +288,32 @@ type QrBingoSyncResponse = {
   profile_complete?: boolean;
   missing_profile_fields?: string[];
   profile_edit_url?: string;
+  contact_profile?: QrBingoContactProfile;
   participation_notice_version?: string;
   app_review_fixture?: boolean;
   email_test_fixture?: boolean;
   event_config?: QrBingoEventConfig | null;
   vendors?: QrBingoVendor[];
   scanned?: string[];
+  in_show_scanned?: string[];
   scanned_count?: number;
   total_count?: number;
   matched_vendor?: QrBingoVendor;
   raffle_offer?: QrBingoRaffleOffer | null;
   completed?: boolean;
+};
+type QrBingoContactProfile = {
+  event_key: string;
+  couple_id: string;
+  name: string;
+  email: string;
+  phone: string;
+  wedding_date: string;
+  wedding_venue: string;
+  version: number;
+  saved: boolean;
+  complete: boolean;
+  missing_fields: string[];
 };
 type QrBingoPublicConfigResponse = {
   ok?: boolean;
@@ -318,6 +346,7 @@ type QrBingoRaffleEntry = {
   couple_email: string;
   couple_phone: string;
   couple_wedding_date: string;
+  couple_wedding_venue?: string;
   entry_method?: string;
   rules_version?: string;
   entered_at?: string;
@@ -401,6 +430,8 @@ type QrBingoVendorRaffleResponse = {
   selection_in_progress?: boolean;
   can_update_entries?: boolean;
   material_terms_locked?: boolean;
+  prize_details_locked?: boolean;
+  prize_details_lock_reason?: 'sending' | 'sent' | 'unconfirmed' | null;
   can_send_verified_winner_notice?: boolean;
   can_test_suppressed_notice?: boolean;
   verified_potential_winner_notice_pending?: boolean;
@@ -493,7 +524,10 @@ const APP_BACKEND_PUBLISHABLE_KEY =
 const QR_BINGO_SYNC_FUNCTION_URL = `${APP_BACKEND_URL}/functions/v1/bd-qr-bingo-sync`;
 const QR_BINGO_PUBLIC_CONFIG_URL = `${APP_BACKEND_URL}/functions/v1/bd-qr-bingo-admin?action=public_config`;
 const VENDOR_RAFFLE_FUNCTION_URL = `${APP_BACKEND_URL}/functions/v1/bd-qr-bingo-vendor-sync`;
-const QR_BINGO_REQUEST_TIMEOUT_MS = 12000;
+// Native QR requests bridge an authenticated website session as well as the
+// scan itself. Keep a bounded budget for that round trip, separate from chat
+// and other app requests.
+const QR_BINGO_REQUEST_TIMEOUT_MS = 30_000;
 const QR_BINGO_MENU_CONFIG_REFRESH_MS = 60_000;
 const BRAND_COLOR = '#C66A6A';
 const OAUTH_RETURN_URL = 'https://www.weddingwin.ca/auth-callback';
@@ -753,9 +787,13 @@ function buildNativeAppleStartUrl(
   if (!/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
     throw new Error('Invalid Apple sign-in challenge.');
   }
-  const url = new URL('/functions/v1/apple-native-oauth-start', APP_BACKEND_URL);
-  url.searchParams.set('return_to', APPLE_BROWSER_RETURN_URL);
-  url.searchParams.set('code_challenge', codeChallenge);
+  const url = new URL('https://www.weddingwin.ca/app-apple-sign-in');
+  // Keep app intent out of the website request and its referrers. The branded
+  // gateway validates this fragment, removes it, then opens the backend start
+  // in the browser so its OAuth binding cookie is still set normally.
+  const params = new URLSearchParams();
+  params.set('return_to', APPLE_BROWSER_RETURN_URL);
+  params.set('code_challenge', codeChallenge);
   if (consent) {
     if (
       (role !== 'couple' && role !== 'vendor') ||
@@ -765,13 +803,14 @@ function buildNativeAppleStartUrl(
     ) throw new Error('Please accept the current signup agreement.');
     // Browser recovery keeps explicit signup intent, not a role guessed from
     // the Apple account or the login picker. Ordinary sign-in sends neither.
-    url.searchParams.set('signup_role', role);
-    url.searchParams.set('accepted_terms', '1');
-    url.searchParams.set('accepted_privacy', '1');
-    url.searchParams.set('accepted_at', consent.acceptedAt);
-    url.searchParams.set('terms_version', consent.termsVersion);
-    url.searchParams.set('privacy_version', consent.privacyVersion);
+    params.set('signup_role', role);
+    params.set('accepted_terms', '1');
+    params.set('accepted_privacy', '1');
+    params.set('accepted_at', consent.acceptedAt);
+    params.set('terms_version', consent.termsVersion);
+    params.set('privacy_version', consent.privacyVersion);
   }
+  url.hash = params.toString();
   return url.toString();
 }
 
@@ -1196,6 +1235,22 @@ function normalizeWeddingDate(value: unknown): string {
   return candidate;
 }
 
+function normalizeWeddingDateInput(value: string): string {
+  const candidate = value.trim();
+  // Leave editing unmasked so inserting or deleting a digit never moves the
+  // cursor. Normalize only a complete date, on blur or before saving.
+  if (/^\d{8}$/.test(candidate)) {
+    return normalizeWeddingDate(
+      `${candidate.slice(0, 4)}-${candidate.slice(4, 6)}-${candidate.slice(6, 8)}`,
+    );
+  }
+  const parts = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(candidate);
+  if (!parts) return '';
+  return normalizeWeddingDate(
+    `${parts[1]}-${parts[2].padStart(2, '0')}-${parts[3].padStart(2, '0')}`,
+  );
+}
+
 function normalizeMemberRole(value: unknown): SignupRole | null {
   const role = String(value || '')
     .trim()
@@ -1316,9 +1371,35 @@ function missingQrContactFields(member: NativeMember | null): string[] {
   if (!displayName || isReservedQrContactName(displayName)) {
     missing.push('name');
   }
-  if (!isValidEmail(String(member.email || ''))) missing.push('email');
+  if (
+    !isValidEmail(String(member.email || '')) ||
+    isApplePrivateRelayEmail(member.email) ||
+    member.email_confirmation_required
+  ) missing.push('email');
   if (!isValidContactPhone(member.phone_number)) missing.push('phone number');
   return missing;
+}
+
+function normalizeQrContactProfile(
+  value: unknown,
+  coupleId: string,
+  expectedEventKey?: string,
+): QrBingoContactProfile | null {
+  if (!value || typeof value !== 'object') return null;
+  const contact = value as Record<string, unknown>;
+  if (
+    String(contact.couple_id || '') !== coupleId ||
+    typeof contact.event_key !== 'string' || !contact.event_key ||
+    (expectedEventKey && contact.event_key !== expectedEventKey) ||
+    !Number.isSafeInteger(contact.version) || Number(contact.version) < 0 ||
+    !['name', 'email', 'phone', 'wedding_date'].every((field) => typeof contact[field] === 'string') ||
+    !Array.isArray(contact.missing_fields) ||
+    !contact.missing_fields.every((field) => typeof field === 'string') ||
+    typeof contact.complete !== 'boolean' || typeof contact.saved !== 'boolean'
+  ) return null;
+  const venue = contact.wedding_venue ?? '';
+  if (typeof venue !== 'string' || venue.length > 200 || /[<>\u0000-\u001f\u007f]/.test(venue)) return null;
+  return { ...contact, wedding_venue: contact.wedding_date ? venue : '' } as unknown as QrBingoContactProfile;
 }
 
 function formatWeddingDate(date: Date): string {
@@ -1367,10 +1448,18 @@ function formatQrMenuDate(value?: string): string {
 }
 
 
-function normalizeRaffleMaxWinners(value: unknown): 1 | 2 | 3 {
-  const parsed = Number(value);
-  if (parsed === 2 || parsed === 3) return parsed;
+function normalizeRaffleMaxWinners(_value: unknown): 1 {
   return 1;
+}
+
+function areVendorPrizeDetailsLocked(
+  data: QrBingoVendorRaffleResponse | null | undefined,
+): boolean {
+  // Older servers have not yet separated prize edits from event/rules locks.
+  // Keep their existing protection until the new explicit flag is available.
+  return typeof data?.prize_details_locked === 'boolean'
+    ? data.prize_details_locked
+    : Boolean(data?.material_terms_locked);
 }
 
 function normalizeCurrencyDraft(value: string): string {
@@ -1564,6 +1653,41 @@ function matchQrBingoVendor(value: string, vendors: QrBingoVendor[]) {
   );
 }
 
+function validQrScanTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/);
+  if (!parts || !Number.isFinite(Date.parse(value))) return false;
+  const calendarDay = new Date(`${parts[1]}-${parts[2]}-${parts[3]}T00:00:00Z`);
+  return Number.isFinite(calendarDay.getTime()) &&
+    calendarDay.toISOString().slice(0, 10) === value.slice(0, 10) &&
+    Number(parts[4]) <= 23 && Number(parts[5]) <= 59 && Number(parts[6]) <= 59 &&
+    (!parts[8] || (Number(parts[8]) <= 14 && Number(parts[9]) <= 59 &&
+      (Number(parts[8]) !== 14 || Number(parts[9]) === 0)));
+}
+
+function isQrBingoScanWindowOpen(
+  config: QrBingoEventConfig | null,
+  nowMs = Date.now(),
+): boolean {
+  if (!config || config.scan_enabled !== true || !Number.isFinite(nowMs)) return false;
+  const opensAt = Date.parse(config.scan_opens_at);
+  const closesAt = Date.parse(config.entry_closes_at);
+  return Number.isFinite(opensAt) && Number.isFinite(closesAt) &&
+    opensAt < closesAt && nowMs < closesAt &&
+    (config.scan_open_early === true || nowMs >= opensAt);
+}
+
+function isQrBingoInShowWindow(
+  config: QrBingoEventConfig | null,
+  nowMs = Date.now(),
+): boolean {
+  if (!config || !Number.isFinite(nowMs)) return false;
+  const startsAt = Date.parse(config.history_starts_at);
+  const closesAt = Date.parse(config.entry_closes_at);
+  return Number.isFinite(startsAt) && Number.isFinite(closesAt) &&
+    startsAt < closesAt && nowMs >= startsAt && nowMs < closesAt;
+}
+
 function normalizeQrBingoEventConfig(
   value: unknown,
 ): QrBingoEventConfig | null {
@@ -1594,13 +1718,24 @@ function normalizeQrBingoEventConfig(
   const entryClosesAt = normalizedText(payload.entry_closes_at, 80);
   const historyStartsAtMs = new Date(historyStartsAt).getTime();
   const entryClosesAtMs = new Date(entryClosesAt).getTime();
+  // Old servers remain usable during rollout. Explicit malformed new fields
+  // never silently fall back to a more permissive scanner schedule.
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(payload, key);
+  const scanOpensAt = has('scan_opens_at') ? payload.scan_opens_at : historyStartsAt;
+  const scanOpenEarly = has('scan_open_early') ? payload.scan_open_early : false;
   if (
     !venueName ||
     typeof payload.app_card_enabled !== 'boolean' ||
     typeof payload.scan_enabled !== 'boolean' ||
     !Number.isFinite(historyStartsAtMs) ||
     !Number.isFinite(entryClosesAtMs) ||
-    historyStartsAtMs >= entryClosesAtMs
+    historyStartsAtMs >= entryClosesAtMs ||
+    typeof scanOpenEarly !== 'boolean' ||
+    !validQrScanTimestamp(scanOpensAt) ||
+    Date.parse(scanOpensAt) >= entryClosesAtMs ||
+    (has('scan_history_starts_at') && !validQrScanTimestamp(payload.scan_history_starts_at)) ||
+    (has('scan_early_access_starts_at') && payload.scan_early_access_starts_at !== null &&
+      !validQrScanTimestamp(payload.scan_early_access_starts_at))
   )
     return null;
 
@@ -1612,6 +1747,10 @@ function normalizeQrBingoEventConfig(
     vendor_tag_id: vendorTagId,
     app_card_enabled: payload.app_card_enabled,
     scan_enabled: payload.scan_enabled,
+    scan_open_early: scanOpenEarly,
+    scan_opens_at: scanOpensAt,
+    ...(has('scan_history_starts_at') ? { scan_history_starts_at: payload.scan_history_starts_at as string } : {}),
+    ...(has('scan_early_access_starts_at') ? { scan_early_access_starts_at: payload.scan_early_access_starts_at as string | null } : {}),
     vendor_draws_enabled: payload.vendor_draws_enabled === true,
     email_delivery_mode: normalizedText(payload.email_delivery_mode, 80),
     official_rules_url: normalizedText(payload.official_rules_url, 500),
@@ -1619,6 +1758,14 @@ function normalizeQrBingoEventConfig(
     history_starts_at: historyStartsAt,
     entry_closes_at: entryClosesAt,
   };
+}
+
+function normalizeQrInShowScannedIds(value: unknown): Set<string> {
+  // Progress can include early visits. Only this separate server proof permits
+  // production draw previews; older/malformed responses must not imply a visit.
+  return new Set(Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === 'string' && /^[1-9]\d*$/.test(id))
+    : []);
 }
 
 function NativeQrScanner({
@@ -1631,7 +1778,7 @@ function NativeQrScanner({
 }: {
   visible: boolean;
   onClose: () => void;
-  onScan: (value: string) => void;
+  onScan: (value: string) => void | Promise<void>;
   nativeSession: NativeBridgeSession | null;
   member: NativeMember | null;
   onCompleteContact: () => void;
@@ -1648,11 +1795,15 @@ function NativeQrScanner({
   const [eventConfig, setEventConfig] = useState<QrBingoEventConfig | null>(
     null,
   );
+  const [scannerConfigVerified, setScannerConfigVerified] = useState(false);
   const [appReviewFixture, setAppReviewFixture] = useState(false);
   const [emailTestFixture, setEmailTestFixture] = useState(false);
   const [vendors, setVendors] = useState<QrBingoVendor[]>([]);
   const [bingoTotalCount, setBingoTotalCount] = useState<number | null>(null);
   const [scannedVendorIds, setScannedVendorIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [inShowScannedVendorIds, setInShowScannedVendorIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [lastScanLabel, setLastScanLabel] = useState('');
@@ -1669,8 +1820,8 @@ function NativeQrScanner({
     useState(false);
   const reviewingParticipationNoticeRef = useRef(false);
   const [serverMissingContactFields, setServerMissingContactFields] = useState<
-    string[]
-  >([]);
+    string[] | null
+  >(null);
   const [scanWindowNow, setScanWindowNow] = useState(() => Date.now());
   const scanFeedbackClearTimerRef = useRef<ReturnType<
     typeof setTimeout
@@ -1684,32 +1835,18 @@ function NativeQrScanner({
   const eventConfigRevision = eventConfig?.revision;
   const eventScanEnabled = eventConfig?.scan_enabled;
   const eventVendorDrawsEnabled = eventConfig?.vendor_draws_enabled;
-  const scanOpensAt = new Date(
-    String(eventConfig?.history_starts_at || ''),
-  ).getTime();
-  const scanClosesAt = new Date(
-    String(eventConfig?.entry_closes_at || ''),
-  ).getTime();
   const isolatedFixtureActive = emailTestFixture || appReviewFixture;
-  const productionScanWindowOpen =
-    Number.isFinite(scanOpensAt) &&
-    Number.isFinite(scanClosesAt) &&
-    scanWindowNow >= scanOpensAt &&
-    scanWindowNow < scanClosesAt;
+  const productionScanWindowOpen = isQrBingoScanWindowOpen(eventConfig, scanWindowNow);
   const scanWindowClosed = Boolean(
     eventScanEnabled === true &&
     !isolatedFixtureActive &&
     !productionScanWindowOpen,
   );
-  const localMissingContactFields = useMemo(
-    () => missingQrContactFields(member),
-    [member],
-  );
-  const missingContactFields =
-    serverMissingContactFields.length > 0
-      ? serverMissingContactFields
-      : localMissingContactFields;
-  const contactProfileComplete = missingContactFields.length === 0;
+  // Bingo contacts are event-specific, not the login email or its verification
+  // status. Never start the camera until the server has checked this event.
+  const missingContactFields = serverMissingContactFields ?? [];
+  const contactProfileComplete = serverMissingContactFields !== null &&
+    missingContactFields.length === 0;
   const participationNoticeKey = useMemo(() => {
     const userId = String(
       member?.user_id || nativeSession?.user_id || '',
@@ -1750,13 +1887,29 @@ function NativeQrScanner({
 
   useEffect(() => {
     if (!visible) return;
-    setScanWindowNow(Date.now());
-    const timer = setInterval(() => setScanWindowNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, [visible]);
+    let boundaryTimer: ReturnType<typeof setTimeout> | undefined;
+    const updateClock = () => {
+      const now = Date.now();
+      setScanWindowNow(now);
+      if (boundaryTimer) clearTimeout(boundaryTimer);
+      const nextBoundary = [eventConfig?.scan_opens_at, eventConfig?.history_starts_at, eventConfig?.entry_closes_at]
+        .map(value => Date.parse(value || ''))
+        .filter(value => Number.isFinite(value) && value > now)
+        .sort((a, b) => a - b)[0];
+      if (nextBoundary !== undefined) {
+        boundaryTimer = setTimeout(updateClock, Math.min(nextBoundary - now, 2_147_483_647));
+      }
+    };
+    updateClock();
+    const timer = setInterval(updateClock, 30_000);
+    return () => {
+      clearInterval(timer);
+      if (boundaryTimer) clearTimeout(boundaryTimer);
+    };
+  }, [eventConfig?.entry_closes_at, eventConfig?.history_starts_at, eventConfig?.scan_opens_at, visible]);
 
   useEffect(() => {
-    setServerMissingContactFields([]);
+    setServerMissingContactFields(null);
   }, [
     member?.email,
     member?.first_name,
@@ -1767,11 +1920,13 @@ function NativeQrScanner({
 
   const clearBingoCardState = useCallback(() => {
     setEventConfig(null);
+    setScannerConfigVerified(false);
     setAppReviewFixture(false);
     setEmailTestFixture(false);
     setVendors([]);
     setBingoTotalCount(null);
     setScannedVendorIds(new Set());
+    setInShowScannedVendorIds(new Set());
   }, []);
 
   const clearScanFeedbackTimer = useCallback(() => {
@@ -1812,13 +1967,6 @@ function NativeQrScanner({
       );
       return;
     }
-    if (!contactProfileComplete) {
-      clearBingoCardState();
-      setLoadingBingo(false);
-      setBingoError(null);
-      return;
-    }
-
     setLoadingBingo(true);
     setBingoError(null);
 
@@ -1847,14 +1995,17 @@ function NativeQrScanner({
       }
       if (requestId !== bingoCardRequestIdRef.current) return;
 
-      if (data.profile_complete === false) {
+      const loadedContact = normalizeQrContactProfile(data.contact_profile, String(nativeSession.user_id));
+      if (!loadedContact) throw new Error('Please reload QR Bingo to check your contact details.');
+
+      if (data.profile_complete === false || !loadedContact.saved || !loadedContact.complete) {
         const missing = Array.isArray(data.missing_profile_fields)
           ? data.missing_profile_fields
               .map((field) => String(field || '').trim())
               .filter(Boolean)
           : ['name', 'email', 'phone number'];
         setServerMissingContactFields(
-          missing.length > 0 ? missing : ['name', 'email', 'phone number'],
+          missing.length > 0 ? missing : ['contact details'],
         );
         clearBingoCardState();
         setBingoError(null);
@@ -1862,7 +2013,9 @@ function NativeQrScanner({
       }
 
       setServerMissingContactFields([]);
-      setEventConfig(normalizeQrBingoEventConfig(data.event_config));
+      const loadedEventConfig = normalizeQrBingoEventConfig(data.event_config);
+      setEventConfig(loadedEventConfig);
+      setScannerConfigVerified(Boolean(loadedEventConfig));
       setAppReviewFixture(data.app_review_fixture === true);
       setEmailTestFixture(data.email_test_fixture === true);
       setVendors(data.vendors || []);
@@ -1872,6 +2025,7 @@ function NativeQrScanner({
           : data.vendors?.length || 0,
       );
       setScannedVendorIds(new Set((data.scanned || []).map(String)));
+      setInShowScannedVendorIds(normalizeQrInShowScannedIds(data.in_show_scanned));
     } catch (error) {
       if (requestId !== bingoCardRequestIdRef.current) return;
       clearBingoCardState();
@@ -1883,7 +2037,7 @@ function NativeQrScanner({
     } finally {
       if (requestId === bingoCardRequestIdRef.current) setLoadingBingo(false);
     }
-  }, [clearBingoCardState, contactProfileComplete, nativeSession]);
+  }, [clearBingoCardState, nativeSession]);
 
   useEffect(() => {
     qrInteractionGenerationRef.current += 1;
@@ -1900,19 +2054,76 @@ function NativeQrScanner({
     setReviewingParticipationNotice(false);
     if (!visible) {
       bingoCardRequestIdRef.current += 1;
-      setServerMissingContactFields([]);
+      setServerMissingContactFields(null);
       clearBingoCardState();
       setLoadingBingo(false);
       showScanFeedback('', 'idle');
       return;
     }
     setScanLocked(false);
+    setServerMissingContactFields(null);
     clearBingoCardState();
     showScanFeedback('', 'idle');
     setRaffleOffer(null);
     setAcceptedParticipationNoticeKey('');
     loadBingoCard();
   }, [clearBingoCardState, loadBingoCard, showScanFeedback, visible]);
+
+  useEffect(() => {
+    if (!visible || !contactProfileComplete || !eventConfig) return;
+    let active = true;
+    let refreshing = false;
+    const interactionGeneration = qrInteractionGenerationRef.current;
+    const refreshScannerEventConfig = async () => {
+      if (!active || refreshing || AppState.currentState !== 'active' ||
+        scanInFlightRef.current || raffleOfferInFlightRef.current || raffleEntryInFlightRef.current) return;
+      refreshing = true;
+      try {
+        const { response, data } = await fetchQrBingoJsonWithTimeout<QrBingoPublicConfigResponse>(
+          QR_BINGO_PUBLIC_CONFIG_URL,
+          { method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store' },
+          'QR Bingo settings took too long to refresh.',
+        );
+        if (!active || interactionGeneration !== qrInteractionGenerationRef.current) return;
+        const nextConfig = normalizeQrBingoEventConfig(data?.event_config);
+        if (!response.ok || data?.ok === false || !nextConfig) throw new Error('QR Bingo settings could not be refreshed.');
+        // An older request must not roll back a newer response. A different
+        // event/tag needs the authenticated roster and contacts checked again.
+        if (nextConfig.revision < eventConfig.revision) return;
+        if (nextConfig.event_key !== eventConfig.event_key || nextConfig.vendor_tag_id !== eventConfig.vendor_tag_id) {
+          qrInteractionGenerationRef.current += 1;
+          setServerMissingContactFields(null);
+          clearBingoCardState();
+          setRaffleOffer(null);
+          setAcceptedParticipationNoticeKey('');
+          void loadBingoCard();
+          return;
+        }
+        setEventConfig(current => current && nextConfig.revision < current.revision ? current : nextConfig);
+        setScannerConfigVerified(true);
+        setBingoError(current => current === 'Could not verify QR Bingo settings. Retrying shortly; your saved progress is unchanged.' ? null : current);
+        setScanWindowNow(Date.now());
+      } catch {
+        if (!active || interactionGeneration !== qrInteractionGenerationRef.current) return;
+        // Keep the last event so this effect can retry, but stop all scanner
+        // actions until a successful refresh verifies the current settings.
+        setScannerConfigVerified(false);
+        setRaffleOffer(null);
+        setBingoError('Could not verify QR Bingo settings. Retrying shortly; your saved progress is unchanged.');
+      } finally {
+        refreshing = false;
+      }
+    };
+    const refreshTimer = setInterval(() => { void refreshScannerEventConfig(); }, QR_BINGO_MENU_CONFIG_REFRESH_MS);
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        setScanWindowNow(Date.now());
+        void refreshScannerEventConfig();
+      }
+    });
+    return () => { active = false; clearInterval(refreshTimer); subscription.remove(); };
+  }, [clearBingoCardState, contactProfileComplete, eventConfig?.event_key,
+    eventConfig?.revision, eventConfig?.vendor_tag_id, loadBingoCard, visible]);
 
   useEffect(() => {
     if (
@@ -1948,6 +2159,7 @@ function NativeQrScanner({
       !contactProfileComplete ||
       !participationNoticeAccepted ||
       reviewingParticipationNotice ||
+      !scannerConfigVerified ||
       eventScanEnabled !== true ||
       scanWindowClosed ||
       !canRequestCameraPermission
@@ -1960,13 +2172,14 @@ function NativeQrScanner({
     eventScanEnabled,
     participationNoticeAccepted,
     reviewingParticipationNotice,
+    scannerConfigVerified,
     scanWindowClosed,
     visible,
   ]);
 
   useEffect(() => {
     if (eventScanEnabled === undefined) return;
-    if (eventScanEnabled && !scanWindowClosed) {
+    if (eventScanEnabled && scannerConfigVerified && !scanWindowClosed) {
       setScanLocked(false);
       return;
     }
@@ -1975,6 +2188,7 @@ function NativeQrScanner({
   }, [
     eventConfigRevision,
     eventScanEnabled,
+    scannerConfigVerified,
     scanWindowClosed,
     showScanFeedback,
   ]);
@@ -2021,10 +2235,18 @@ function NativeQrScanner({
         );
         return false;
       }
+      if (!scannerConfigVerified) {
+        setBingoError('Could not verify QR Bingo settings. Retrying shortly; your saved progress is unchanged.');
+        return false;
+      }
       if (eventScanEnabled !== true) {
         setBingoError(
           'QR Bingo scanning is temporarily paused. Your saved progress is unchanged.',
         );
+        return false;
+      }
+      if (!isolatedFixtureActive && !isQrBingoScanWindowOpen(eventConfig, Date.now())) {
+        setBingoError('QR Bingo scanning is not open right now. Your saved progress is unchanged.');
         return false;
       }
 
@@ -2049,7 +2271,7 @@ function NativeQrScanner({
                 participation_notice_version: `${eventConfig?.rules_version || ''}|${QR_BINGO_PARTICIPATION_NOTICE_VERSION}`,
               }),
             },
-            'Saving this booth visit took too long. Check your connection and scan again.',
+            'We could not confirm this scan. Please scan again to check your progress.',
           );
         if (
           interactionGeneration !== qrInteractionGenerationRef.current ||
@@ -2057,13 +2279,21 @@ function NativeQrScanner({
         )
           return false;
         const nextEventConfig = normalizeQrBingoEventConfig(data.event_config);
-        setEventConfig(nextEventConfig);
+        if (nextEventConfig) {
+          setEventConfig(nextEventConfig);
+          setScannerConfigVerified(true);
+        } else if (data.event_config !== undefined || (response.ok && data?.ok !== false)) {
+          setScannerConfigVerified(false);
+        }
         if (!response.ok || data?.ok === false) {
           throw new Error(
             data?.detail ||
               data?.error ||
               'This vendor scan could not be saved.',
           );
+        }
+        if (!nextEventConfig) {
+          throw new Error('QR Bingo settings could not be verified. Retrying shortly; please try your scan again.');
         }
 
         setVendors(data.vendors || vendors);
@@ -2073,14 +2303,18 @@ function NativeQrScanner({
             : data.vendors?.length || vendors.length,
         );
         setScannedVendorIds(new Set((data.scanned || [vendor.id]).map(String)));
+        const nextInShowScannedIds = normalizeQrInShowScannedIds(data.in_show_scanned);
+        setInShowScannedVendorIds(nextInShowScannedIds);
         showScanFeedback(
           data.completed
-            ? 'QR Bingo card complete. Booth scans record visits; vendor draw entries remain separate and optional.'
+            ? 'Congratulations! You’ve completed Vendor Bingo. You’re now entered in the grand prize draw.'
             : `Scanned: ${vendor.name}`,
           'success',
           data.completed ? undefined : 5000,
         );
-        if (nextEventConfig?.vendor_draws_enabled && data.raffle_offer) {
+        if (nextEventConfig?.vendor_draws_enabled &&
+          (isolatedFixtureActive || (isQrBingoInShowWindow(nextEventConfig, Date.now()) &&
+            nextInShowScannedIds.has(vendor.id))) && data.raffle_offer) {
           setRaffleOffer(data.raffle_offer);
         } else {
           setRaffleOffer(null);
@@ -2107,10 +2341,13 @@ function NativeQrScanner({
     [
       clearBingoCardState,
       contactProfileComplete,
+      eventConfig,
       eventConfig?.rules_version,
       eventScanEnabled,
+      isolatedFixtureActive,
       nativeSession,
       participationNoticeAccepted,
+      scannerConfigVerified,
       showScanFeedback,
       vendors,
     ],
@@ -2132,12 +2369,24 @@ function NativeQrScanner({
         setBingoError('Read and accept the current QR Bingo terms before reviewing a draw.');
         return false;
       }
+      if (!scannerConfigVerified) {
+        setBingoError('Could not verify QR Bingo settings. Retrying shortly; your saved progress is unchanged.');
+        return false;
+      }
       if (eventVendorDrawsEnabled !== true) {
         showScanFeedback(
           `Already scanned: ${vendor.name}. Optional vendor draws are temporarily unavailable.`,
           'duplicate',
           5000,
         );
+        return false;
+      }
+      if (!isolatedFixtureActive && !isQrBingoInShowWindow(eventConfig, Date.now())) {
+        showScanFeedback('Optional vendor draws are available during the wedding show.', 'duplicate', 5000);
+        return false;
+      }
+      if (!isolatedFixtureActive && !inShowScannedVendorIds.has(vendor.id)) {
+        showScanFeedback('Scan this vendor’s booth QR code during the wedding show to view its optional draw.', 'duplicate', 5000);
         return false;
       }
 
@@ -2226,10 +2475,14 @@ function NativeQrScanner({
     },
     [
       clearBingoCardState,
+      eventConfig,
       eventConfig?.rules_version,
       eventVendorDrawsEnabled,
+      inShowScannedVendorIds,
+      isolatedFixtureActive,
       nativeSession,
       participationNoticeAccepted,
+      scannerConfigVerified,
       showScanFeedback,
     ],
   );
@@ -2253,7 +2506,9 @@ function NativeQrScanner({
         return;
       }
       if (
+        !scannerConfigVerified ||
         eventScanEnabled !== true ||
+        (!isolatedFixtureActive && !isQrBingoScanWindowOpen(eventConfig, Date.now())) ||
         scanLocked ||
         scanInFlightRef.current ||
         raffleOffer ||
@@ -2275,44 +2530,62 @@ function NativeQrScanner({
           setScanLocked(false);
         }, delay);
       };
-      const matched = matchQrBingoVendor(value, vendors);
-      if (!matched) {
-        showScanFeedback('Unrecognized QR', 'error', 5000);
-        unlockAfter(1600);
-        return;
-      }
-
-      if (scannedVendorIds.has(matched.id)) {
-        setBingoError(null);
-        if (eventVendorDrawsEnabled) {
-          await reopenVendorDrawOffer(matched);
-        } else {
-          showScanFeedback(
-            `Already scanned: ${matched.name}. Optional vendor draws are temporarily unavailable.`,
-            'duplicate',
-            5000,
-          );
-        }
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-        if (interactionGeneration !== qrInteractionGenerationRef.current)
+      let unlockDelay = 1600;
+      try {
+        const matched = matchQrBingoVendor(value, vendors);
+        if (!matched) {
+          showScanFeedback('Unrecognized QR', 'error', 5000);
           return;
-        unlockAfter(1200);
-        return;
-      }
+        }
 
-      const saved = await saveBingoScan(matched);
-      if (interactionGeneration !== qrInteractionGenerationRef.current) return;
-      if (saved) {
-        onScan(value);
+        if (scannedVendorIds.has(matched.id)) {
+          unlockDelay = 1200;
+          setBingoError(null);
+          if (!isolatedFixtureActive && isQrBingoInShowWindow(eventConfig, Date.now())) {
+            // Early progress needs a real camera rescan to obtain show proof.
+            const saved = await saveBingoScan(matched);
+            if (interactionGeneration !== qrInteractionGenerationRef.current) return;
+            if (!saved) showScanFeedback('We could not confirm this scan. Please scan again to check your progress.', 'error', 5000);
+          } else if (eventVendorDrawsEnabled && isolatedFixtureActive) {
+            await reopenVendorDrawOffer(matched);
+          } else {
+            showScanFeedback(
+              `Already scanned: ${matched.name}. ${eventVendorDrawsEnabled ? 'Optional vendor draws open during the wedding show.' : 'Optional vendor draws are temporarily unavailable.'}`,
+              'duplicate',
+              5000,
+            );
+          }
+          if (interactionGeneration !== qrInteractionGenerationRef.current) return;
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+          return;
+        }
+
+        const saved = await saveBingoScan(matched);
+        if (interactionGeneration !== qrInteractionGenerationRef.current) return;
+        if (saved) {
+          // Sound/haptics are optional; a failed success cue must not turn a
+          // saved booth visit into an error or leave the camera locked.
+          try { void Promise.resolve(onScan(value)).catch(() => {}); } catch {}
+        } else {
+          showScanFeedback('We could not confirm this scan. Please scan again to check your progress.', 'error', 5000);
+        }
+      } catch {
+        if (interactionGeneration !== qrInteractionGenerationRef.current) return;
+        setBingoError('This QR scan could not be completed. Please try again.');
+        showScanFeedback('This QR scan could not be completed. Please try again.', 'error', 5000);
+      } finally {
+        unlockAfter(unlockDelay);
       }
-      unlockAfter(1600);
     },
     [
       contactProfileComplete,
+      eventConfig,
       eventScanEnabled,
       eventVendorDrawsEnabled,
+      isolatedFixtureActive,
       onScan,
       participationNoticeAccepted,
+      scannerConfigVerified,
       raffleOffer,
       reopenVendorDrawOffer,
       saveBingoScan,
@@ -2335,8 +2608,11 @@ function NativeQrScanner({
       return;
     }
     if (
+      !scannerConfigVerified ||
       eventVendorDrawsEnabled !== true ||
+      (!isolatedFixtureActive && !isQrBingoInShowWindow(eventConfig, Date.now())) ||
       !raffleOffer ||
+      (!isolatedFixtureActive && !inShowScannedVendorIds.has(raffleOffer.vendor_id)) ||
       raffleSaving ||
       raffleEntryInFlightRef.current
     )
@@ -2498,9 +2774,12 @@ function NativeQrScanner({
   }, [
     ageOfMajorityAttested,
     clearBingoCardState,
+    eventConfig,
     eventVendorDrawsEnabled,
     eventConfig?.rules_version,
     exclusionsAttested,
+    inShowScannedVendorIds,
+    isolatedFixtureActive,
     nativeSession,
     promotionResponsibilityAccepted,
     raffleOffer,
@@ -2508,6 +2787,7 @@ function NativeQrScanner({
     raffleSaving,
     reopenVendorDrawOffer,
     residencyAttested,
+    scannerConfigVerified,
     showScanFeedback,
   ]);
 
@@ -2564,15 +2844,18 @@ function NativeQrScanner({
     !vendorDrawConsentConfirmed ||
     !raffleOffer?.participant_responsibility_disclosure,
   );
-  const scanEnabled = eventScanEnabled === true && !scanWindowClosed;
+  const scanEnabled = scannerConfigVerified && eventScanEnabled === true && !scanWindowClosed;
   const scanDisabled = eventScanEnabled === false;
-  const vendorDrawsEnabled = eventVendorDrawsEnabled === true;
+  const vendorDrawsEnabled = scannerConfigVerified && eventVendorDrawsEnabled === true &&
+    (isolatedFixtureActive || isQrBingoInShowWindow(eventConfig, scanWindowNow));
   const onlyPhoneNumberMissing =
     missingContactFields.length === 1 &&
     missingContactFields[0].toLowerCase() === 'phone number';
   const onlyNameMissing =
     missingContactFields.length === 1 &&
     missingContactFields[0].toLowerCase() === 'name';
+  const onlyContactReviewNeeded = missingContactFields.length === 1 &&
+    missingContactFields[0] === 'contact details';
   const showingParticipationNotice =
     contactProfileComplete &&
     Boolean(eventConfig) &&
@@ -2605,18 +2888,32 @@ function NativeQrScanner({
       </View>
 
       <Text style={styles.qrSubTitle}>
-        {!contactProfileComplete
-          ? onlyPhoneNumberMissing
+        {serverMissingContactFields === null ? 'Checking your event and contact details.' : !contactProfileComplete
+          ? onlyContactReviewNeeded ? 'Check your contact details once before you start.' : onlyPhoneNumberMissing
             ? 'Add your phone number here to continue with QR Bingo.'
             : onlyNameMissing
-              ? 'Add your full name here to continue with QR Bingo.'
+              ? 'Add your name and your partner’s name here. First names are fine.'
               : 'Complete the missing contact details here to continue with QR Bingo.'
+          : !scannerConfigVerified
+            ? 'Checking scanner availability. Your saved progress is unchanged.'
           : scanDisabled
             ? 'QR Bingo scanning is temporarily paused. Your saved progress is unchanged.'
             : scanWindowClosed
-              ? `Booth scanning is available${eventConfig?.venue_name ? ` at ${eventConfig.venue_name}` : ''} from ${formatPromotionDate(eventConfig?.history_starts_at)} until ${formatPromotionDate(eventConfig?.entry_closes_at)}.`
+              ? `Booth scanning is available${eventConfig?.venue_name ? ` at ${eventConfig.venue_name}` : ''} from ${formatPromotionDate(eventConfig?.scan_opens_at)} until ${formatPromotionDate(eventConfig?.entry_closes_at)}.`
               : 'Visit every vendor booth. Scan each QR. Fill your card.'}
       </Text>
+
+      {contactProfileComplete ? (
+        <TouchableOpacity style={styles.qrConsentLink}
+          accessibilityRole="button" accessibilityLabel="Edit QR Bingo contact details"
+          disabled={savingBingo || raffleSaving}
+          onPress={() => {
+            if (scanInFlightRef.current || raffleOfferInFlightRef.current || raffleEntryInFlightRef.current) return;
+            onCompleteContact();
+          }}>
+          <Text style={styles.qrConsentLinkText}>Contact details</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <View
         style={[
@@ -2624,21 +2921,35 @@ function NativeQrScanner({
           showingParticipationNotice && styles.qrAgreementFrame,
         ]}
       >
-        {!contactProfileComplete ? (
+        {serverMissingContactFields === null ? (
+          <View style={styles.qrPermissionPanel}>
+            {loadingBingo ? <ActivityIndicator size="large" color={BRAND_COLOR} /> :
+              <AlertTriangle size={52} color={BRAND_COLOR} strokeWidth={1.8} />}
+            <Text style={styles.qrPermissionTitle}>
+              {loadingBingo ? 'Getting QR Bingo ready' : 'Could not load QR Bingo'}
+            </Text>
+            {!loadingBingo ? (
+              <TouchableOpacity style={styles.qrPermissionButton} onPress={() => { void loadBingoCard(); }}
+                accessibilityRole="button" accessibilityLabel="Retry loading QR Bingo">
+                <Text style={styles.qrPermissionButtonText}>Try again</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : !contactProfileComplete ? (
           <View style={styles.qrPermissionPanel}>
             <UserRound size={52} color={BRAND_COLOR} strokeWidth={1.8} />
             <Text style={styles.qrPermissionTitle}>
-              {onlyPhoneNumberMissing
+              {onlyContactReviewNeeded ? 'Review your contact details' : onlyPhoneNumberMissing
                 ? 'Add a phone number'
                 : onlyNameMissing
-                  ? 'Add your full name'
+                  ? 'Add your names'
                   : 'Complete your contact details'}
             </Text>
             <Text style={styles.qrPermissionText}>
-              {onlyPhoneNumberMissing
+              {onlyContactReviewNeeded ? 'Your details are filled in. Check them, then continue.' : onlyPhoneNumberMissing
                 ? 'Add a valid phone number before scanning.'
                 : onlyNameMissing
-                  ? 'Add your full name before scanning.'
+                  ? 'Add your name and your partner’s name before scanning. First names are fine.'
                   : `Add your ${missingContactFields.join(', ')} before scanning.`}{' '}
               If you enter a vendor draw, that vendor receives your contact
               details and may contact you with wedding-related offers.
@@ -2652,7 +2963,7 @@ function NativeQrScanner({
                 onlyPhoneNumberMissing
                   ? 'Add phone number for QR Bingo'
                   : onlyNameMissing
-                    ? 'Add full name for QR Bingo'
+                    ? 'Add your names for QR Bingo'
                     : 'Complete contact details'
               }
             >
@@ -2660,7 +2971,7 @@ function NativeQrScanner({
                 {onlyPhoneNumberMissing
                   ? 'Add Phone Number'
                   : onlyNameMissing
-                    ? 'Add Full Name'
+                    ? 'Add Your Names'
                     : 'Complete Contact Details'}
               </Text>
             </TouchableOpacity>
@@ -2680,7 +2991,15 @@ function NativeQrScanner({
             <Text style={styles.qrPermissionText}>
               {loadingBingo
                 ? 'Checking the current event before starting the camera.'
-                : 'Close and reopen the scanner to refresh the event settings.'}
+                : bingoError || 'Close and reopen the scanner to refresh the event settings.'}
+            </Text>
+          </View>
+        ) : !scannerConfigVerified ? (
+          <View style={styles.qrPermissionPanel}>
+            <ActivityIndicator size="large" color={BRAND_COLOR} />
+            <Text style={styles.qrPermissionTitle}>Checking scanner availability</Text>
+            <Text style={styles.qrPermissionText}>
+              {bingoError || 'Retrying the event settings shortly. Your saved progress is unchanged.'}
             </Text>
           </View>
         ) : participationNoticeLoading ? (
@@ -2793,12 +3112,12 @@ function NativeQrScanner({
           <View style={styles.qrPermissionPanel}>
             <QrCode size={52} color={BRAND_COLOR} strokeWidth={1.8} />
             <Text style={styles.qrPermissionTitle}>
-              Scanning opens at the show
+              Scanning is not open right now
             </Text>
             <Text style={styles.qrPermissionText}>
               QR Bingo booth scans are available at{' '}
               {eventConfig?.event_name || 'the wedding show'} from{' '}
-              {formatPromotionDate(eventConfig?.history_starts_at)} until{' '}
+              {formatPromotionDate(eventConfig?.scan_opens_at)} until{' '}
               {formatPromotionDate(eventConfig?.entry_closes_at)}.
             </Text>
           </View>
@@ -2969,7 +3288,8 @@ function NativeQrScanner({
               {vendors.map((vendor) => {
                 const isScanned = scannedVendorIds.has(vendor.id);
                 const canReviewVendorDraw =
-                  isScanned && vendorDrawsEnabled && participationNoticeAccepted;
+                  isScanned && (isolatedFixtureActive || inShowScannedVendorIds.has(vendor.id)) &&
+                  vendorDrawsEnabled && participationNoticeAccepted;
                 return (
                   <TouchableOpacity
                     key={vendor.id}
@@ -3078,10 +3398,8 @@ function NativeQrScanner({
               ) : null}
               {raffleOffer?.email_test_fixture ? (
                 <Text style={styles.raffleModalText}>
-                  Isolated prize-email QA fixture only. No real prize is
-                  awarded. If this controlled test entry is selected and
-                  verified, one notice is sent only to the allowlisted test
-                  mailbox; no vendor copy is sent.
+                  Test emails are sent only to the approved test recipient.
+                  No real prize is awarded, and real draw entries are not included.
                 </Text>
               ) : null}
               {raffleOffer?.prize_description ? (
@@ -3093,15 +3411,7 @@ function NativeQrScanner({
                 Approximate prize value / maximum savings: $
                 {Number(raffleOffer?.prize_approx_value_cad || 0).toFixed(2)}{' '}
                 CAD{`\n`}
-                Maximum winners:{' '}
-                {normalizeRaffleMaxWinners(
-                  raffleOffer?.max_winners || raffleOffer?.prize_count,
-                )}
-                {`\n`}
-                Repeat-winner rule:{' '}
-                {raffleOffer?.exclude_previous_winners !== false
-                  ? 'The same couple will not be selected more than once.'
-                  : 'A prior verified winner remains eligible for another random selection.'}
+                One winning couple per draw.
               </Text>
               {raffleOffer?.eligibility_region ? (
                 <Text style={styles.raffleModalText}>
@@ -3391,6 +3701,8 @@ function NativeHome({
   onEmailLogin,
   onMemberSignup,
   onCompleteProfile,
+  onRefreshQrContact,
+  qrContactProfile,
   googleLoginLoading,
   appleBrowserLoginLoading,
   expiredSessionLoginRequest,
@@ -3414,12 +3726,14 @@ function NativeHome({
   onOpenQrScanner: () => void;
   qrContactCompletionRequested: boolean;
   onCancelQrContactCompletion: () => void;
-  onAppleSignIn: (role: SignupRole, consent?: SignupConsent) => void;
+  onAppleSignIn: (role: SignupRole, consent?: SignupConsent, onSignupRequired?: () => void) => void;
   onAuthIntentChange: () => void;
   onGoogleSignIn: (role: SignupRole, consent?: SignupConsent) => void;
   onEmailLogin: (credentials: LoginCredentials) => Promise<void>;
   onMemberSignup: (signup: MemberSignup) => Promise<void>;
-  onCompleteProfile: (profile: ContactProfile) => Promise<void>;
+  onCompleteProfile: (profile: ContactProfile) => Promise<boolean | void>;
+  onRefreshQrContact: () => Promise<boolean | void>;
+  qrContactProfile: QrBingoContactProfile | null;
   googleLoginLoading: boolean;
   appleBrowserLoginLoading: boolean;
   expiredSessionLoginRequest: { id: number; role: SignupRole } | null;
@@ -3448,15 +3762,27 @@ function NativeHome({
   const [showPassword, setShowPassword] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [wizardStep, setWizardStep] = useState<1 | 2>(1);
-  const [profileFirstName, setProfileFirstName] = useState(
-    editableQrProfileFirstName(member?.first_name, member?.last_name),
-  );
-  const [profileEmail, setProfileEmail] = useState(member?.email || '');
-  const [profilePhone, setProfilePhone] = useState(member?.phone_number || '');
-  const [profileWeddingDate, setProfileWeddingDate] = useState(
-    normalizeWeddingDate(member?.wedding_date),
-  );
+  const [profileFirstName, setProfileFirstName] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
+  const [profilePhone, setProfilePhone] = useState('');
+  const profilePhoneInputRef = useRef<TextInput>(null);
+  const dismissProfilePhoneKeyboard = () => {
+    profilePhoneInputRef.current?.blur();
+    Keyboard.dismiss();
+  };
+  const [profileWeddingDate, setProfileWeddingDate] = useState('');
+  const [profileWeddingVenue, setProfileWeddingVenue] = useState('');
+  const profileWeddingVenueInputRef = useRef<TextInput>(null);
   const [showWeddingPicker, setShowWeddingPicker] = useState(false);
+  const toggleWeddingDateCalendar = () => {
+    profilePhoneInputRef.current?.blur();
+    profileWeddingVenueInputRef.current?.blur();
+    Keyboard.dismiss();
+    setShowWeddingPicker((shown) => !shown);
+  };
+  const closeWeddingDateCalendar = () => {
+    setShowWeddingPicker(false);
+  };
   const [signupConsentAccepted, setSignupConsentAccepted] = useState(false);
   const [qrMenuEventConfig, setQrMenuEventConfig] =
     useState<QrBingoEventConfig | null>(null);
@@ -3515,9 +3841,8 @@ function NativeHome({
   const [rafflePrizeDescription, setRafflePrizeDescription] = useState('');
   const [rafflePrizeApproxValueCad, setRafflePrizeApproxValueCad] =
     useState('');
-  const [raffleMaxWinners, setRaffleMaxWinners] = useState<1 | 2 | 3>(1);
-  const [raffleExcludePreviousWinners, setRaffleExcludePreviousWinners] =
-    useState(true);
+  const raffleMaxWinners = 1;
+  const raffleExcludePreviousWinners = true;
   const [raffleLegalAccepted, setRaffleLegalAccepted] = useState(false);
   const [vendorRaffleRulesViewedVersion, setVendorRaffleRulesViewedVersion] =
     useState('');
@@ -3546,19 +3871,13 @@ function NativeHome({
   const vendorRaffleEntriesAutoLoadRef = useRef(false);
 
   useEffect(() => {
-    setProfileFirstName(
-      editableQrProfileFirstName(member?.first_name, member?.last_name),
-    );
-    setProfileEmail(member?.email || '');
-    setProfilePhone(member?.phone_number || '');
-    setProfileWeddingDate(normalizeWeddingDate(member?.wedding_date));
-  }, [
-    member?.email,
-    member?.first_name,
-    member?.last_name,
-    member?.phone_number,
-    member?.wedding_date,
-  ]);
+    setProfileFirstName(qrContactProfile?.name || '');
+    setProfileEmail(qrContactProfile?.email || '');
+    setProfilePhone(qrContactProfile?.phone || '');
+    setProfileWeddingDate(normalizeWeddingDate(qrContactProfile?.wedding_date));
+    setProfileWeddingVenue(qrContactProfile?.wedding_date ? qrContactProfile.wedding_venue || '' : '');
+    setShowWeddingPicker(false);
+  }, [qrContactProfile]);
 
   useEffect(() => {
     if (role === 'vendor') {
@@ -3574,6 +3893,21 @@ function NativeHome({
   const showExistingLogin = () => {
     setAuthMode('login');
     setWizardStep(2);
+  };
+
+  const showSignupAfterAppleLogin = () => {
+    // Open the selected account path; creating it still needs fresh consent
+    // and an explicit tap on Sign up with Apple.
+    setSignupConsentAccepted(false);
+    setPassword('');
+    setShowPassword(false);
+    setAuthMode('signup');
+    setWizardStep(2);
+  };
+
+  const startAppleSignIn = () => {
+    if (appleBrowserLoginLoading) return;
+    onAppleSignIn(role, undefined, showSignupAfterAppleLogin);
   };
 
   const showSignupConsentAlert = () => {
@@ -3763,15 +4097,20 @@ function NativeHome({
     .map((value) => String(value || '').trim())
     .filter(Boolean)
     .join(' ');
-  const qrMissingContactFields = missingQrContactFields(member);
+  const qrMissingContactFields = qrContactProfile?.missing_fields || [];
   const qrNeedsContactName = qrMissingContactFields.includes('name');
   const qrNeedsContactPhone = qrMissingContactFields.includes('phone number');
+  const qrNeedsContactEmail = qrMissingContactFields.includes('email');
   const qrContactProfileHint =
-    qrNeedsContactName && qrNeedsContactPhone
-      ? 'Add your full name and phone number to continue with QR Bingo.'
+    qrNeedsContactEmail
+        ? 'Add a contact email to continue with QR Bingo.'
+        : qrNeedsContactName && qrNeedsContactPhone
+      ? 'Add your names and phone number to continue with QR Bingo.'
       : qrNeedsContactName
-        ? 'Add your full name to continue with QR Bingo.'
-        : 'Add a phone number to continue with QR Bingo.';
+        ? 'Add your names to continue with QR Bingo.'
+        : qrNeedsContactPhone
+          ? 'Add a phone number to continue with QR Bingo.'
+          : 'Check your details, then continue to QR Bingo.';
   const displayName =
     memberIsCouple && isReservedQrContactName(memberContactName)
       ? member?.email
@@ -3828,7 +4167,7 @@ function NativeHome({
       prizeDescription: string,
       prizeApproxValueCad: string,
       maxWinners: number,
-      excludePreviousWinners: boolean,
+      _excludePreviousWinners: boolean,
       legalAccepted: boolean,
       legalTermsVersion: string,
     ) =>
@@ -3837,7 +4176,7 @@ function NativeHome({
         prize_description: prizeDescription,
         prize_approx_value_cad: prizeApproxValueCad,
         max_winners: normalizeRaffleMaxWinners(maxWinners),
-        exclude_previous_winners: excludePreviousWinners,
+        exclude_previous_winners: true,
         legal_terms_accepted: legalAccepted,
         legal_terms_version: legalAccepted ? legalTermsVersion : '',
       }),
@@ -3874,12 +4213,6 @@ function NativeHome({
         data.settings?.prize_approx_value_cad
           ? String(data.settings.prize_approx_value_cad)
           : '',
-      );
-      setRaffleMaxWinners(
-        normalizeRaffleMaxWinners(data.settings?.max_winners),
-      );
-      setRaffleExcludePreviousWinners(
-        data.settings?.exclude_previous_winners !== false,
       );
       const currentRulesAccepted =
         data.vendor_acceptance_current ??
@@ -4055,30 +4388,24 @@ function NativeHome({
       const draftMaxWinners = raffleMaxWinners;
       const draftExcludePreviousWinners = raffleExcludePreviousWinners;
       const draftLegalAccepted = raffleLegalAccepted;
-      const materialTermsLocked = Boolean(vendorRaffle?.material_terms_locked);
+      const prizeDetailsLocked = areVendorPrizeDetailsLocked(vendorRaffle);
       const currentSettings = vendorRaffle?.settings;
-      const requestPrizeTitle = materialTermsLocked
+      const requestPrizeTitle = prizeDetailsLocked
         ? currentSettings?.prize_title || draftPrizeTitle
         : draftPrizeDescription.trim().split(/\r?\n/)[0]?.trim() ||
           draftPrizeTitle;
-      const requestPrizeDescription = materialTermsLocked
+      const requestPrizeDescription = prizeDetailsLocked
         ? currentSettings?.prize_description || draftPrizeDescription
         : draftPrizeDescription;
-      const requestPrizeApproxValueCad = materialTermsLocked
+      const requestPrizeApproxValueCad = prizeDetailsLocked
         ? Number(
             currentSettings?.prize_approx_value_cad || draftPrizeApproxValueCad,
           )
         : Number(draftPrizeApproxValueCad);
-      const requestMaxWinners = materialTermsLocked
-        ? normalizeRaffleMaxWinners(currentSettings?.max_winners)
-        : draftMaxWinners;
-      const requestExcludePreviousWinners = materialTermsLocked
-        ? currentSettings?.exclude_previous_winners !== false
-        : draftExcludePreviousWinners;
-      // Material prize terms stay locked after opening, but a vendor must still
-      // be able to accept a newly published rules version. Keep acceptance tied
-      // to the current draft and exact current version instead of freezing the
-      // previous acceptance with the prize fields.
+      const requestMaxWinners = 1;
+      const requestExcludePreviousWinners = true;
+      // Prize details remain editable until the winner email is sent. Rules
+      // acceptance remains tied to the current draft and current rules version.
       const requestLegalAccepted = draftLegalAccepted;
       const draftRulesViewed =
         requestLegalAccepted &&
@@ -4202,12 +4529,6 @@ function NativeHome({
           setRafflePrizeTitle(data.settings?.prize_title || '');
           setRafflePrizeDescription(displayDescription);
           setRafflePrizeApproxValueCad(displayCurrency);
-          setRaffleMaxWinners(
-            normalizeRaffleMaxWinners(data.settings?.max_winners),
-          );
-          setRaffleExcludePreviousWinners(
-            data.settings?.exclude_previous_winners !== false,
-          );
           const currentRulesAccepted =
             data.vendor_acceptance_current ??
             Boolean(
@@ -4666,7 +4987,7 @@ function NativeHome({
     Alert.alert(
       included ? 'Add back to the draw?' : 'Remove from the draw?',
       included
-        ? `${entry.couple_name || 'This couple'} can be picked again, unless your previous-winner setting prevents it. Their contact details stay in your list.`
+        ? `${entry.couple_name || 'This couple'} can be picked again if eligible. Their contact details stay in your list.`
         : `${entry.couple_name || 'This couple'} cannot be picked unless you add them back. Their contact details stay in your list.`,
       [
         {
@@ -4780,7 +5101,7 @@ function NativeHome({
               Alert.alert(
                 included ? 'Added back to the draw' : 'Removed from the draw',
                 included
-                  ? 'This couple is back in the draw. Your previous-winner setting still applies. Their contact details stay in your list.'
+                  ? 'This couple is back in the draw if eligible. Their contact details stay in your list.'
                   : 'This couple cannot be picked now. Their contact details stay in your list.',
               );
             } catch (error) {
@@ -5312,9 +5633,13 @@ function NativeHome({
   };
 
   const vendorDrawPrizePreview =
-    rafflePrizeDescription.trim().split(/\r?\n/)[0]?.trim() ||
+    rafflePrizeDescription.trim() ||
     rafflePrizeTitle.trim() ||
     'Your prize';
+  const vendorDrawPrizeValuePreview =
+    Number.isFinite(Number(rafflePrizeApproxValueCad)) && Number(rafflePrizeApproxValueCad) > 0
+      ? `$${Number(rafflePrizeApproxValueCad).toFixed(2)} CAD`
+      : '';
   const vendorDrawNamePreview =
     vendorRaffle?.vendor?.name || displayName || 'your business';
   const vendorDrawEmailSubjectPreview =
@@ -5333,12 +5658,14 @@ function NativeHome({
       vendorRaffle?.settings?.max_winners ||
       vendorRaffle?.max_draws,
   );
-  const vendorRaffleDrawsRemaining =
+  const vendorRaffleDrawsRemaining = Math.max(0, Math.min(
+    vendorRaffleMaxDraws - vendorRaffleDrawCount,
     typeof vendorRaffle?.remaining_winner_slots === 'number'
       ? vendorRaffle.remaining_winner_slots
       : typeof vendorRaffle?.draws_remaining === 'number'
         ? vendorRaffle.draws_remaining
-        : Math.max(0, vendorRaffleMaxDraws - vendorRaffleDrawCount);
+        : vendorRaffleMaxDraws - vendorRaffleDrawCount,
+  ));
   const vendorRaffleEntrantCount = Number(
     vendorRaffle?.entrant_count ?? vendorRaffle?.entry_count ?? 0,
   );
@@ -5373,9 +5700,7 @@ function NativeHome({
     !vendorRaffle?.outbound_email_enabled &&
     !vendorRaffleCanTestSuppressedNotice,
   );
-  const vendorRaffleMaterialLocked = Boolean(
-    vendorRaffle?.material_terms_locked,
-  );
+  const vendorRafflePrizeDetailsLocked = areVendorPrizeDetailsLocked(vendorRaffle);
   const vendorRaffleSettingsMutationBusy = Boolean(
     vendorRaffleSaving ||
     vendorRaffleDrawing ||
@@ -5384,12 +5709,10 @@ function NativeHome({
     vendorRaffleExporting ||
     vendorRaffleEntryUpdatingReference,
   );
-  const vendorRafflePrizeControlsDisabled =
-    vendorRaffleMaterialLocked || vendorRaffleSettingsMutationBusy;
-  // A background draft save must not dismiss the keyboard. Material locks,
-  // opening a draw and other mutations still prevent prize editing.
+  // A background draft save must not dismiss the keyboard. Opening entries or
+  // choosing a potential winner does not lock the prize; sending email does.
   const vendorRafflePrizeTextDisabled = Boolean(
-    vendorRaffleMaterialLocked || raffleEnabled ||
+    vendorRafflePrizeDetailsLocked ||
     vendorRaffleDrawing || vendorRaffleSendingDrawId || vendorRaffleReviewing ||
     vendorRaffleExporting || vendorRaffleEntryUpdatingReference,
   );
@@ -5441,6 +5764,7 @@ function NativeHome({
         entry.couple_email,
         entry.couple_phone,
         entry.couple_wedding_date,
+        entry.couple_wedding_venue,
       ]
         .filter(Boolean)
         .join(' ')
@@ -5522,16 +5846,10 @@ function NativeHome({
   };
 
   const saveProfile = () => {
-    if (profileSaveLoading || profileSavePressInFlightRef.current) return;
+    if (!qrContactProfile || profileSaveLoading || profileSavePressInFlightRef.current) return;
 
     const missingRequiredFields: string[] = [];
-    const profileDisplayName = [
-      profileFirstName,
-      String(member?.last_name || '').trim(),
-    ]
-      .map((value) => String(value || '').trim())
-      .filter(Boolean)
-      .join(' ');
+    const profileDisplayName = profileFirstName.trim();
     if (
       !profileFirstName.trim() ||
       isReservedQrContactName(profileDisplayName)
@@ -5560,8 +5878,13 @@ function NativeHome({
     if (!isValidEmail(profileEmail)) {
       Alert.alert(
         'Enter a valid email',
-        'Use an email address that can receive website login, vendor-contact, and app messages.',
+        'Use an email address where a vendor can contact you about your draw entry.',
       );
+      return;
+    }
+
+    if (qrContactCompletionRequested && isApplePrivateRelayEmail(profileEmail)) {
+      Alert.alert('Add a contact email', 'Use a non-Apple-relay email for QR Bingo. Your Apple sign-in stays the same.');
       return;
     }
 
@@ -5575,17 +5898,55 @@ function NativeHome({
       return;
     }
 
+    const weddingDate = normalizeWeddingDateInput(profileWeddingDate);
+    if (memberIsCouple && profileWeddingDate.trim() && !weddingDate) {
+      Alert.alert('Check your wedding date', 'Choose your wedding date from the calendar.');
+      return;
+    }
+    const weddingVenue = weddingDate ? profileWeddingVenue.trim() : '';
+    if (weddingVenue.length > 200 || /[<>\u0000-\u001f\u007f]/.test(weddingVenue)) {
+      Alert.alert('Check your wedding venue', 'Use a venue name up to 200 characters.');
+      return;
+    }
+
     Keyboard.dismiss();
     profileSavePressInFlightRef.current = true;
     void onCompleteProfile({
       firstName: profileFirstName.trim(),
       email: profileEmail.trim().toLowerCase(),
       phone: profilePhone.trim(),
-      ...(memberIsCouple ? { weddingDate: profileWeddingDate.trim() } : {}),
+      ...(memberIsCouple ? { weddingDate, weddingVenue } : {}),
     }).finally(() => {
       profileSavePressInFlightRef.current = false;
     });
   };
+
+  const weddingDatePickerElement = showWeddingPicker ? (
+    <DateTimePicker
+      value={parseWeddingDate(normalizeWeddingDateInput(profileWeddingDate))}
+      testID="profile-wedding-date-picker"
+      mode="date"
+      display={Platform.OS === 'ios' ? 'inline' : 'default'}
+      minimumDate={new Date()}
+      themeVariant="light"
+      accentColor={BRAND_COLOR}
+      textColor="#2E2E32"
+      {...(Platform.OS === 'android' && profileWeddingDate ? { neutralButton: { label: 'Clear date' } } : {})}
+      onChange={(event, selectedDate) => {
+        if (event.type === 'set' && selectedDate) {
+          setProfileWeddingDate(formatWeddingDate(selectedDate));
+          closeWeddingDateCalendar();
+        } else if (Platform.OS !== 'ios') {
+          if (event.type === 'neutralButtonPressed') {
+            setProfileWeddingDate('');
+            setProfileWeddingVenue('');
+          }
+          closeWeddingDateCalendar();
+        }
+      }}
+      style={styles.weddingDatePicker}
+    />
+  ) : null;
 
   return (
     <SafeAreaView style={styles.nativeContainer} edges={['top']}>
@@ -5803,11 +6164,9 @@ function NativeHome({
                   >
                     {displayName}
                   </Text>
-                  {usesApplePrivateRelayEmail ? (
+                  {usesApplePrivateRelayEmail && shouldCompleteProfile ? (
                     <Text style={styles.profileHint} accessibilityRole="text">
-                      Apple forwards WeddingWin and vendor-contact emails
-                      through this private address. Keep Apple email forwarding
-                      enabled to receive them.
+                      Your Apple sign-in stays the same.
                     </Text>
                   ) : null}
                   {qrContactCompletionRequested ? (
@@ -5817,6 +6176,18 @@ function NativeHome({
                   ) : null}
                   {shouldCompleteProfile ? (
                     <>
+                      {!qrContactProfile ? (
+                        profileSaveLoading ? <ActivityIndicator size="large" color={BRAND_COLOR} /> : (
+                          <TouchableOpacity style={styles.secondaryAction}
+                            onPress={() => { void onRefreshQrContact(); }}
+                            accessibilityRole="button" accessibilityLabel="Retry loading Bingo contact details">
+                            <Text style={styles.secondaryActionText}>Try again</Text>
+                          </TouchableOpacity>
+                        )
+                      ) : (
+                      <>
+                      <Text style={styles.profileFieldLabel}>Your name &amp; your partner’s name</Text>
+                      <Text style={styles.profileHint}>First names are fine.</Text>
                       <View style={styles.profileInputShell}>
                         <UserRound
                           size={20}
@@ -5825,76 +6196,161 @@ function NativeHome({
                         />
                         <TextInput
                           value={profileFirstName}
+                          editable={!profileSaveLoading}
                           onChangeText={setProfileFirstName}
-                          placeholder="Full name"
+                          placeholder="e.g. Alex & Jamie"
                           placeholderTextColor="#A8A8AD"
                           textContentType="name"
-                          accessibilityLabel="Full name required for QR Bingo"
+                          accessibilityLabel="Your name and your partner’s name"
+                          accessibilityHint="First names are fine."
+                          maxLength={160}
                           style={styles.textInput}
                         />
                       </View>
                       <View style={styles.profileInputShell}>
                         <Mail size={20} color="#7D7D80" strokeWidth={1.7} />
-                        <Text style={styles.readOnlyInput} numberOfLines={1}>
-                          {member.email}
-                        </Text>
+                          <TextInput
+                            value={profileEmail}
+                            editable={!profileSaveLoading}
+                            onChangeText={setProfileEmail}
+                            placeholder="Contact email"
+                            placeholderTextColor="#A8A8AD"
+                            keyboardType="email-address"
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            textContentType="emailAddress"
+                            autoComplete="email"
+                            accessibilityLabel="Contact email for QR Bingo"
+                            style={styles.textInput}
+                          />
                       </View>
                       <View style={styles.profileInputShell}>
                         <Phone size={20} color="#7D7D80" strokeWidth={1.7} />
                         <TextInput
+                          ref={profilePhoneInputRef}
+                          testID="profile-phone-input"
                           value={profilePhone}
+                          editable={!profileSaveLoading}
                           onChangeText={setProfilePhone}
+                          onFocus={() => setShowWeddingPicker(false)}
                           placeholder="Phone number"
                           placeholderTextColor="#A8A8AD"
                           keyboardType="phone-pad"
+                          returnKeyType="done"
+                          onSubmitEditing={dismissProfilePhoneKeyboard}
+                          inputAccessoryViewID={Platform.OS === 'ios' ? 'profile-phone-keyboard-toolbar' : undefined}
                           textContentType="telephoneNumber"
                           autoComplete="tel"
                           accessibilityLabel="Phone number required for QR Bingo"
                           style={styles.textInput}
                         />
                       </View>
-                      <TouchableOpacity
-                        style={styles.profileInputShell}
-                        activeOpacity={0.82}
-                        onPress={() => setShowWeddingPicker((shown) => !shown)}
-                        accessibilityRole="button"
-                        accessibilityLabel="Choose optional wedding date"
-                      >
-                        <CalendarDays
-                          size={20}
-                          color="#7D7D80"
-                          strokeWidth={1.7}
-                        />
-                        <Text
-                          style={[
-                            styles.readOnlyInput,
-                            !profileWeddingDate && styles.placeholderText,
-                          ]}
+                      <Text style={styles.weddingDateFieldLabel}>Wedding date</Text>
+                      <View style={styles.weddingDateChoiceRow}>
+                        <TouchableOpacity
+                          style={styles.weddingDateCalendarButton}
+                          disabled={profileSaveLoading}
+                          activeOpacity={0.82}
+                          onPress={toggleWeddingDateCalendar}
+                          testID="profile-wedding-date-calendar"
+                          accessibilityRole="button"
+                          accessibilityLabel="Choose optional wedding date"
+                          accessibilityValue={{ text: profileWeddingDate || 'Not selected' }}
+                          accessibilityState={{ expanded: showWeddingPicker }}
                         >
-                          {profileWeddingDate || 'Wedding date (optional)'}
-                        </Text>
-                      </TouchableOpacity>
-                      {showWeddingPicker ? (
-                        <DateTimePicker
-                          value={parseWeddingDate(profileWeddingDate)}
-                          mode="date"
-                          display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                          minimumDate={new Date()}
-                          themeVariant="light"
-                          accentColor={BRAND_COLOR}
-                          textColor="#2E2E32"
-                          onChange={(_, selectedDate) => {
-                            if (selectedDate) {
-                              setProfileWeddingDate(
-                                formatWeddingDate(selectedDate),
-                              );
-                              setShowWeddingPicker(false);
-                            } else if (Platform.OS !== 'ios') {
-                              setShowWeddingPicker(false);
-                            }
+                          <CalendarDays size={24} color={BRAND_COLOR} strokeWidth={1.8} />
+                          <Text style={styles.weddingDateCalendarButtonText}>
+                            {profileWeddingDate
+                              ? parseWeddingDate(profileWeddingDate).toLocaleDateString('en-CA', {
+                                  year: 'numeric', month: 'long', day: 'numeric',
+                                })
+                              : 'Choose wedding date'}
+                          </Text>
+                          <ChevronRight size={20} color={BRAND_COLOR} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.weddingDateUndecidedButton}
+                          disabled={profileSaveLoading}
+                          activeOpacity={0.82}
+                          testID="profile-wedding-date-undecided"
+                          accessibilityRole="button"
+                          accessibilityLabel="Wedding date to be determined"
+                          onPress={() => {
+                            Keyboard.dismiss();
+                            setProfileWeddingDate('');
+                            setProfileWeddingVenue('');
+                            closeWeddingDateCalendar();
                           }}
-                          style={styles.weddingDatePicker}
-                        />
+                        >
+                          <Text style={styles.weddingDateUndecidedText}>Not sure yet</Text>
+                        </TouchableOpacity>
+                      </View>
+                      {Platform.OS === 'ios' ? (
+                        <Modal
+                          visible={showWeddingPicker}
+                          transparent
+                          animationType="fade"
+                          onRequestClose={closeWeddingDateCalendar}
+                          testID="profile-wedding-date-modal"
+                        >
+                          <SafeAreaView style={styles.weddingDateModalBackdrop}>
+                            <View
+                              style={styles.weddingDateModalCard}
+                              accessibilityViewIsModal
+                              onAccessibilityEscape={closeWeddingDateCalendar}
+                            >
+                              <View style={styles.weddingDateModalHeader}>
+                                <Text style={styles.weddingDateModalTitle} accessibilityRole="header">
+                                  Wedding date
+                                </Text>
+                                <TouchableOpacity
+                                  style={styles.weddingDateModalClose}
+                                  activeOpacity={0.76}
+                                  onPress={closeWeddingDateCalendar}
+                                  testID="profile-wedding-date-calendar-close"
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Close wedding date calendar"
+                                >
+                                  <X size={24} color="#655652" strokeWidth={2} />
+                                </TouchableOpacity>
+                              </View>
+                              <ScrollView bounces={false} contentContainerStyle={styles.weddingDateModalBody}>
+                                {weddingDatePickerElement}
+                              </ScrollView>
+                              {profileWeddingDate ? (
+                                <TouchableOpacity style={styles.signOutButton}
+                                  accessibilityRole="button" accessibilityLabel="Clear wedding date"
+                                  onPress={() => { setProfileWeddingDate(''); setProfileWeddingVenue(''); closeWeddingDateCalendar(); }}>
+                                  <Text style={styles.signOutText}>Clear date</Text>
+                                </TouchableOpacity>
+                              ) : null}
+                            </View>
+                          </SafeAreaView>
+                        </Modal>
+                      ) : weddingDatePickerElement}
+                      {profileWeddingDate ? (
+                        <>
+                          <Text style={styles.weddingDateFieldLabel}>Wedding venue</Text>
+                          <View style={styles.profileInputShell}>
+                            <MapPin size={20} color="#7D7D80" strokeWidth={1.7} />
+                            <TextInput
+                              ref={profileWeddingVenueInputRef}
+                              testID="profile-wedding-venue-input"
+                              accessibilityLabel="Wedding venue (optional)"
+                              value={profileWeddingVenue}
+                              onChangeText={setProfileWeddingVenue}
+                              onFocus={closeWeddingDateCalendar}
+                              editable={!profileSaveLoading}
+                              maxLength={200}
+                              placeholder="Venue name"
+                              placeholderTextColor="#A8A8AD"
+                              autoCapitalize="words"
+                              returnKeyType="done"
+                              onSubmitEditing={() => Keyboard.dismiss()}
+                              style={styles.textInput}
+                            />
+                          </View>
+                        </>
                       ) : null}
                       <TouchableOpacity
                         style={[
@@ -5915,6 +6371,8 @@ function NativeHome({
                           </Text>
                         )}
                       </TouchableOpacity>
+                      </>
+                      )}
                       <TouchableOpacity
                         style={[
                           styles.signOutButton,
@@ -6559,9 +7017,7 @@ function NativeHome({
                         appleBrowserLoginLoading && styles.appleButtonDisabled,
                       ]}
                       accessibilityState={{ busy: appleBrowserLoginLoading }}
-                      onPress={() => {
-                        if (!appleBrowserLoginLoading) onAppleSignIn(role);
-                      }}
+                      onPress={startAppleSignIn}
                     />
                   ) : null}
                 </>
@@ -6606,6 +7062,23 @@ function NativeHome({
           ) : null}
         </ImageBackground>
       </ScrollView>
+      {Platform.OS === 'ios' && shouldCompleteProfile && qrContactProfile ? (
+        <InputAccessoryView nativeID="profile-phone-keyboard-toolbar" backgroundColor="#FFF9F6">
+          <View style={styles.profileKeyboardToolbar}>
+            <TouchableOpacity
+              testID="profile-phone-keyboard-done"
+              style={styles.profileKeyboardDoneButton}
+              onPress={dismissProfilePhoneKeyboard}
+              accessibilityRole="button"
+              accessibilityLabel="Done entering phone number"
+              accessibilityHint="Closes the keypad so you can review the rest of your contact details"
+              activeOpacity={0.76}
+            >
+              <Text style={styles.profileKeyboardDoneText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </InputAccessoryView>
+      ) : null}
       <Modal
         visible={showVendorRaffle}
         transparent
@@ -6687,9 +7160,8 @@ function NativeHome({
                           Email test mode — no real prize
                         </Text>
                         <Text style={styles.vendorRaffleDrawStatusText}>
-                          Only the approved test recipient can receive this
-                          email. Real draw entries are not included, and no
-                          vendor email is sent.
+                          Test emails are sent only to the approved test recipient.
+                          No real prize is awarded, and real draw entries are not included.
                         </Text>
                       </View>
                     ) : null}
@@ -6963,12 +7435,9 @@ function NativeHome({
                                     Why prize details lock
                                   </Text>
                                   <Text style={styles.vendorRaffleInfoText}>
-                                    Once a promotion opens or receives an entry,
-                                    its prize, winner count, and repeat-winner
-                                    rule stay fixed so every entrant receives
-                                    the offer they accepted. Close the current
-                                    draw before creating a materially different
-                                    prize under a new rules version.
+                                    You can edit your prize and its value until
+                                    you send the winner email. Event, eligibility
+                                    and entry rules stay unchanged.
                                   </Text>
                                 </View>
                                 <View style={styles.vendorRaffleInfoCard}>
@@ -7214,9 +7683,15 @@ function NativeHome({
                               />
                             </View>
                             <Text style={styles.vendorRaffleFieldHelp}>
-                              {vendorRaffleMaterialLocked
-                                ? 'This draw is open, so prize details are locked.'
-                                : 'Start with the prize name. Add any expiry date or conditions below it.'}
+                              {vendorRafflePrizeDetailsLocked
+                                ? vendorRaffle?.prize_details_lock_reason === 'sending'
+                                  ? 'The winner email is being sent. Prize details are temporarily locked.'
+                                  : vendorRaffle?.prize_details_lock_reason === 'unconfirmed'
+                                    ? 'Email delivery is being checked. Prize details are temporarily locked.'
+                                    : vendorRaffle?.prize_details_lock_reason === 'sent'
+                                      ? 'Prize details are locked because the winner email has been sent.'
+                                      : 'Prize details are currently locked. Refresh to check their status.'
+                                : 'Add the prize name, expiry date and conditions. You can edit this until you send the winner email.'}
                             </Text>
                             <Text style={styles.inputLabel}>
                               Value or maximum savings ($ CAD)
@@ -7245,103 +7720,9 @@ function NativeHome({
                             <Text style={styles.vendorRaffleFieldHelp}>
                               For a discount, enter the most the winner can save.
                             </Text>
-                            <Text style={styles.inputLabel}>
-                              Number of winners
-                            </Text>
-                            <View style={styles.vendorRaffleWinnerCountOptions}>
-                              {([1, 2, 3] as const).map((count) => (
-                                <TouchableOpacity
-                                  key={count}
-                                  style={[
-                                    styles.vendorRaffleWinnerCountOption,
-                                    raffleMaxWinners === count &&
-                                      styles.vendorRaffleWinnerCountOptionSelected,
-                                    vendorRafflePrizeControlsDisabled &&
-                                      styles.loginButtonDisabled,
-                                  ]}
-                                  activeOpacity={0.78}
-                                  disabled={vendorRafflePrizeControlsDisabled}
-                                  onPress={() => {
-                                    markVendorRaffleLocalEdit();
-                                    setRaffleMaxWinners(count);
-                                  }}
-                                  testID={`vendor-draw-winner-count-${count}`}
-                                  accessibilityRole="button"
-                                  accessibilityLabel={`${count} ${count === 1 ? 'winner' : 'winners'}`}
-                                  accessibilityState={{
-                                    selected: raffleMaxWinners === count,
-                                    disabled: vendorRafflePrizeControlsDisabled,
-                                  }}
-                                >
-                                  <Text
-                                    style={[
-                                      styles.vendorRaffleWinnerCountOptionText,
-                                      raffleMaxWinners === count &&
-                                        styles.vendorRaffleWinnerCountOptionTextSelected,
-                                    ]}
-                                  >
-                                    {count}
-                                  </Text>
-                                </TouchableOpacity>
-                              ))}
-                            </View>
                             <Text style={styles.vendorRaffleFieldHelp}>
-                              Choose 1, 2, or 3.
+                              One winning couple per draw.
                             </Text>
-                            <TouchableOpacity
-                              style={[
-                                styles.vendorRaffleToggleRow,
-                                vendorRafflePrizeControlsDisabled &&
-                                  styles.loginButtonDisabled,
-                              ]}
-                              activeOpacity={0.8}
-                              disabled={vendorRafflePrizeControlsDisabled}
-                              onPress={() => {
-                                markVendorRaffleLocalEdit();
-                                setRaffleExcludePreviousWinners(
-                                  (value) => !value,
-                                );
-                              }}
-                              testID="vendor-draw-no-repeat-winners"
-                              accessibilityRole="switch"
-                              accessibilityLabel="Do not select the same couple twice"
-                              accessibilityState={{
-                                checked: raffleExcludePreviousWinners,
-                                disabled: vendorRafflePrizeControlsDisabled,
-                              }}
-                            >
-                              <View
-                                style={[
-                                  styles.vendorRaffleToggle,
-                                  raffleExcludePreviousWinners &&
-                                    styles.vendorRaffleToggleOn,
-                                ]}
-                              >
-                                <View
-                                  style={[
-                                    styles.vendorRaffleToggleKnob,
-                                    raffleExcludePreviousWinners &&
-                                      styles.vendorRaffleToggleKnobOn,
-                                  ]}
-                                />
-                              </View>
-                              <View style={styles.vendorRaffleToggleCopy}>
-                                <Text style={styles.vendorRaffleToggleTitle}>
-                                  A different couple each time
-                                </Text>
-                                <Text style={styles.vendorRaffleToggleText}>
-                                  {raffleExcludePreviousWinners
-                                    ? 'On — previous winners will not win again.'
-                                    : 'Off — the same couple can win again.'}
-                                </Text>
-                              </View>
-                            </TouchableOpacity>
-                            {vendorRaffleMaterialLocked ? (
-                              <Text style={styles.vendorRaffleFieldHelp}>
-                                Winner settings are locked for this draw. See
-                                Vendor Draw Rules for details.
-                              </Text>
-                            ) : null}
                           </View>
                         ) : null}
                         {vendorRaffleWizardStep === 2 ? (
@@ -7417,6 +7798,11 @@ function NativeHome({
                                   <Text style={styles.vendorRafflePreviewBody}>
                                     Draw item: {vendorDrawPrizePreview}
                                   </Text>
+                                  {vendorDrawPrizeValuePreview ? (
+                                    <Text style={styles.vendorRafflePreviewBody}>
+                                      Approximate value: {vendorDrawPrizeValuePreview}
+                                    </Text>
+                                  ) : null}
                                 </View>
                                 <Text style={styles.vendorRafflePreviewSection}>
                                   What happens next
@@ -7468,7 +7854,7 @@ function NativeHome({
                             </View>
                             <View style={styles.vendorRaffleStat}>
                               <Text style={styles.vendorRaffleStatValue}>
-                                {vendorRaffleDrawCount}/{vendorRaffleMaxDraws}
+                                {vendorRaffleDrawCount}
                               </Text>
                               <Text style={styles.vendorRaffleStatLabel}>
                                 Picked so far
@@ -7849,6 +8235,15 @@ function NativeHome({
                                       </Text>
                                     </View>
                                   </View>
+                                  {entry.couple_wedding_venue ? (
+                                    <View style={styles.vendorRaffleContactItem}>
+                                      <MapPin size={17} color="#AA565D" strokeWidth={2} />
+                                      <View style={styles.vendorRaffleContactItemCopy}>
+                                        <Text style={styles.vendorRaffleContactLabel}>Wedding venue</Text>
+                                        <Text style={styles.vendorRaffleContactValue}>{entry.couple_wedding_venue}</Text>
+                                      </View>
+                                    </View>
+                                  ) : null}
                                 </View>
                                 <TouchableOpacity
                                   style={styles.vendorRaffleEntryManageButton}
@@ -8091,7 +8486,7 @@ function NativeHome({
                                     : vendorRaffleWillSendVerifiedNotice
                                       ? 'Winner email ready'
                                       : vendorRaffleDrawsRemaining <= 0
-                                        ? 'All winner spots filled'
+                                        ? 'Your winner is selected'
                                         : !vendorRaffleHasEligibleEntries
                                           ? 'No couples available yet'
                                           : vendorRaffleCanPickWinner
@@ -8112,7 +8507,7 @@ function NativeHome({
                                         : !vendorRaffleHasEligibleEntries
                                           ? 'Eligible couples will appear here.'
                                           : vendorRaffleCanPickWinner
-                                            ? `${vendorRaffleDrawsRemaining} of ${vendorRaffleMaxDraws} potential-winner selections available.`
+                                            ? 'Ready to choose your winning couple.'
                                             : `Selection is available after ${formatPromotionDate(vendorRaffle?.draw_opens_at)}.`}
                             </Text>
                           </View>
@@ -8133,7 +8528,7 @@ function NativeHome({
                             accessibilityRole="button"
                             accessibilityLabel={
                               vendorRaffleDrawsRemaining <= 0
-                                  ? 'All winner spots filled'
+                                  ? 'Winner already selected'
                                   : 'Select potential winner'
                             }
                           >
@@ -8142,7 +8537,7 @@ function NativeHome({
                             ) : (
                               <Text style={styles.raffleEnterText}>
                                 {vendorRaffleDrawsRemaining <= 0
-                                    ? 'All Winner Spots Filled'
+                                    ? 'Winner Selected'
                                     : 'Select Potential Winner'}
                               </Text>
                             )}
@@ -8154,7 +8549,7 @@ function NativeHome({
                             </Text>
                           ) : vendorRaffleDrawsRemaining <= 0 ? (
                             <Text style={styles.vendorRaffleHint}>
-                              All winner spots are filled. You can still
+                              Your winner is selected. You can still
                               download the full contact list.
                             </Text>
                           ) : !vendorRaffleHasEligibleEntries ? (
@@ -9463,6 +9858,7 @@ export default function HomeScreen() {
   const [showNativeQrScanner, setShowNativeQrScanner] = useState(false);
   const [qrContactCompletionRequested, setQrContactCompletionRequested] =
     useState(false);
+  const [qrContactProfile, setQrContactProfile] = useState<QrBingoContactProfile | null>(null);
   const [vendorDrawOpenRequestId, setVendorDrawOpenRequestId] = useState(0);
   const vendorDrawOpenSequenceRef = useRef(0);
   const [pendingDashboardRedirect, setPendingDashboardRedirect] =
@@ -10106,18 +10502,11 @@ true;
     setShowNativeQrScanner(true);
   }, [invalidateNavigationIntent]);
 
-  const openQrContactCompletion = useCallback(() => {
-    invalidateNavigationIntent();
-    profileCompletionIntentRef.current += 1;
-    setShowNativeQrScanner(false);
-    hideWebsiteBrowser();
-    setQrContactCompletionRequested(true);
-  }, [hideWebsiteBrowser, invalidateNavigationIntent]);
-
   const cancelQrContactCompletion = useCallback(() => {
     invalidateNavigationIntent();
     profileCompletionIntentRef.current += 1;
     setQrContactCompletionRequested(false);
+    setQrContactProfile(null);
   }, [invalidateNavigationIntent]);
 
   useEffect(() => {
@@ -10171,6 +10560,7 @@ true;
     chatStatusRequestGenerationRef.current += 1;
     chatStatusInFlightRef.current = null;
     setQrContactCompletionRequested(false);
+    setQrContactProfile(null);
     setSelectedChatThreadToken('');
     setNativeChatError(null);
     setNativeChatNotice(null);
@@ -10272,6 +10662,33 @@ true;
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      const storageGeneration = getNativeSessionStorageGeneration();
+      // The email-confirmed route can update secure storage while this tab
+      // remains mounted. Only adopt a matching, current session on return.
+      void readNativeSessionStorage(async () => {
+        const [memberJson, sessionJson] = await Promise.all([
+          SecureStore.getItemAsync(NATIVE_MEMBER_SESSION_KEY),
+          SecureStore.getItemAsync(NATIVE_BRIDGE_SESSION_KEY),
+        ]);
+        return { memberJson, sessionJson };
+      }).then(({ memberJson, sessionJson }) => {
+        if (!active || logoutInFlightRef.current || pendingAppLogoutRef.current ||
+          accountDeletionIsInFlight() || storageGeneration !== getNativeSessionStorageGeneration() ||
+          !memberJson || !sessionJson) return;
+        const storedMember = JSON.parse(memberJson) as NativeMember;
+        const storedSession = JSON.parse(sessionJson) as NativeBridgeSession;
+        const currentSession = nativeBridgeSessionRef.current;
+        if (!currentSession?.token || storedSession.token !== currentSession.token ||
+          String(storedSession.user_id) !== String(currentSession.user_id) ||
+          String(storedMember.user_id) !== String(currentSession.user_id) || !storedMember.email) return;
+        const currentMember = nativeMemberRef.current;
+        if (currentMember?.email !== storedMember.email ||
+          currentMember?.pending_email !== storedMember.pending_email ||
+          currentMember?.email_confirmation_required !== storedMember.email_confirmation_required) {
+          commitNativeMember(withMemberRole(storedMember, memberAccountRole(currentMember)));
+          commitNativeBridgeSession(storedSession);
+        }
+      }).catch(() => {});
       SecureStore.getItemAsync(ACCOUNT_DELETED_EVENT_KEY)
         .then((deletedEvent) => {
           if (!active || !deletedEvent) return;
@@ -10293,9 +10710,10 @@ true;
         .catch(() => {});
       return () => {
         active = false;
+        profileCompletionIntentRef.current += 1;
         invalidateNavigationIntent();
       };
-    }, [consumeAccountDeletedEvent, invalidateNavigationIntent]),
+    }, [commitNativeBridgeSession, commitNativeMember, consumeAccountDeletedEvent, invalidateNavigationIntent]),
   );
 
   const finishLogoutInApp = useCallback(
@@ -10809,7 +11227,7 @@ true;
   );
 
   const runCompleteProfile = useCallback(
-    async (profile: ContactProfile) => {
+    async (profile: ContactProfile | null, refreshOnly = false) => {
       const profileSession = logoutInFlightRef.current
         ? null
         : nativeBridgeSessionRef.current;
@@ -10825,17 +11243,18 @@ true;
       if (authGeneration === null) return;
       profileCompletionIntentRef.current += 1;
       const profileIntent = profileCompletionIntentRef.current;
+      const profileStorageGeneration = getNativeSessionStorageGeneration();
       const navigationIntent = beginNavigationIntent();
       const shouldResumeQrScanner = qrContactCompletionRequested;
       setProfileSaveLoading(true);
 
       try {
-        const profilePayload = {
+        const profilePayload = profile ? {
           first_name: profile.firstName,
           email: profile.email,
           phone: profile.phone,
-          ...(profile.weddingDate ? { wedding_date: profile.weddingDate } : {}),
-        };
+          ...(profile.weddingDate !== undefined ? { wedding_date: profile.weddingDate } : {}),
+        } : undefined;
         const { response, data } = await fetchAppJsonWithTimeout<any>(
           `${APP_BACKEND_URL}/functions/v1/bd-complete-profile`,
           {
@@ -10848,23 +11267,41 @@ true;
             body: JSON.stringify({
               native_session: profileSession,
               profile: profilePayload,
+              ...(!profile ? { action: 'refresh' } : {}),
             }),
           },
           'Saving your profile took too long. Check your connection and try again.',
         );
         if (
           !authOperationIsCurrent('profile-save', authGeneration) ||
-          profileCompletionIntentRef.current !== profileIntent
+          profileCompletionIntentRef.current !== profileIntent ||
+          profileStorageGeneration !== getNativeSessionStorageGeneration()
         )
           return;
 
-        if (response.ok && data?.email_confirmation_required) {
-          Alert.alert(
-            'Confirm your email',
-            data?.message ||
-              'Please check your email and tap the confirmation link before continuing.',
-          );
+        if (response.ok && (
+          String(data?.user?.user_id || '') !== String(profileSession.user_id) ||
+          String(data?.native_session?.user_id || '') !== String(profileSession.user_id)
+        )) {
+          Alert.alert('Profile not saved', 'Please sign in again before updating your contact details.');
           return;
+        }
+
+        if (response.ok && data?.email_confirmation_required) {
+          saveNativeSession(
+            withMemberRole({
+              ...(nativeMemberRef.current || {}),
+              ...(data.user || {}),
+              email: data.user?.email || nativeMemberRef.current?.email || '',
+              email_confirmation_required: true,
+              pending_email: data.pending_email === null ? null :
+                data.pending_email || profile?.email || nativeMemberRef.current?.pending_email,
+              email_verification_status: data.email_verification_status || 'pending',
+            }, memberAccountRole(nativeMemberRef.current)),
+            { ...profileSession, ...(data.native_session || {}) },
+          );
+          if (!profile && !refreshOnly) Alert.alert('Not confirmed yet', 'Tap the confirmation link in your email, then try again.');
+          return true;
         }
 
         if (!response.ok || !data?.ok || !data?.user?.email) {
@@ -10886,12 +11323,15 @@ true;
         const completedUser = {
           ...(nativeMember || {}),
           ...(data.user || {}),
-          first_name: data.user?.first_name || profile.firstName,
-          email: data.user?.email || profile.email,
-          phone_number: data.user?.phone_number || profile.phone,
+          first_name: data.user?.first_name || profile?.firstName || nativeMember?.first_name,
+          email: data.user?.email,
+          phone_number: data.user?.phone_number || profile?.phone || nativeMember?.phone_number,
+          email_confirmation_required: false,
+          pending_email: null,
+          email_verification_status: data.email_verification_status || 'none',
           wedding_date:
-            data.user?.wedding_date ||
-            profile.weddingDate ||
+            data.user?.wedding_date ??
+            profile?.weddingDate ??
             nativeMember?.wedding_date,
           subscription_id:
             data.user?.subscription_id ||
@@ -10903,9 +11343,11 @@ true;
           ...(data.native_session || {}),
         };
         saveNativeSession(
-          withMemberRole(completedUser, 'couple'),
+          withMemberRole(completedUser, memberAccountRole(nativeMember)),
           completedSession,
         );
+
+        if (refreshOnly) return true;
 
         if (
           profileCompletionIntentRef.current !== profileIntent ||
@@ -10913,11 +11355,16 @@ true;
         )
           return;
 
+        if (shouldResumeQrScanner && missingQrContactFields(completedUser).length > 0) {
+          setQrContactCompletionRequested(true);
+          return;
+        }
         setQrContactCompletionRequested(false);
         hideWebsiteBrowser();
         if (shouldResumeQrScanner) {
           setShowNativeQrScanner(true);
         }
+        return true;
       } catch {
         if (
           authOperationIsCurrent('profile-save', authGeneration) &&
@@ -10948,6 +11395,103 @@ true;
       saveNativeSession,
     ],
   );
+
+  const runQrContactProfile = useCallback(async (profile: ContactProfile | null) => {
+    const profileSession = logoutInFlightRef.current ? null : nativeBridgeSessionRef.current;
+    if (!profileSession?.user_id || !profileSession?.token) {
+      Alert.alert('Sign in again', 'Please sign in before updating your Bingo contact details.');
+      return false;
+    }
+    const coupleId = String(profileSession.user_id);
+    const currentContact = qrContactProfile?.couple_id === coupleId ? qrContactProfile : null;
+    if (profile && !currentContact) return false;
+    const authGeneration = beginAuthOperation('profile-save');
+    if (authGeneration === null) return false;
+    const profileIntent = ++profileCompletionIntentRef.current;
+    const storageGeneration = getNativeSessionStorageGeneration();
+    const navigationIntent = beginNavigationIntent();
+    setProfileSaveLoading(true);
+    const isCurrent = () =>
+      authOperationIsCurrent('profile-save', authGeneration) &&
+      profileCompletionIntentRef.current === profileIntent &&
+      storageGeneration === getNativeSessionStorageGeneration() &&
+      navigationIntentGenerationRef.current === navigationIntent &&
+      !logoutInFlightRef.current &&
+      String(nativeBridgeSessionRef.current?.user_id || '') === coupleId;
+    try {
+      const { response, data } = await fetchQrBingoJsonWithTimeout<QrBingoSyncResponse>(
+        QR_BINGO_SYNC_FUNCTION_URL,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+            apikey: APP_BACKEND_PUBLISHABLE_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            action: profile ? 'contact_profile_save' : 'contact_profile_get',
+            native_session: profileSession,
+            ...(profile && currentContact ? {
+              expected_event_key: currentContact.event_key,
+              contact_profile: {
+                name: profile.firstName,
+                email: profile.email,
+                phone: profile.phone,
+                wedding_date: profile.weddingDate,
+                wedding_venue: profile.weddingVenue,
+                expected_version: currentContact.version,
+              },
+            } : {}),
+          }),
+        },
+        'Bingo contact details took too long. Check your connection and try again.',
+      );
+      if (!isCurrent()) return false;
+      if (!response.ok || data?.ok !== true) {
+        // A conflicting save or event change must be reloaded rather than
+        // silently overwriting newer contact details with this old draft.
+        if (response.status === 409 || data?.code === 'contact_date_sync_pending') setQrContactProfile(null);
+        Alert.alert('Bingo details not saved', data?.error || 'Please try again.');
+        return false;
+      }
+      const savedContact = normalizeQrContactProfile(data.contact_profile, coupleId,
+        profile ? currentContact?.event_key : undefined);
+      if (!savedContact) {
+        Alert.alert('Bingo details unavailable', 'Please reload your contact details and try again.');
+        return false;
+      }
+      setQrContactProfile(savedContact);
+      // This contact email is deliberately never copied into NativeMember,
+      // auth storage, Apple identity, or the account-email verification state.
+      if (profile && savedContact.saved && savedContact.complete && savedContact.missing_fields.length === 0) {
+        setQrContactCompletionRequested(false);
+        hideWebsiteBrowser();
+        setShowNativeQrScanner(true);
+      }
+      return true;
+    } catch (error) {
+      if (isCurrent()) Alert.alert('Bingo details unavailable',
+        error instanceof Error ? error.message : 'Please check your connection and try again.');
+      return false;
+    } finally {
+      if (authOperationIsCurrent('profile-save', authGeneration)) {
+        setProfileSaveLoading(false);
+        finishAuthOperation('profile-save', authGeneration);
+      }
+    }
+  }, [qrContactProfile, beginAuthOperation, beginNavigationIntent, authOperationIsCurrent,
+    finishAuthOperation, hideWebsiteBrowser]);
+
+  const openQrContactCompletion = useCallback(() => {
+    if (authOperationInFlightRef.current) return;
+    invalidateNavigationIntent();
+    profileCompletionIntentRef.current += 1;
+    setShowNativeQrScanner(false);
+    hideWebsiteBrowser();
+    setQrContactCompletionRequested(true);
+    setQrContactProfile(null);
+    void runQrContactProfile(null);
+  }, [hideWebsiteBrowser, invalidateNavigationIntent, runQrContactProfile]);
 
   const prepareExclusiveWebsiteDestination = useCallback(() => {
     // Website destinations and native overlays are mutually exclusive. Retire
@@ -11396,6 +11940,12 @@ true;
         }
 
         if (!response.ok || data?.ok === false) {
+          if (data.code === 'email_confirmation_required') {
+            if (!options.quiet) {
+              setNativeChatError('Confirm your new email, then tap Refresh to continue messaging.');
+            }
+            return null;
+          }
           const detail = data?.detail ? ` ${data.detail}` : '';
           throw new Error(`${data?.error || 'Chat sync failed.'}${detail}`);
         }
@@ -12408,7 +12958,7 @@ true;
   }, [showNativeChat, syncNativeChat]);
 
   const runAppleLoginInSystemBrowser = useCallback(
-    async (role: SignupRole = 'couple', consent?: SignupConsent) => {
+    async (role: SignupRole = 'couple', consent?: SignupConsent, onSignupRequired?: () => void) => {
       if (browserAuthInFlightRef.current) return;
       const authGeneration = beginAuthOperation('apple-browser-login');
       if (authGeneration === null) return;
@@ -12439,9 +12989,28 @@ true;
         if (callback.error) {
           if (callback.error === 'cancelled') return;
           if (callback.error === 'signup_required') {
+            let signupOpened = false;
             Alert.alert(
-              'No WeddingWin account yet',
-              `Choose Sign up to create your ${role === 'vendor' ? 'vendor' : 'couple'} account, then continue with Apple.`,
+              'Create your WeddingWin account',
+              `This Apple sign-in isn’t linked to a WeddingWin account yet. Sign up to create your ${role === 'vendor' ? 'vendor' : 'couple'} account.`,
+              onSignupRequired ? [
+                { text: 'Not now', style: 'cancel' },
+                {
+                  text: 'Create account',
+                  onPress: () => {
+                    // The auth operation finishes before an alert is tapped.
+                    // Check its generations, not its now-cleared busy flag.
+                    if (signupOpened ||
+                      authOperationGenerationRef.current !== authGeneration ||
+                      navigationIntentGenerationRef.current !== navigationIntent ||
+                      nativeSessionGenerationRef.current !== sessionGeneration
+                    ) return;
+                    signupOpened = true;
+                    beginNavigationIntent();
+                    onSignupRequired();
+                  },
+                },
+              ] : undefined,
             );
             return;
           }
@@ -13730,7 +14299,9 @@ true;
             onGoogleSignIn={runBdGoogleLoginInSystemBrowser}
             onEmailLogin={runEmailLogin}
             onMemberSignup={runMemberSignup}
-            onCompleteProfile={runCompleteProfile}
+            onCompleteProfile={runQrContactProfile}
+            onRefreshQrContact={() => runQrContactProfile(null)}
+            qrContactProfile={qrContactProfile?.couple_id === String(nativeMember?.user_id || '') ? qrContactProfile : null}
             googleLoginLoading={googleLoginLoading}
             appleBrowserLoginLoading={appleBrowserLoginLoading}
             expiredSessionLoginRequest={expiredSessionLoginRequest}
@@ -15104,34 +15675,6 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: '700',
     marginTop: 2,
-  },
-  vendorRaffleWinnerCountOptions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 7,
-  },
-  vendorRaffleWinnerCountOption: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#EAD2CC',
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  vendorRaffleWinnerCountOptionSelected: {
-    borderColor: '#AA565D',
-    backgroundColor: '#AA565D',
-  },
-  vendorRaffleWinnerCountOptionText: {
-    color: '#AA565D',
-    fontSize: 17,
-    lineHeight: 21,
-    fontWeight: '900',
-  },
-  vendorRaffleWinnerCountOptionTextSelected: {
-    color: '#FFFFFF',
   },
   vendorRaffleRulesLink: {
     color: '#AA565D',
@@ -17144,6 +17687,29 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
+  profileKeyboardToolbar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E8D0C3',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  profileKeyboardDoneButton: {
+    minWidth: 76,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: BRAND_COLOR,
+  },
+  profileKeyboardDoneText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
   profileInputShell: {
     width: '100%',
     minHeight: 46,
@@ -17177,10 +17743,107 @@ const styles = StyleSheet.create({
     marginTop: -2,
     marginBottom: 9,
   },
+  profileFieldLabel: {
+    width: '100%',
+    color: '#625B62',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
   weddingDatePicker: {
     width: '100%',
-    marginTop: -6,
-    marginBottom: 8,
+  },
+  weddingDateFieldLabel: {
+    alignSelf: 'flex-start',
+    color: '#7D6B66',
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 5,
+  },
+  weddingDateChoiceRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  weddingDateUndecidedButton: {
+    width: 86,
+    minHeight: 44,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2D8D5',
+    backgroundColor: '#FAF7F5',
+  },
+  weddingDateUndecidedText: {
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#7D6B66',
+  },
+  weddingDateCalendarButton: {
+    flex: 1,
+    minHeight: 64,
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F0D2CA',
+    backgroundColor: '#FFF3F0',
+  },
+  weddingDateCalendarButtonText: {
+    flex: 1,
+    color: BRAND_COLOR,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  weddingDateModalBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: 'rgba(43, 35, 32, 0.42)',
+  },
+  weddingDateModalCard: {
+    width: '100%',
+    maxWidth: 400,
+    maxHeight: '90%',
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  weddingDateModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 20,
+    paddingRight: 8,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0E2DE',
+  },
+  weddingDateModalTitle: {
+    flex: 1,
+    color: '#2E2E32',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  weddingDateModalClose: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weddingDateModalBody: {
+    paddingHorizontal: 8,
+    paddingBottom: 12,
   },
   profileRow: {
     width: '100%',

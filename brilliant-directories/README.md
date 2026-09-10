@@ -9,7 +9,13 @@ result by fetching the widget source again after its automatic cache refresh.
 |---|---:|---|
 | `widgets/220-vendor-dashboard-menu.php` + `.css` + `.js` | 220 | Vendor account dashboard; current-roster Vendor Bingo button uses the website URL, intercepted by the app to open its native wizard |
 | `widgets/258-julian-qr-code-bingo.php` | 258 | `/qr`; October 18, 2026 vendor list and scan persistence |
-| `widgets/262-qr-bingo-results.php` + `.css` + `.js` | 262 | `/qr_results`; anonymized current-event progress scoreboard |
+| `widgets/262-qr-bingo-results.php` + `.css` + `.js` | 262 | `/qr_results`; password-protected progress and member contact list |
+| `widgets/296-nws-sponsor-page.html` + `.css` | 296 | `/NWS-Sponsors`; October 18, 2026 Niagara Wedding Show sponsor landing page |
+| `pages/nws-sponsors-head.html` + `nws-sponsors-metadata.json` | Web Page 117 | `/NWS-Sponsors`; canonical, search, and social-sharing metadata |
+| `widgets/297-jan-2026-wedding-show-vendor-landing.html` + `.css` + `.js` | 297 | `/apply-for-nws`; Niagara Wedding Show exhibitor landing page |
+| `widgets/298-model-call.html` + `.css` | 298 | `/Model-Call`; October 18, 2026 Niagara Wedding Show strolling-model call |
+| `pages/model-call-head.html` + `model-call-metadata.json` | Web Page 118 | `/Model-Call`; canonical, search, and social-sharing metadata |
+| `widgets/326-couples-listing-search-enhanced.html` + `.css` + `.js` | 326 | Couples account dashboard; inline category-and-location vendor search matching the public homepage search |
 | `widgets/328-qr-bingo-vendor-draw-dashboard.php` + `.css` + `.js` | 328 | `/qr-bingo-vendor-draw`; vendor prize settings, entry count, potential-winner selection, and verified-fulfillment controls |
 | `widgets/336-qr-bingo-draw-email-sender.php` | 336 | `/qr-bingo-draw-email-send`; verifies and sends draw emails |
 | `widgets/ww-qr-bingo-settings.php` | 361 | `/admin/go.php?widget=ww_qr_bingo_settings`; QR Bingo Settings in the BD admin Plugins section |
@@ -29,11 +35,26 @@ Widget 258, the native couple flow, the native vendor flow, and widget 361 all
 consume that same published revision instead of maintaining independent event
 constants.
 
-Widget 262 uses the same published tag, event revision, and history cutoff for
-the public results page. It exposes only temporary participant numbers that are
-freshly reshuffled for each response, current-event booth counts, and status. It
-never returns member names, emails, companies, phone numbers, or raw
-member/vendor IDs.
+Widget 262 uses the same published tag, event revision, retained
+`scan_history_starts_at` (including authorized early scans), and exclusive
+`entry_closes_at` cutoff as the scanner. As requested on September 8, results
+now require the shared page password on both HTML and JSON routes and include
+names, member IDs, email addresses and phone numbers. The current event's active
+Bingo contacts (including admin corrections) take precedence over BD account
+details. Read-only signed calls reuse the admin contact-list endpoint; no new
+database permissions or public contact API were introduced.
+Before deploying this repository version, configure `WW_QR_RESULTS_PASSWORD_HASH`
+with the bcrypt verifier in the PHP worker environment through private server
+configuration. No verifier is stored in source. Missing or malformed configuration
+blocks both existing access cookies and password unlock. This source-only change
+does not alter the currently deployed widget or its server configuration.
+A one-hour Secure/HttpOnly/SameSite=Strict cookie is signed using the existing
+server-side credential.
+Wrong guesses are limited to five per 15 minutes per server-observed IP.
+Responses are no-store and noindex; Lock page clears access.
+Totals include all participating couples; at most 500 member progress rows
+are displayed, with a notice when the list is capped. Refreshes are single-flight
+and time out after 15 seconds without replacing existing counts with zeroes.
 Brilliant Directories does not emit widget 262's `widget_javascript` field on
 this custom page, so deployment must append the mirrored `.js` file to
 `widget_data` while keeping the files separate here for review and syntax
@@ -68,6 +89,43 @@ the legacy compatibility field that formerly stored an alternate-entry URL, to
 HTTPS URLs on `weddingwin.ca` or `www.weddingwin.ca`. The compatibility field
 does not create an entry route. The database remains authoritative for field,
 schedule, and plain-text constraints even if a caller bypasses the admin form.
+
+## Admin Bingo contact list
+
+In widget 361, open **QR Bingo data & downloads → Contacts**. **Add contact**
+searches existing active Couples accounts (BD plan `18`, active `2`); it does
+not create an account. Choose the couple, enter their event-specific contact
+details and admin attribution, then save. A successful add shows page 1 of
+Active contacts with vendor/search filters cleared; failures preserve the form
+and filters.
+
+**Remove** and **Restore** are in the first table column and require confirmation
+of the exact couple and event. Removal is recoverable through the Removed
+contacts filter, not account deletion. Active, Removed, and All filters also
+apply to audited CSV downloads. These operations do not change accounts,
+scans, existing draw entries, consent records, or winner history, and never
+accept terms or send email. Version checks prevent stale changes; request IDs
+make retries idempotent. Keep the existing admin-session, CSRF, origin, signed
+request, and replay protections intact.
+
+Deployment mapping as of September 8, 2026: BD widget **361**,
+`bd-qr-bingo-admin` **v15**, and
+`20260908173748_qr_bingo_admin_contact_list_management.sql`. Sources are
+`widgets/ww-qr-bingo-settings.php`, its `ww-qr-bingo-settings-data.js` and `.css`
+companions, and `supabase/functions/_shared/qr_bingo_admin_contacts.ts` plus
+`qr_bingo_admin_data.ts` (backend paths are relative to the repository root).
+
+Regression checks from the repository root:
+
+```sh
+node --test scripts/test-qr-contact-admin-ui.mjs scripts/test-qr-admin-contact-proxy.mjs
+deno test --allow-read supabase/functions/_shared/qr_bingo_admin_contacts_test.ts
+```
+
+`scripts/test-qr-admin-contact-migration.mjs` additionally rehearses the schema
+and mutations in an isolated local database; set `QR_CONTACT_PGLITE` to the
+installed pinned PGlite module path before running it. None of these checks
+requires production contact changes.
 
 ## Configuration migrations
 
@@ -178,7 +236,7 @@ duties and does not claim blanket immunity.
 The public Terms, Privacy Policy, and Vendor Prize-Draw Official Rules are
 required legal surfaces and must remain published, versioned, linked, and
 synchronized. The `/qr` scanner and vendor dashboard are core operational
-pages. `/qr_results` is an intended public product feature with privacy limits,
+pages. `/qr_results` is a password-protected results/contact page,
 not a substitute for any required legal page. `/qr-bingo-free-entry` is retained
 only as a clear retired-route notice; it contains no entry form and directs
 couples to the in-show QR flow.

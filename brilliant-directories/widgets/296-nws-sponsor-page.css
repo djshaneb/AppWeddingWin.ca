@@ -1,0 +1,1203 @@
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0 !important;
+  padding: 0 !important;
+  background: #ffffff;
+}
+
+#wwsp-wrapper {
+  --wwsp-rose: #ab6261;
+  --wwsp-rose-dark: #914c4e;
+  --wwsp-rose-light: #e6aaad;
+  --wwsp-blush: #f8efee;
+  --wwsp-blue: #edf6f8;
+  --wwsp-ink: #2f292a;
+  --wwsp-copy: #625859;
+  --wwsp-line: rgba(74, 53, 55, 0.15);
+  width: 100%;
+  overflow: visible;
+  color: var(--wwsp-ink);
+  background: #ffffff;
+  font-family: "Lato", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+#wwsp-wrapper,
+#wwsp-wrapper * {
+  box-sizing: border-box;
+}
+
+#wwsp-wrapper img {
+  display: block;
+  max-width: 100%;
+}
+
+#wwsp-wrapper a {
+  color: inherit;
+  text-decoration: none;
+}
+
+#wwsp-wrapper h1,
+#wwsp-wrapper h2,
+#wwsp-wrapper h3,
+#wwsp-wrapper p,
+#wwsp-wrapper dl,
+#wwsp-wrapper dd {
+  margin-top: 0;
+}
+
+#wwsp-wrapper figure {
+  margin: 0;
+}
+
+#wwsp-wrapper h1,
+#wwsp-wrapper h2,
+#wwsp-wrapper h3 {
+  color: var(--wwsp-ink);
+  font-family: "Playfair Display", Georgia, serif;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.wwsp-inner {
+  width: min(1200px, calc(100% - 40px));
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.wwsp-skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 1000;
+  padding: 10px 14px;
+  color: #ffffff !important;
+  background: var(--wwsp-rose-dark);
+  border-radius: 8px;
+  transform: translateY(-160%);
+  transition: transform 0.18s ease;
+}
+
+.wwsp-skip-link:focus {
+  transform: translateY(0);
+}
+
+.wwsp-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid var(--wwsp-line);
+  backdrop-filter: blur(14px);
+}
+
+.wwsp-header-inner {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 24px;
+  align-items: center;
+  min-height: 78px;
+}
+
+.wwsp-brand img {
+  width: auto;
+  height: 46px;
+}
+
+.wwsp-nav,
+.wwsp-header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.wwsp-nav {
+  justify-content: flex-end;
+  gap: 20px;
+}
+
+.wwsp-header-actions {
+  gap: 14px;
+}
+
+.wwsp-nav a,
+.wwsp-vendor-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #554b4d !important;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  transition: color 0.18s ease;
+}
+
+.wwsp-nav a:hover,
+.wwsp-vendor-link:hover {
+  color: var(--wwsp-rose-dark) !important;
+}
+
+.wwsp-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50px;
+  padding: 13px 22px;
+  color: #ffffff !important;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: 0.035em;
+  text-align: center;
+  background: var(--wwsp-rose-dark);
+  border: 1px solid var(--wwsp-rose-dark);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(90, 46, 49, 0.2);
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.wwsp-button:hover {
+  color: #ffffff !important;
+  background: #763c3f;
+  border-color: #763c3f;
+  box-shadow: 0 16px 32px rgba(90, 46, 49, 0.28);
+  transform: translateY(-2px);
+}
+
+.wwsp-button:focus-visible,
+.wwsp-nav a:focus-visible,
+.wwsp-vendor-link:focus-visible,
+.wwsp-text-link:focus-visible,
+.wwsp-faq-list summary:focus-visible,
+.wwsp-direct-email a:focus-visible,
+.wwsp-footer a:focus-visible {
+  outline: 3px solid #5f3033;
+  outline-offset: 3px;
+}
+
+.wwsp-button-small {
+  min-height: 44px;
+  padding: 10px 17px;
+}
+
+#wwsp-benefits,
+#wwsp-options,
+#wwsp-process,
+#wwsp-faq,
+#wwsp-apply {
+  scroll-margin-top: 82px;
+}
+
+.wwsp-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(500px, 1.05fr);
+  height: clamp(650px, calc(100vh - 78px), 760px);
+  min-height: 650px;
+  color: #ffffff;
+  background: linear-gradient(145deg, #21191b, #3d292c);
+}
+
+.wwsp-hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  padding: 56px max(40px, calc((100vw - 1200px) / 2));
+}
+
+.wwsp-eyebrow,
+.wwsp-kicker,
+.wwsp-card-label {
+  margin-bottom: 14px;
+  color: var(--wwsp-rose-dark);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.3;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.wwsp-hero .wwsp-eyebrow,
+.wwsp-cta .wwsp-eyebrow {
+  color: #f0b8bb;
+}
+
+#wwsp-wrapper .wwsp-hero h1 {
+  max-width: 620px;
+  margin-bottom: 24px;
+  color: #ffffff;
+  font-size: clamp(50px, 4.6vw, 70px);
+  line-height: 0.99;
+}
+
+.wwsp-hero h1 span {
+  display: block;
+  color: #e5a7aa;
+  font-style: italic;
+}
+
+.wwsp-hero-lede {
+  max-width: 610px;
+  margin-bottom: 0;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 19px;
+  line-height: 1.7;
+}
+
+.wwsp-hero-actions,
+.wwsp-cta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.wwsp-button-primary {
+  color: #2b2022 !important;
+  background: #e4a5a9;
+  border-color: #e4a5a9;
+}
+
+.wwsp-button-primary:hover {
+  color: #2b2022 !important;
+  background: #f0c0c3;
+  border-color: #f0c0c3;
+}
+
+.wwsp-button-outline {
+  color: #ffffff !important;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.62);
+  box-shadow: none;
+}
+
+.wwsp-button-outline:hover {
+  color: var(--wwsp-ink) !important;
+  background: #ffffff;
+  border-color: #ffffff;
+}
+
+.wwsp-hero-media {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #d9cfcd;
+}
+
+.wwsp-hero-media::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(90deg, rgba(43, 30, 32, 0.3), transparent 30%);
+  pointer-events: none;
+}
+
+.wwsp-hero-media > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center center;
+}
+
+.wwsp-hero-poster {
+  background: #171710;
+}
+
+.wwsp-hero-poster::after {
+  display: none;
+}
+
+.wwsp-hero-poster > img {
+  object-fit: contain;
+}
+
+.wwsp-hero-media figcaption {
+  position: absolute;
+  right: 28px;
+  bottom: 28px;
+  z-index: 2;
+  display: grid;
+  gap: 3px;
+  max-width: calc(100% - 56px);
+  padding: 15px 18px;
+  color: var(--wwsp-ink);
+  background: rgba(255, 255, 255, 0.94);
+  border-left: 4px solid var(--wwsp-rose);
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(35, 25, 27, 0.2);
+}
+
+.wwsp-hero-media figcaption span {
+  color: var(--wwsp-rose-dark);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.wwsp-hero-media figcaption strong {
+  font-size: 15px;
+}
+
+.wwsp-facts {
+  color: #ffffff;
+  background: linear-gradient(90deg, #955052, #b86c6e);
+}
+
+.wwsp-fact-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.72fr 1.05fr 0.9fr;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-left: 0;
+}
+
+.wwsp-fact-grid > div {
+  min-width: 0;
+  padding: 22px 24px;
+  border-left: 1px solid rgba(255, 255, 255, 0.24);
+}
+
+.wwsp-fact-grid > div:first-child {
+  border-left: 0;
+}
+
+.wwsp-fact-grid dt {
+  margin-bottom: 4px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.wwsp-fact-grid dd {
+  margin-bottom: 0;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.wwsp-fact-grid dd span {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.82;
+}
+
+.wwsp-section {
+  padding: 96px 0;
+}
+
+.wwsp-benefits-layout,
+.wwsp-process-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  gap: 76px;
+  align-items: start;
+}
+
+.wwsp-section-copy {
+  position: sticky;
+  top: 118px;
+}
+
+#wwsp-wrapper .wwsp-section h2,
+#wwsp-wrapper .wwsp-cta h2 {
+  margin-bottom: 24px;
+  font-size: clamp(38px, 4.5vw, 58px);
+  line-height: 1.08;
+}
+
+.wwsp-section-copy > p:not(.wwsp-kicker),
+.wwsp-section-heading > p:not(.wwsp-kicker),
+.wwsp-cta-inner > p:not(.wwsp-eyebrow):not(.wwsp-direct-email):not(.wwsp-cta-note) {
+  color: var(--wwsp-copy);
+  font-size: 18px;
+  line-height: 1.75;
+}
+
+.wwsp-disclaimer {
+  margin-top: 28px;
+  padding: 16px 18px;
+  color: #655a5b !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+  background: var(--wwsp-blush);
+  border-left: 3px solid var(--wwsp-rose);
+}
+
+.wwsp-benefit-list,
+.wwsp-process-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--wwsp-line);
+}
+
+.wwsp-benefit-list li,
+.wwsp-process-list li {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+  padding: 23px 0;
+  border-bottom: 1px solid var(--wwsp-line);
+}
+
+.wwsp-benefit-list li > span,
+.wwsp-process-list li > span {
+  padding-top: 3px;
+  color: var(--wwsp-rose-dark);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+
+.wwsp-benefit-list strong,
+.wwsp-process-list strong {
+  display: block;
+  color: var(--wwsp-ink);
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.wwsp-benefit-list p,
+.wwsp-process-list p {
+  margin: 6px 0 0;
+  color: var(--wwsp-copy);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.wwsp-options-section {
+  background: linear-gradient(155deg, var(--wwsp-blush), var(--wwsp-blue));
+}
+
+.wwsp-section-heading {
+  max-width: 850px;
+  margin: 0 auto 44px;
+  text-align: center;
+}
+
+.wwsp-section-heading > p:not(.wwsp-kicker) {
+  margin-bottom: 0;
+}
+
+.wwsp-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.wwsp-option-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 42px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(80, 58, 61, 0.14);
+  border-top: 5px solid var(--wwsp-rose);
+  box-shadow: 0 20px 48px rgba(66, 45, 48, 0.1);
+}
+
+.wwsp-option-card-featured {
+  color: #ffffff;
+  background: linear-gradient(145deg, #2b2022, #443033);
+  border-color: transparent;
+  border-top-color: var(--wwsp-rose-light);
+}
+
+.wwsp-option-topline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(74, 53, 55, 0.15);
+}
+
+.wwsp-option-card-featured .wwsp-option-topline {
+  border-bottom-color: rgba(255, 255, 255, 0.16);
+}
+
+.wwsp-option-topline span {
+  color: var(--wwsp-rose-dark);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.wwsp-option-card-featured .wwsp-option-topline span {
+  color: #f0b8bb;
+}
+
+.wwsp-option-topline small {
+  color: #7d7071;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.wwsp-option-card-featured .wwsp-option-topline small {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+#wwsp-wrapper .wwsp-option-card h3 {
+  margin-bottom: 16px;
+  font-size: 34px;
+  line-height: 1.12;
+}
+
+#wwsp-wrapper .wwsp-option-card-featured h3 {
+  color: #ffffff;
+}
+
+.wwsp-option-intro {
+  margin-bottom: 24px;
+  color: var(--wwsp-copy);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.wwsp-option-card-featured .wwsp-option-intro {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.wwsp-contribution-list,
+.wwsp-quantity-list {
+  margin-bottom: 24px;
+}
+
+.wwsp-contribution-list > div,
+.wwsp-quantity-list > div {
+  padding: 17px 0;
+  border-top: 1px solid rgba(74, 53, 55, 0.15);
+}
+
+.wwsp-option-card-featured .wwsp-contribution-list > div {
+  border-top-color: rgba(255, 255, 255, 0.16);
+}
+
+.wwsp-contribution-list dt,
+.wwsp-quantity-list dt {
+  margin-bottom: 5px;
+  color: var(--wwsp-ink);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.wwsp-option-card-featured .wwsp-contribution-list dt {
+  color: #ffffff;
+}
+
+.wwsp-contribution-list dd,
+.wwsp-quantity-list dd {
+  margin-bottom: 0;
+  color: var(--wwsp-copy);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.wwsp-option-card-featured .wwsp-contribution-list dd {
+  color: rgba(255, 255, 255, 0.74);
+}
+
+.wwsp-quantity-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 24px;
+}
+
+.wwsp-quantity-list dd strong {
+  color: var(--wwsp-rose-dark);
+  font-size: 21px;
+}
+
+.wwsp-option-note {
+  margin: 0 0 22px;
+  padding: 16px 17px;
+  color: #645859;
+  font-size: 13px;
+  line-height: 1.55;
+  background: var(--wwsp-blush);
+  border-left: 3px solid var(--wwsp-rose);
+}
+
+.wwsp-text-link {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 44px;
+  margin-top: auto;
+  color: var(--wwsp-rose-dark) !important;
+  font-size: 13px;
+  font-weight: 900;
+  text-decoration: underline !important;
+  text-decoration-thickness: 1px !important;
+  text-underline-offset: 5px;
+}
+
+.wwsp-option-card-featured .wwsp-text-link {
+  color: #ffffff !important;
+}
+
+.wwsp-text-link span {
+  font-size: 19px;
+  transition: transform 0.18s ease;
+}
+
+.wwsp-text-link:hover span {
+  transform: translateX(4px);
+}
+
+.wwsp-gallery-section {
+  background: #ffffff;
+}
+
+.wwsp-gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.wwsp-gallery figure {
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid rgba(63, 48, 50, 0.1);
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgba(56, 40, 43, 0.11);
+}
+
+.wwsp-gallery img {
+  width: 100%;
+  height: 280px;
+  object-fit: cover;
+}
+
+.wwsp-gallery figcaption {
+  display: grid;
+  gap: 7px;
+  min-height: 142px;
+  padding: 21px 22px;
+  border-top: 4px solid var(--wwsp-rose);
+}
+
+.wwsp-gallery figcaption strong {
+  color: var(--wwsp-ink);
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: 20px;
+}
+
+.wwsp-gallery figcaption span {
+  color: var(--wwsp-copy);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.wwsp-process-section {
+  background: linear-gradient(155deg, #ffffff, var(--wwsp-blue));
+}
+
+.wwsp-process-layout {
+  grid-template-columns: minmax(0, 1.08fr) minmax(340px, 0.92fr);
+}
+
+.wwsp-process-list {
+  grid-template-columns: 1fr;
+  margin-top: 32px;
+}
+
+.wwsp-process-list li {
+  grid-template-columns: 48px minmax(0, 1fr);
+}
+
+.wwsp-process-list strong {
+  font-size: 21px;
+}
+
+.wwsp-process-list p {
+  font-size: 15px;
+}
+
+.wwsp-inquiry-card {
+  padding: 36px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(145, 76, 78, 0.2);
+  border-radius: 20px;
+  box-shadow: 0 20px 48px rgba(66, 45, 48, 0.1);
+}
+
+#wwsp-wrapper .wwsp-inquiry-card h3 {
+  margin-bottom: 24px;
+  font-size: 30px;
+  line-height: 1.15;
+}
+
+.wwsp-inquiry-card ul {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wwsp-inquiry-card li {
+  position: relative;
+  padding: 13px 0 13px 27px;
+  color: #504647;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(145, 76, 78, 0.16);
+}
+
+.wwsp-inquiry-card li::before {
+  position: absolute;
+  top: 20px;
+  left: 3px;
+  width: 7px;
+  height: 7px;
+  content: "";
+  background: var(--wwsp-rose-dark);
+  border-radius: 50%;
+}
+
+.wwsp-timing-note {
+  display: grid;
+  gap: 4px;
+  margin-top: 24px;
+  padding: 17px;
+  color: #ffffff;
+  background: #3c2b2e;
+  border-radius: 10px;
+}
+
+.wwsp-timing-note strong {
+  color: #f1b7ba;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wwsp-timing-note span {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wwsp-faq-section {
+  background: #ffffff;
+}
+
+.wwsp-faq-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+  gap: 76px;
+  align-items: start;
+}
+
+.wwsp-faq-list {
+  border-top: 1px solid var(--wwsp-line);
+}
+
+.wwsp-faq-list details {
+  border-bottom: 1px solid var(--wwsp-line);
+}
+
+.wwsp-faq-list summary {
+  position: relative;
+  min-height: 64px;
+  padding: 20px 44px 20px 0;
+  color: var(--wwsp-ink);
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  cursor: pointer;
+  list-style: none;
+}
+
+.wwsp-faq-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.wwsp-faq-list summary::after {
+  position: absolute;
+  top: 17px;
+  right: 0;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  color: var(--wwsp-rose-dark);
+  font-family: "Lato", Arial, sans-serif;
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1;
+  content: "+";
+  place-items: center;
+}
+
+.wwsp-faq-list details[open] summary::after {
+  content: "−";
+}
+
+.wwsp-faq-list details p {
+  margin: -4px 42px 22px 0;
+  color: var(--wwsp-copy);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.wwsp-faq-list details p a {
+  color: var(--wwsp-rose-dark) !important;
+  font-weight: 900;
+  text-decoration: underline !important;
+  text-underline-offset: 3px;
+}
+
+.wwsp-cta {
+  padding: 102px 0;
+  color: #ffffff;
+  background: linear-gradient(135deg, #241a1c, #432d31);
+}
+
+.wwsp-cta-inner {
+  max-width: 900px;
+  text-align: center;
+}
+
+#wwsp-wrapper .wwsp-cta h2 {
+  color: #ffffff;
+}
+
+.wwsp-cta-inner > p:not(.wwsp-eyebrow):not(.wwsp-direct-email):not(.wwsp-cta-note) {
+  max-width: 720px;
+  margin-right: auto;
+  margin-bottom: 0;
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.83);
+}
+
+.wwsp-cta-actions {
+  justify-content: center;
+}
+
+.wwsp-button-large {
+  min-height: 56px;
+  padding: 16px 30px;
+  font-size: 14px;
+}
+
+.wwsp-direct-email {
+  margin: 15px 0 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 14px;
+}
+
+.wwsp-direct-email a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 6px 4px;
+  color: #ffffff !important;
+  font-weight: 900;
+  text-decoration: underline !important;
+  text-underline-offset: 3px;
+}
+
+.wwsp-cta-note {
+  margin: 4px auto 0;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+}
+
+.wwsp-footer {
+  display: grid;
+  justify-items: center;
+  gap: 15px;
+  padding: 50px 20px;
+  color: rgba(255, 255, 255, 0.72);
+  text-align: center;
+  background: #111111;
+}
+
+.wwsp-footer img {
+  width: auto;
+  height: 52px;
+}
+
+.wwsp-footer p,
+.wwsp-footer small {
+  margin-bottom: 0;
+  font-size: 13px;
+}
+
+.wwsp-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 24px;
+}
+
+.wwsp-footer nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #ffffff !important;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 1120px) {
+  .wwsp-nav {
+    gap: 12px;
+  }
+
+  .wwsp-vendor-link {
+    display: none;
+  }
+}
+
+@media (max-width: 1000px) {
+  .wwsp-header-inner {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .wwsp-nav a:nth-child(-n + 3) {
+    display: none;
+  }
+
+  .wwsp-hero {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
+  }
+
+  .wwsp-hero-media {
+    order: -1;
+    height: clamp(500px, 58vw, 620px);
+  }
+
+  .wwsp-hero-copy {
+    padding: 64px max(28px, calc((100vw - 820px) / 2));
+  }
+
+  .wwsp-benefits-layout,
+  .wwsp-process-layout,
+  .wwsp-faq-layout {
+    grid-template-columns: 1fr;
+    gap: 44px;
+  }
+
+  .wwsp-section-copy {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .wwsp-inner {
+    width: min(100% - 28px, 620px);
+  }
+
+  .wwsp-header-inner {
+    grid-template-columns: 1fr auto;
+    min-height: 68px;
+  }
+
+  .wwsp-brand img {
+    height: 40px;
+  }
+
+  .wwsp-nav,
+  .wwsp-vendor-link {
+    display: none;
+  }
+
+  .wwsp-button-small {
+    min-height: 42px;
+    padding: 9px 14px;
+    font-size: 11px;
+  }
+
+  .wwsp-hero-media {
+    height: 430px;
+  }
+
+  .wwsp-hero-copy {
+    padding: 54px 22px 60px;
+  }
+
+  #wwsp-wrapper .wwsp-hero h1 {
+    font-size: clamp(43px, 12vw, 58px);
+  }
+
+  .wwsp-hero-lede {
+    font-size: 18px;
+  }
+
+  .wwsp-fact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wwsp-fact-grid > div {
+    padding: 18px 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.22);
+  }
+
+  .wwsp-fact-grid > div:nth-child(odd) {
+    border-left: 0;
+  }
+
+  .wwsp-fact-grid > div:nth-child(-n + 2) {
+    border-top: 0;
+  }
+
+  .wwsp-section {
+    padding: 72px 0;
+  }
+
+  #wwsp-wrapper .wwsp-section h2,
+  #wwsp-wrapper .wwsp-cta h2 {
+    font-size: 38px;
+  }
+
+  .wwsp-benefit-list,
+  .wwsp-option-grid,
+  .wwsp-gallery {
+    grid-template-columns: 1fr;
+  }
+
+  .wwsp-option-card {
+    padding: 32px 28px;
+  }
+
+  .wwsp-gallery img {
+    height: 310px;
+  }
+
+  .wwsp-gallery figcaption {
+    min-height: 0;
+  }
+
+  .wwsp-cta {
+    padding: 78px 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .wwsp-header-inner {
+    gap: 12px;
+  }
+
+  .wwsp-brand img {
+    height: 35px;
+  }
+
+  .wwsp-button-small {
+    min-width: 124px;
+  }
+
+  .wwsp-hero-media {
+    height: 330px;
+  }
+
+  .wwsp-hero-media figcaption {
+    right: 14px;
+    bottom: 14px;
+    max-width: calc(100% - 28px);
+  }
+
+  .wwsp-hero-copy {
+    padding: 44px 16px 52px;
+  }
+
+  #wwsp-wrapper .wwsp-hero h1 {
+    font-size: 41px;
+  }
+
+  .wwsp-hero-actions,
+  .wwsp-cta-actions {
+    width: 100%;
+  }
+
+  .wwsp-hero-actions .wwsp-button,
+  .wwsp-cta-actions .wwsp-button {
+    width: 100%;
+  }
+
+  .wwsp-fact-grid dd {
+    font-size: 14px;
+  }
+
+  .wwsp-section-copy > p:not(.wwsp-kicker),
+  .wwsp-section-heading > p:not(.wwsp-kicker),
+  .wwsp-cta-inner > p:not(.wwsp-eyebrow):not(.wwsp-direct-email):not(.wwsp-cta-note) {
+    font-size: 16px;
+  }
+
+  .wwsp-option-card {
+    padding: 28px 22px;
+  }
+
+  #wwsp-wrapper .wwsp-option-card h3 {
+    font-size: 30px;
+  }
+
+  .wwsp-option-topline {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .wwsp-quantity-list {
+    grid-template-columns: 1fr;
+  }
+
+  .wwsp-gallery img {
+    height: 245px;
+  }
+
+  .wwsp-process-list li {
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .wwsp-inquiry-card {
+    padding: 26px 20px;
+    border-radius: 16px;
+  }
+
+  .wwsp-footer p {
+    max-width: 300px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .wwsp-skip-link,
+  .wwsp-button,
+  .wwsp-nav a,
+  .wwsp-vendor-link,
+  .wwsp-text-link span {
+    transition: none;
+  }
+}

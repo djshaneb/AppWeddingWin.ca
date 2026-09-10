@@ -56,6 +56,7 @@ async function harness(url: URL, mode: typeof modes[number]) {
     ensureSettings: async () => settings,
     loadVendorEntryPool: async () => ({ entry_count: 2, eligible_entry_count: 1, selection_in_progress: rows.some(row => row.selection_status === "potential") }),
     activeVendorEntryCount: async () => 2, activatedVendorOfferExists: async () => true,
+    vendorPrizeDetailsLock: async () => rows.some(row => row.couple_email_sent_at) ? "sent" : null,
     alternateEntryClosureStatus: async () => ({ ready: true }), loadVendorDrawRows: async () => rows,
     raffleMaxWinners: (value: number) => value, drawAvailableAt: () => "2026-09-01T00:00:00Z",
     isolatedEmailTestRecipient: () => null, qrBingoConfig: () => config,

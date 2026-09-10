@@ -43,7 +43,7 @@ Deno.test(
       scanAction,
     );
     const listRefresh = source.indexOf(
-      'setEventConfig(normalizeQrBingoEventConfig(data.event_config));',
+      'setEventConfig(loadedEventConfig);',
       listAction,
     );
     const scanRefresh = source.indexOf(
@@ -51,7 +51,10 @@ Deno.test(
       scanAction,
     );
     assert(
-      listAction >= 0 && listRefresh > listAction && listRefresh < scanAction,
+      listAction >= 0 && listRefresh > listAction && listRefresh < scanAction &&
+        source.slice(listAction, listRefresh).includes(
+          'const loadedEventConfig = normalizeQrBingoEventConfig(data.event_config);',
+        ),
       'the list response must refresh event configuration',
     );
     assert(
@@ -96,7 +99,7 @@ Deno.test(
         source.includes('!canRequestCameraPermission') &&
         includesIgnoringWhitespace(
           source,
-          'if (eventScanEnabled !== true || scanLocked || scanInFlightRef.current || raffleOffer || !value) return;',
+          'if (!scannerConfigVerified || eventScanEnabled !== true || (!isolatedFixtureActive && !isQrBingoScanWindowOpen(eventConfig, Date.now())) || scanLocked || scanInFlightRef.current || raffleOffer || !value) return;',
         ) &&
         includesIgnoringWhitespace(
           source,
@@ -113,7 +116,7 @@ Deno.test(
     assert(
       includesIgnoringWhitespace(
         source,
-        'const canReviewVendorDraw = isScanned && vendorDrawsEnabled && participationNoticeAccepted;',
+        'const canReviewVendorDraw = isScanned && (isolatedFixtureActive || inShowScannedVendorIds.has(vendor.id)) && vendorDrawsEnabled && participationNoticeAccepted;',
       ) &&
         source.includes('disabled={!canReviewVendorDraw || savingBingo}') &&
         includesIgnoringWhitespace(
@@ -177,7 +180,7 @@ Deno.test(
     );
 
     assert(
-      source.includes('const QR_BINGO_REQUEST_TIMEOUT_MS = 12000;') &&
+      source.includes('const QR_BINGO_REQUEST_TIMEOUT_MS = 30_000;') &&
         source.includes('const controller = new AbortController();') &&
         includesIgnoringWhitespace(
           source,
@@ -195,7 +198,7 @@ Deno.test(
           'QR Bingo took too long to load. Check your connection and try again.',
         ) &&
         source.includes(
-          'Saving this booth visit took too long. Check your connection and scan again.',
+          'We could not confirm this scan. Please scan again to check your progress.',
         ) &&
         source.includes(
           'Loading this vendor draw took too long. Check your connection and try again.',
@@ -203,7 +206,7 @@ Deno.test(
         source.includes(
           'Entering this vendor draw took too long. Check your connection and try again.',
         ),
-      'list, booth scan, raffle offer, and raffle opt-in must each expose a clear timeout error',
+      'list, booth scan, raffle offer, and raffle opt-in must each expose clear bounded-request recovery without claiming an uncertain scan failed',
     );
     assert(
       includesIgnoringWhitespace(
@@ -336,7 +339,7 @@ Deno.test(
 );
 
 Deno.test(
-  'native vendor draw keeps pool controls, selection, verification, and email separate',
+  'native vendor draw fixes one winner and keeps selection and email separate',
   async () => {
     const source = await Deno.readTextFile(
       new URL('../../../app/(tabs)/index.tsx', import.meta.url),
@@ -347,16 +350,12 @@ Deno.test(
         source.includes(
           'exclude_previous_winners: requestExcludePreviousWinners',
         ) &&
-        includesIgnoringWhitespace(
-          source,
-          'setRaffleMaxWinners(normalizeRaffleMaxWinners(data.settings?.max_winners))',
-        ) &&
-        includesIgnoringWhitespace(
-          source,
-          'setRaffleExcludePreviousWinners(data.settings?.exclude_previous_winners !== false)',
-        ) &&
-        source.includes('Do not select the same couple twice'),
-      'the app must persist one-to-three winner settings and the default-on repeat-winner rule',
+        source.includes('const requestMaxWinners = 1;') &&
+        source.includes('const requestExcludePreviousWinners = true;') &&
+        includesIgnoringWhitespace(source, 'function normalizeRaffleMaxWinners(_value: unknown): 1 { return 1; }') &&
+        !source.includes('A different couple each time') &&
+        !source.includes('Number of winners'),
+      'the app must persist one winner with no repeat-winner or winner-count chooser',
     );
     assert(
       source.includes("action: 'vendor_raffle_entries_get'") &&
@@ -410,7 +409,7 @@ Deno.test(
 );
 
 Deno.test(
-  'locked vendor draws preserve their exact material terms when entries reopen',
+  'winner-email locks preserve exact prize terms while event locks remain separate',
   async () => {
     const nativeSource = await Deno.readTextFile(
       new URL('../../../app/(tabs)/index.tsx', import.meta.url),
@@ -424,8 +423,10 @@ Deno.test(
 
     assert(
       nativeSource.includes(
-        'const materialTermsLocked = Boolean(vendorRaffle?.material_terms_locked);',
+        'const prizeDetailsLocked = areVendorPrizeDetailsLocked(vendorRaffle);',
       ) &&
+        nativeSource.includes("typeof data?.prize_details_locked === 'boolean'") &&
+        nativeSource.includes(': Boolean(data?.material_terms_locked)') &&
         nativeSource.includes(
           '? currentSettings?.prize_title || draftPrizeTitle',
         ) &&
@@ -440,8 +441,10 @@ Deno.test(
     );
     assert(
       websiteSource.includes(
-        'const materialTermsLocked = Boolean(state.data.material_terms_locked);',
+        'const locked = prizeDetailsLocked(state.data);',
       ) &&
+        websiteSource.includes("typeof data.prize_details_locked === 'boolean'") &&
+        websiteSource.includes(': Boolean(data && data.material_terms_locked)') &&
         websiteSource.includes('? text(settings.prize_title)') &&
         websiteSource.includes('? text(settings.prize_description)') &&
         websiteSource.includes('? number(settings.prize_approx_value_cad)'),

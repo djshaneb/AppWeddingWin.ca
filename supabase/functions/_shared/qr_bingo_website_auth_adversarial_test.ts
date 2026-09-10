@@ -306,6 +306,8 @@ Deno.test("website rejects freshly signed admin, couple and unknown actions", as
       "public_config",
       "publish",
       "fixture_context",
+      "contact_profile_get",
+      "contact_profile_save",
       "scan",
       "list",
       "raffle_offer",
@@ -508,7 +510,14 @@ Deno.test("website rejects non-POST and oversized UTF-8 bodies before secret loa
 });
 
 for (
-  const action of ["fixture_context", "scan", "raffle_offer", "raffle_opt_in"]
+  const action of [
+    "fixture_context",
+    "contact_profile_get",
+    "contact_profile_save",
+    "scan",
+    "raffle_offer",
+    "raffle_opt_in",
+  ]
 ) {
   Deno.test(`couple website proof uses separate principal and nonce scope for ${action}`, async () => {
     const value = await vector({

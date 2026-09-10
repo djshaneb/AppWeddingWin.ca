@@ -1,0 +1,104 @@
+<details class="wwcd-search-card" data-ww-couple-search>
+  <summary class="wwcd-search-launcher">
+    <span class="wwcd-search-mark" aria-hidden="true">
+      <img src="https://www.weddingwin.ca/images/weddingwin-page-assets/weddingwin-search-magnifying-glass-vendor-directory-icon.webp" alt="">
+    </span>
+    <span class="wwcd-launcher-copy">
+      <span class="wwcd-search-eyebrow">Wedding vendor search</span>
+      <strong class="wwcd-launcher-title" role="heading" aria-level="2">
+        <span class="wwcd-title-wide">Find wedding vendors</span>
+        <span class="wwcd-title-compact">Find vendors</span>
+      </strong>
+      <small>
+        <span class="wwcd-proof-wide">33 categories &bull; Search by city or province</span>
+        <span class="wwcd-proof-compact">33 categories &bull; Any location</span>
+      </small>
+    </span>
+    <span class="wwcd-launcher-action" aria-hidden="true">
+      <span class="wwcd-launcher-action-closed">Start search</span>
+      <span class="wwcd-launcher-action-open">Hide search</span>
+      <span class="wwcd-chevron"></span>
+    </span>
+  </summary>
+
+  <div class="wwcd-search-reveal">
+    <div class="wwcd-search-reveal-inner">
+      <div class="wwcd-search-panel">
+        <div class="wwcd-panel-heading">
+          <span>
+            <strong>Search all WeddingWin vendors</strong>
+            <small>Choose what you need and where you need it.</small>
+          </span>
+          <button class="wwcd-search-close" type="button" aria-label="Close vendor search" hidden>Close</button>
+        </div>
+
+        <form class="wwcd-search-form website-search" name="ww_couple_dashboard_search" action="/wedding_search" method="get">
+          <div class="wwcd-field">
+            <label for="wwcd-category">Vendor category</label>
+            <div class="wwcd-control wwcd-category-control">
+              <img src="https://www.weddingwin.ca/images/weddingwin-page-assets/ww-icon-category-ring.webp" alt="" aria-hidden="true">
+              <select id="wwcd-category" class="form-control" name="sid">
+                <option value="8" selected>Wedding Venues</option>
+                <option value="27">Event Rentals</option>
+                <option value="23">Live Streaming Services</option>
+                <option value="38">Live Wedding Musicians</option>
+                <option value="47">Men's Formal Wear</option>
+                <option value="40">Pet Care</option>
+                <option value="45">Wedding Accessories</option>
+                <option value="46">Wedding Beauty Treatment</option>
+                <option value="21">Wedding Cakes</option>
+                <option value="12">Wedding Catering</option>
+                <option value="48">Wedding Child Care</option>
+                <option value="43">Wedding Content Creator</option>
+                <option value="18">Wedding Decorations</option>
+                <option value="10">DJs</option>
+                <option value="33">Wedding Dresses</option>
+                <option value="35">Wedding Entertainer</option>
+                <option value="19">Wedding Favours</option>
+                <option value="49">Wedding Finances</option>
+                <option value="39">Wedding Fitness</option>
+                <option value="17">Florists</option>
+                <option value="41">Wedding Gifts</option>
+                <option value="36">Wedding Hair Stylist</option>
+                <option value="15">Wedding Invitations</option>
+                <option value="37">Wedding Jewellers</option>
+                <option value="34">Makeup Artists</option>
+                <option value="44">Wedding Mobile Bar</option>
+                <option value="20">Wedding Officiants</option>
+                <option value="24">Wedding PhotoBooth</option>
+                <option value="9">Photographers</option>
+                <option value="22">Wedding Planners</option>
+                <option value="14">Wedding Transportation</option>
+                <option value="42">Wedding Travel Agency</option>
+                <option value="13">Wedding Videographer</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="wwcd-field">
+            <label for="wwcd-location">City or province</label>
+            <div class="wwcd-control">
+              <img src="https://www.weddingwin.ca/images/weddingwin-page-assets/ww-icon-location-pin.webp" alt="" aria-hidden="true">
+              <input id="wwcd-location" class="googleSuggest googleLocation form-control" name="location_value" type="text" placeholder="City or postal code" autocomplete="off">
+            </div>
+          </div>
+
+          <button class="wwcd-search-button" type="submit">
+            <img src="https://www.weddingwin.ca/images/weddingwin-page-assets/weddingwin-search-magnifying-glass-vendor-directory-icon.webp" alt="" aria-hidden="true">
+            <span>Search Vendors</span>
+          </button>
+        </form>
+
+        <div class="wwcd-popular" role="group" aria-label="Popular vendor categories">
+          <span class="wwcd-popular-label">Popular</span>
+          <button type="button" data-ww-category="9">Photographers</button>
+          <button type="button" data-ww-category="8" class="is-active">Venues</button>
+          <button type="button" data-ww-category="17">Florists</button>
+          <button type="button" data-ww-category="10">DJs</button>
+          <button type="button" data-ww-category="34">Makeup Artists</button>
+          <button type="button" data-ww-category="22">Wedding Planners</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</details>

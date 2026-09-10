@@ -69,11 +69,11 @@ function dashboard(patch = {}) {
     rules_version: rulesVersion, rules_current: true,
     terms_url: 'https://www.weddingwin.ca/qr-bingo-vendor-draw-rules',
     vendor_responsibility_disclosure: 'Fictional unit-test responsibility text.',
-    material_terms_locked: false, event_key: 'unit-test-event', draws: [], entry_count: 0,
+    material_terms_locked: false, prize_details_locked: false, event_key: 'unit-test-event', draws: [], entry_count: 0,
     settings: {
       enabled: false, prize_title: originalDescription.split('\n')[0],
       prize_description: normalized(originalDescription), prize_approx_value_cad: 500,
-      max_winners: 3, exclude_previous_winners: true,
+      max_winners: 1, exclude_previous_winners: true,
       legal_terms_accepted: false, vendor_responsibility_acknowledged: false,
       legal_terms_version: rulesVersion, updated_at: before,
     },
@@ -97,7 +97,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 const commonFunctions = [
-  'text', 'number', 'winnerCount', 'firstLine', 'formatPrizeDraftDescription',
+  'text', 'number', 'prizeDetailsLocked', 'firstLine', 'formatPrizeDraftDescription',
   'samePrizeWording', 'formatDate', 'trustedWeddingWinUrl', 'makeElement',
   'currentDraftSignature', 'activeDraws', 'verifiedDraws', 'configuredWinnerCount',
   'updateRulesReviewProgress', 'updateWizardSummary', 'setStatus', 'setBusy',
@@ -121,7 +121,7 @@ function harness(options = {}) {
   };
   for (const name of [
     'status', 'workspace', 'appReviewFixtureNotice', 'emailTestFixtureNotice',
-    'enabled', 'description', 'prizeValue', 'maxWinners', 'excludePreviousWinners',
+    'enabled', 'description', 'prizeValue',
     'legalAccepted', 'vendorResponsibilityDisclosure', 'vendorResponsibilityDetails',
     'rulesLink', 'acceptanceState', 'eligibility', 'entryClose', 'drawAt', 'odds',
     'saveButton', 'reloadButton', 'materialLock', 'entryCount', 'entryCountLabel',
@@ -133,8 +133,6 @@ function harness(options = {}) {
   context.description.value = originalDescription;
   context.enabled.helpNode = new Node('small');
   context.prizeValue.value = '500.00';
-  context.maxWinners.value = '3';
-  context.excludePreviousWinners.checked = true;
   context.showWizardStep = (step, settings) => {
     navigations.push({ step, settings }); context.state.currentStep = Number(step);
   };
@@ -220,11 +218,6 @@ test('one checkbox accepts all required current rules; opening still needs the c
   c.changeAgreement();
   assert.equal(c.acceptanceState.textContent, 'Ready to save');
   assert.equal(c.enabled.helpNode.textContent, 'Save and continue to let couples enter your draw.');
-  for (const invalidCount of ['0', '4', '2.5']) {
-    c.maxWinners.value = invalidCount;
-    assert.equal(c.validateDraft().step, 1);
-  }
-  c.maxWinners.value = '3';
   c.prizeValue.value = '0';
   assert.equal(c.validateDraft().step, 1);
   c.prizeValue.value = '500.00';
@@ -284,24 +277,85 @@ test('changed server wording is authoritative rather than falsely preserving an 
   assert.equal(c.prizeValue.value, '250');
 });
 
-test('material locks submit canonical protected prize fields, while timestamps and locks refresh', async () => {
-  const { context: c, calls } = harness({ request: (_, body) => responseFor(body, {}, { material_terms_locked: true }) });
+test('winner-email lock submits canonical prize fields, while timestamps and locks refresh', async () => {
+  const { context: c, calls } = harness({ request: (_, body) => responseFor(body, {}, { material_terms_locked: true, prize_details_locked: true }) });
   c.state.data.material_terms_locked = true;
+  c.state.data.prize_details_locked = true;
   c.description.value = 'Unsaved attempted replacement';
-  c.prizeValue.value = '999'; c.maxWinners.value = '2'; c.excludePreviousWinners.checked = false;
+  c.prizeValue.value = '999';
   await c.save();
   assert.equal(calls[0].body.prize_description, normalized(originalDescription));
   assert.equal(calls[0].body.prize_title, originalDescription.split('\n')[0]);
   assert.equal(calls[0].body.prize_approx_value_cad, 500);
-  assert.equal(calls[0].body.max_winners, 3);
+  assert.equal(calls[0].body.max_winners, 1);
   assert.equal(calls[0].body.exclude_previous_winners, true);
-  for (const key of ['description', 'prizeValue', 'maxWinners', 'excludePreviousWinners']) assert.equal(c[key].disabled, true);
+  for (const key of ['description', 'prizeValue']) assert.equal(c[key].disabled, true);
   assert.equal(c.state.data.settings.updated_at, after);
+});
+
+test('one winner is fixed in every save without winner-count or repeat-winner controls', async () => {
+  assert.doesNotMatch(template, /data-field="(?:max_winners|exclude_previous_winners)"|Number of winners|A different couple each time/);
+  assert.doesNotMatch(source, /\bmaxWinners\b|\bexcludePreviousWinners\b/);
+  const { context: c, calls } = harness();
+  c.state.data.settings.max_winners = 3;
+  c.state.data.settings.exclude_previous_winners = false;
+  await c.save();
+  assert.equal(calls[0].body.max_winners, 1);
+  assert.equal(calls[0].body.exclude_previous_winners, true);
+  assert.equal(c.configuredWinnerCount(), 1);
+});
+
+test('opening or selecting a winner does not lock prize edits before the email is sent', async () => {
+  for (const draw of [null, { id: 'potential', selection_status: 'potential' }, { id: 'verified', selection_status: 'verified', notice_complete: false }]) {
+    const { context: c, calls } = harness();
+    c.renderDashboard(dashboard({ material_terms_locked: true, prize_details_locked: false, draws: draw ? [draw] : [] }));
+    assert.equal(c.description.disabled, false);
+    assert.equal(c.prizeValue.disabled, false);
+    c.description.value = 'Updated gift\nUpdated conditions'; c.prizeValue.value = '750';
+    await c.save();
+    assert.equal(calls[0].body.prize_title, 'Updated gift');
+    assert.equal(calls[0].body.prize_description, 'Updated gift\nUpdated conditions');
+    assert.equal(calls[0].body.prize_approx_value_cad, 750);
+    assert.equal(calls[0].body.max_winners, 1);
+  }
+});
+
+test('older responses fail safe and the authoritative email flag locks or unlocks only prize fields', () => {
+  const { context: c } = harness();
+  for (const value of [undefined, null, 'false', true]) {
+    c.renderDashboard(dashboard({ material_terms_locked: true, prize_details_locked: value }));
+    assert.equal(c.description.disabled, true);
+    assert.equal(c.prizeValue.disabled, true);
+    assert.equal(c.materialLock.classList.contains('is-hidden'), false);
+  }
+  c.renderDashboard(dashboard({ material_terms_locked: true, prize_details_locked: false }));
+  assert.equal(c.description.disabled, false);
+  assert.equal(c.prizeValue.disabled, false);
+  assert.equal(c.materialLock.classList.contains('is-hidden'), true);
+  c.renderDashboard(dashboard({ material_terms_locked: false, prize_details_locked: true }));
+  assert.equal(c.description.disabled, true);
+  assert.equal(c.prizeValue.disabled, true);
+  assert.equal(c.legalAccepted.disabled, false);
+});
+
+test('prize lock copy distinguishes sending, sent and unconfirmed delivery', () => {
+  const { context: c } = harness();
+  for (const [reason, copy] of [
+    ['sending', 'The winner email is being sent. Prize details are temporarily locked.'],
+    ['sent', 'Prize details are locked because the winner email has been sent.'],
+    ['unconfirmed', 'Email delivery is being checked. Prize details are temporarily locked.'],
+    [null, 'Prize details are currently locked. Refresh to check their status.'],
+  ]) {
+    c.renderDashboard(dashboard({ prize_details_locked: true, prize_details_lock_reason: reason }));
+    assert.equal(c.description.disabled, true);
+    assert.equal(c.prizeValue.disabled, true);
+    assert.equal(c.materialLock.textContent, copy);
+  }
 });
 
 test('409 preserves the visible unsaved draft and current step, updates metadata and requires reload', async () => {
   const conflict = Object.assign(new Error('Changed elsewhere.'), {
-    status: 409, data: dashboard({ settings: { ...dashboard().settings, updated_at: after }, material_terms_locked: true }),
+    status: 409, data: dashboard({ settings: { ...dashboard().settings, updated_at: after }, material_terms_locked: true, prize_details_locked: true }),
   });
   const { context: c, calls, navigations } = harness({ request: () => { throw conflict; } });
   c.state.currentStep = 1;
@@ -360,7 +414,28 @@ test('Step 3 shows contacts without raw IDs, retains protected actions and filte
   assert.ok(buttons.every(node => node.disabled));
 });
 
-test('winner gates still enforce pool, timing, pending review, maximum three and separate email', async () => {
+test('Step 3 displays optional wedding venues and searches both canonical and legacy entry keys', () => {
+  const { context: c } = harness();
+  vm.runInContext([
+    'entryValue', 'pendingPotentialWinner', 'entrantSelectionDetails', 'entrantInitials',
+    'formatWeddingDate', 'appendContactItem', 'renderEntrants',
+  ].map(functionSource).join('\n'), c);
+  c.state.entries = [
+    { name: 'First Couple', wedding_venue: 'Garden Hall', included: true, pool_status: 'included' },
+    { couple_name: 'Second Couple', couple_wedding_venue: 'Lake Resort', included: true, pool_status: 'included' },
+    { name: 'No Venue Couple', included: true, pool_status: 'included' },
+  ];
+  c.renderEntrants();
+  assert.match(c.entrants.textContent, /Wedding venue.*Garden Hall/);
+  assert.match(c.entrants.textContent, /Wedding venue.*Lake Resort/);
+  assert.match(c.entrants.textContent, /Wedding venue.*Not provided/);
+  for (const query of ['garden', 'LAKE']) {
+    c.state.entrantQuery = query; c.renderEntrants();
+    assert.equal(c.entrantVisibleCount.textContent, 'Showing 1 of 3 contacts');
+  }
+});
+
+test('winner gates still enforce pool, timing, pending review, one winner and separate email', async () => {
   const { context: c, calls } = harness();
   vm.runInContext(['renderDrawControls', 'drawPotentialWinner', 'sendWinnerNotice'].map(functionSource).join('\n'), c);
   for (const patch of [
@@ -374,7 +449,7 @@ test('winner gates still enforce pool, timing, pending review, maximum three and
   }
   c.state.data = dashboard({ can_draw: true, eligible_entry_count: 2 });
   c.renderDrawControls(); assert.equal(c.drawButton.disabled, false);
-  assert.equal(c.drawButton.textContent, 'Select winner 1 of 3');
+  assert.equal(c.drawButton.textContent, 'Select potential winner');
   await c.sendWinnerNotice('not-a-verified-selection');
   assert.equal(calls.length, 0);
   assert.match(c.status.textContent, /Winner email is not available/);
@@ -625,13 +700,27 @@ test('linked rules keep the question obligation while replacing technical answer
   }
 });
 
+test('public rules match one winner and prize editing before email without removing replacement or history', () => {
+  const legal = readFileSync(new URL('../brilliant-directories/pages/qr-bingo-official-rules.html', import.meta.url), 'utf8');
+  const copy = normalized(legal.replace(/<[^>]*>/g, ''));
+  assert.match(copy, /Each draw has one winner\./);
+  assert.match(copy, /selects one potential winner at random/);
+  assert.match(copy, /may edit the prize title, description, and value until the winner email starts sending/);
+  assert.match(copy, /stay locked while the email is sending and after it has been sent/);
+  assert.match(copy, /Eligibility, event dates, entry limits, and the other draw terms remain locked/);
+  assert.match(copy, /Choose a different winner before confirming the current selection/);
+  assert.match(copy, /The previous selection and contact details are kept\./);
+  assert.match(copy, /remains in the vendor's complete entrant CSV and the audit record/);
+  assert.doesNotMatch(copy, /one, two, or three|permits repeat winners|Prize and draw terms are locked after/);
+});
+
 // These are local UI response fixtures, not created accounts or email sends.
 // The database selector is tested separately against its actual SQL transaction.
 const drawTwentyCouples = Array.from({ length: 20 }, (_, index) => {
   const suffix = String(index + 1).padStart(2, '0');
   return {
     couple_name: `Fictional Draw Couple ${suffix}`,
-    couple_email: `blair.shane+ww-draw20-${suffix}@gmail.com`,
+    couple_email: `draw-couple-${suffix}@example.invalid`,
     couple_phone: `905-555-01${suffix}`,
     participant_reference: `PRIVATE-DRAW20-${suffix}`,
     included: true, pool_status: 'included', can_update: true,
@@ -661,7 +750,7 @@ function drawTwentyHarness(options = {}) {
   return h;
 }
 
-test('20-couple pool displays every distinct Gmail alias and name, with exact search and selection filters', () => {
+test('20-couple pool displays every distinct synthetic email and name, with exact search and selection filters', () => {
   const h = drawTwentyHarness(); const c = h.context;
   assert.equal(new Set(drawTwentyCouples.map(entry => entry.couple_email)).size, 20);
   c.renderEntrants(); assert.equal(c.entrantVisibleCount.textContent, '20 contacts');
@@ -721,32 +810,48 @@ test('20-couple replacement keeps the earlier selection history and reloads all 
   assert.deepEqual(h.calls.map(call => call.action), ['vendor_raffle_replace', 'vendor_raffle_entries_get']);
 });
 
-test('20-couple pool offers at most 3 winners and requires a separate explicit send action for each', async () => {
-  const chosenIndexes = [1, 8, 16]; let round = 0; const history = [];
+test('20-couple pool offers one winner and requires a separate explicit send action', async () => {
+  const chosenIndex = 8; let sent = false; const history = [];
   const h = drawTwentyHarness({ request: (action, body) => {
     if (action === 'vendor_raffle_draw') {
-      assert.ok(round < 3); history.push(drawTwentyWinner(chosenIndexes[round], { draw_number: round + 1 }));
+      assert.equal(history.length, 0); history.push(drawTwentyWinner(chosenIndex, { draw_number: 1 }));
     } else if (action === 'vendor_raffle_send_notice') {
       assert.equal(body.draw_id, history.at(-1).id); assert.equal(body.winner_checks_confirmed, true);
       history[history.length - 1] = { ...history.at(-1), selection_status: 'verified', can_send_notice: false, notice_complete: true };
-      round++;
+      sent = true;
     } else throw new Error('Unexpected action');
     return drawTwentyDashboard({ draws: history.map(draw => ({ ...draw })), eligible_entry_count: 20 - history.length,
-      draw_limit_reached: round === 3, can_draw: round < 3 && history.every(draw => draw.selection_status === 'verified') });
+      draw_limit_reached: sent, can_draw: !sent && !history.length, prize_details_locked: sent });
   } }); const c = h.context;
-  for (let index = 0; index < 3; index++) {
-    c.renderDrawControls(); assert.equal(c.drawButton.disabled, false);
-    await c.drawPotentialWinner();
-    assert.equal(h.calls.filter(call => call.action === 'vendor_raffle_send_notice').length, index);
-    assert.equal(c.drawButton.disabled, true);
-    await c.sendWinnerNotice(c.currentPendingSelectionId());
-  }
-  c.renderDrawControls(); assert.equal(c.configuredWinnerCount(), 3);
-  assert.equal(c.verifiedDraws().length, 3); assert.equal(c.drawButton.disabled, true);
-  assert.equal(c.drawStatusLabel.textContent, 'All winners chosen');
-  assert.equal(new Set(c.state.data.draws.map(draw => draw.winner_email)).size, 3);
-  assert.deepEqual(h.calls.map(call => call.action), Array.from({ length: 3 }, () => ['vendor_raffle_draw', 'vendor_raffle_send_notice']).flat());
-  for (const index of chosenIndexes) assert.ok(h.confirmations.some(message => message.includes(drawTwentyCouples[index].couple_email)));
+  vm.runInContext(functionSource('renderDashboard'), c);
+  c.renderDrawControls(); assert.equal(c.drawButton.disabled, false);
+  await c.drawPotentialWinner();
+  assert.equal(h.calls.filter(call => call.action === 'vendor_raffle_send_notice').length, 0);
+  assert.equal(c.drawButton.disabled, true);
+  await c.sendWinnerNotice(c.currentPendingSelectionId());
+  c.renderDrawControls(); assert.equal(c.configuredWinnerCount(), 1);
+  assert.equal(c.verifiedDraws().length, 1); assert.equal(c.drawButton.disabled, true);
+  assert.equal(c.drawStatusLabel.textContent, 'Winner chosen');
+  assert.equal(c.description.disabled, true); assert.equal(c.prizeValue.disabled, true);
+  await c.drawPotentialWinner();
+  assert.deepEqual(h.calls.map(call => call.action), ['vendor_raffle_draw', 'vendor_raffle_send_notice']);
+  assert.ok(h.confirmations.some(message => message.includes(drawTwentyCouples[chosenIndex].couple_email)));
+});
+
+test('legacy multiple-winner records stay visible but cannot create another winner', async () => {
+  const history = [1, 8, 16].map((index, position) => drawTwentyWinner(index, {
+    draw_number: position + 1, selection_status: 'verified', notice_complete: true, can_send_notice: false,
+  }));
+  const h = drawTwentyHarness(); const c = h.context;
+  c.state.data = drawTwentyDashboard({ draws: history, can_draw: true, draw_limit_reached: false });
+  c.state.data.settings.max_winners = 3;
+  c.renderDrawControls(); c.renderDrawHistory();
+  assert.equal(c.drawButton.disabled, true);
+  assert.equal(c.configuredWinnerCount(), 1);
+  await c.drawPotentialWinner();
+  assert.equal(h.calls.length, 0);
+  assert.equal(c.state.data.draws.length, 3);
+  for (const draw of history) assert.ok(c.draws.textContent.includes(draw.winner_email));
 });
 
 test('20-couple fast-tap stress runs 60 selection/replacement/send attempts but starts one request per pending operation', async () => {

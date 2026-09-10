@@ -1,12 +1,13 @@
 // bd-chat-status (rebuilt): unread counts come from the Supabase chat mirror.
-// The only BD traffic is the shared, budgeted mirror refresh (max ~2-4 calls
-// per 20s across ALL clients), so this can never trip BD's rate limit.
+// Mirror refresh is shared and budgeted across clients. The member and email
+// verification checks are fresh so cached sessions cannot bypass a pending change.
 
 import {
   activeChatBlocksForMember,
   admin,
   appUnreadCountsForThreads,
   BdRateLimitError,
+  bdFetchUserById,
   cachedUsersByIds,
   getSessionUser,
   hasPrivateAppReviewerAccess,
@@ -24,6 +25,11 @@ import {
   wasRateLimited,
 } from "../_shared/bd_chat.ts";
 import { sumUnreadOwnerCounts } from "../_shared/chat_moderation.ts";
+import {
+  EMAIL_CONFIRMATION_NOTICE,
+  loadMemberEmailVerification,
+  MemberEmailVerificationUnavailableError,
+} from "../_shared/member_email_verification.ts";
 
 const CHAT_INBOX_PATH = "/account/chat_messages";
 
@@ -100,8 +106,15 @@ Deno.serve(async (request) => {
 
     await loadSharedRateLimit();
 
-    const user = await getSessionUser(nativeSession);
-    if (!user?.user_id) {
+    const authenticatedUser = await getSessionUser(nativeSession);
+    if (!authenticatedUser?.user_id) {
+      if (wasRateLimited()) {
+        return jsonResponse({ ok: false, error: "Website chat status busy", retriable: true }, 429);
+      }
+      return jsonResponse({ ok: false, error: "Native session expired" }, 401);
+    }
+    const user = await bdFetchUserById(String(authenticatedUser.user_id));
+    if (!user?.user_id || String(user.user_id) !== String(authenticatedUser.user_id)) {
       if (wasRateLimited()) {
         return jsonResponse({ ok: false, error: "Website chat status busy", retriable: true }, 429);
       }
@@ -112,6 +125,11 @@ Deno.serve(async (request) => {
       !(await hasPrivateAppReviewerAccess(user.user_id))
     ) {
       return jsonResponse({ ok: false, error: "Active membership required" }, 403);
+    }
+    const emailVerification = await loadMemberEmailVerification(user.user_id, user.email);
+    if (emailVerification.email_confirmation_required) {
+      return jsonResponse({ ok: false, code: "email_confirmation_required", error: EMAIL_CONFIRMATION_NOTICE,
+        ...emailVerification }, 428);
     }
 
     // Keep the mirror fresh so new website messages are noticed even when the
@@ -203,6 +221,9 @@ Deno.serve(async (request) => {
       inbox_path: CHAT_INBOX_PATH,
     });
   } catch (error) {
+    if (error instanceof MemberEmailVerificationUnavailableError) {
+      return jsonResponse({ ok: false, code: "email_verification_unavailable", error: error.message, retriable: true }, 503);
+    }
     if (error instanceof BdRateLimitError) {
       return jsonResponse({ ok: false, error: "Website chat status busy", retriable: true }, 429);
     }

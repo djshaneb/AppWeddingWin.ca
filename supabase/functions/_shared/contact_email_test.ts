@@ -68,7 +68,7 @@ Deno.test("all signup and profile endpoints use the relay-safe contact validator
   }
 });
 
-Deno.test("app never gates access on replacing an Apple relay address", async () => {
+Deno.test("app accepts Apple relay login but requests contact email only inside QR Bingo", async () => {
   const source = await Deno.readTextFile(
     new URL("../../../app/(tabs)/index.tsx", import.meta.url),
   );
@@ -78,7 +78,7 @@ Deno.test("app never gates access on replacing an Apple relay address", async ()
   );
   const emailValidator = source.slice(
     source.indexOf("function isValidEmail"),
-    source.indexOf("function formatWeddingDate"),
+    source.indexOf("function isValidContactPhone"),
   );
 
   if (profileGate.includes("isApplePrivateRelayEmail")) {
@@ -98,9 +98,13 @@ Deno.test("app never gates access on replacing an Apple relay address", async ()
       "app must not require a personal email in place of Apple relay",
     );
   }
-  if (!/Keep Apple email forwarding\s+enabled/.test(source)) {
+  if (!source.includes("Your Apple sign-in stays the same.")) {
     throw new Error(
-      "app must explain how relay users continue receiving contact email",
+      "QR contact changes must explain that Apple sign-in is preserved",
     );
+  }
+  const qrGate = source.slice(source.indexOf("function missingQrContactFields"), source.indexOf("function formatWeddingDate"));
+  if (!qrGate.includes("isApplePrivateRelayEmail(member.email)") || !qrGate.includes("member.email_confirmation_required")) {
+    throw new Error("QR Bingo must require a non-relay, confirmed contact email");
   }
 });

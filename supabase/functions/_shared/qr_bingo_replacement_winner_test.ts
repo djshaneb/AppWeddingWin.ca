@@ -81,7 +81,7 @@ Deno.test("current in-person selector frees disqualified slots and randomly sele
   assert(!/p_(entry_id|winner|couple)/.test(args), "The caller must not choose the replacement identity");
 });
 
-Deno.test("actual dashboard slot calculation ignores every old disqualification for all one-to-three winner limits", async () => {
+Deno.test("actual dashboard uses one slot even for legacy multi-winner settings and preserves history", async () => {
   for (const url of endpointUrls) {
     const source = await Deno.readTextFile(url);
     const dashboard = between(source, "async function getVendorRaffleDashboard(", "async function ");
@@ -101,7 +101,7 @@ Deno.test("actual dashboard slot calculation ignores every old disqualification 
             const actual = counts(rows, { max_winners: max }, (value: number) => value);
             assert(actual.activeWinnerCount === verified + potential, "Historical disqualification consumed a slot");
             assert(actual.verifiedWinnerCount === verified, "Potential/disqualified row counted as confirmed winner");
-            assert(actual.drawsRemaining === Math.max(0, max - verified - potential), "Wrong remaining winner slots");
+            assert(actual.drawsRemaining === Math.max(0, 1 - verified - potential), "Wrong remaining winner slots");
           }
         }
       }

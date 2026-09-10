@@ -307,6 +307,7 @@ if (!function_exists('ww_qrbs_escape')) {
         $allowed = array(
             'csrf_token', 'action', 'expected_revision', 'event_name', 'venue_name',
             'vendor_tag_id', 'history_starts_at', 'app_card_enabled', 'scan_enabled',
+            'scan_open_early',
             'vendor_draws_enabled',
             'email_delivery_mode', 'send_vendor_email', 'send_couple_email',
             'vendor_notice_title', 'couple_notice_title', 'rules_version',
@@ -435,6 +436,7 @@ if (!function_exists('ww_qrbs_escape')) {
             'history_starts_at' => $historyStartsAt,
             'app_card_enabled' => ww_qrbs_post_boolean($source, 'app_card_enabled', $errors),
             'scan_enabled' => ww_qrbs_post_boolean($source, 'scan_enabled', $errors),
+            'scan_open_early' => ww_qrbs_post_boolean($source, 'scan_open_early', $errors),
             'vendor_draws_enabled' => ww_qrbs_post_boolean($source, 'vendor_draws_enabled', $errors),
             'email_delivery_mode' => $emailMode,
             'send_vendor_email' => ww_qrbs_post_boolean($source, 'send_vendor_email', $errors),
@@ -861,6 +863,170 @@ if (!function_exists('ww_qrbs_escape')) {
         return $options;
     }
 
+    /* WW_QR_ADMIN_CONTACT_HELPERS_START */
+    function ww_qrbs_contact_fields($source, $allowed) {
+        if (!is_array($source)) throw new Exception('Review the contact details and try again.');
+        foreach ($source as $key => $value) {
+            if (!in_array($key, $allowed, true) || !is_string($value)) throw new Exception('Review the contact details and try again.');
+        }
+    }
+
+    function ww_qrbs_contact_lookup_request($source) {
+        ww_qrbs_contact_fields($source, array('csrf_token', 'action', 'search'));
+        if (!isset($source['action']) || $source['action'] !== 'contact_lookup') throw new Exception('Choose a supported contact action.');
+        $search = isset($source['search']) ? trim($source['search']) : '';
+        if (!ww_qrbs_is_plain_text($search, 2, 120, false)) throw new Exception('Enter at least two characters of a couple name, email or member number.');
+        return $search;
+    }
+
+    function ww_qrbs_contact_member_rows($database, $search, $exactId) {
+        if (!$database || !function_exists('mysql_real_escape_string')) throw new Exception('Couple accounts could not be checked. Please try again.');
+        if ($exactId) {
+            if (!preg_match('/^[1-9][0-9]{0,17}$/D', $search)) throw new Exception('Choose an existing couple account.');
+            $where = "u.user_id='" . mysql_real_escape_string($search) . "'";
+        } else {
+            $literal = str_replace(array(chr(92), '%', '_'), array(chr(92) . chr(92), chr(92) . '%', chr(92) . '_'), $search);
+            $like = mysql_real_escape_string($literal);
+            $where = "(CAST(u.user_id AS CHAR)='" . mysql_real_escape_string($search) . "' OR CONCAT_WS(' ',u.first_name,u.last_name) LIKE '%" . $like . "%' OR u.email LIKE '%" . $like . "%')";
+        }
+        // Public couple signup uses plan 18. Never infer couple status merely
+        // from a non-vendor account; blog/admin plans must not be added here.
+        $query = mysql($database, "SELECT u.user_id,u.first_name,u.last_name,u.email,u.subscription_id,u.active FROM users_data u WHERE u.subscription_id='18' AND u.active='2' AND " . $where . ' ORDER BY u.first_name,u.last_name,u.user_id LIMIT 20');
+        if (!$query) throw new Exception('Couple accounts could not be checked. Please try again.');
+        $members = array();
+        while ($row = mysql_fetch_assoc($query)) {
+            if (!is_array($row) || !isset($row['user_id'], $row['subscription_id'], $row['active']) || (string)$row['subscription_id'] !== '18' || (string)$row['active'] !== '2') continue;
+            $id = (string)$row['user_id'];
+            if (!preg_match('/^[1-9][0-9]{0,17}$/D', $id)) continue;
+            $name = ww_qrbs_normalize_plain_text((isset($row['first_name']) ? $row['first_name'] : '') . ' ' . (isset($row['last_name']) ? $row['last_name'] : ''));
+            $email = isset($row['email']) ? strtolower(trim((string)$row['email'])) : '';
+            $members[] = array('couple_id' => $id, 'name' => $name, 'email' => $email);
+        }
+        return $members;
+    }
+
+    function ww_qrbs_contact_mutation($source) {
+        $allowed = array('csrf_token', 'action', 'dataset', 'event_key', 'couple_id', 'expected_version', 'request_id', 'operator_identity');
+        $action = isset($source['action']) && is_string($source['action']) ? $source['action'] : '';
+        if (!in_array($action, array('contact_add', 'contact_remove', 'contact_restore'), true)) throw new Exception('Choose a supported contact action.');
+        if ($action === 'contact_add') $allowed = array_merge($allowed, array('name', 'email', 'phone', 'wedding_date', 'wedding_venue'));
+        ww_qrbs_contact_fields($source, $allowed);
+        foreach (array('dataset', 'event_key', 'couple_id', 'expected_version', 'request_id', 'operator_identity') as $key) {
+            if (!isset($source[$key])) throw new Exception('Review the contact details and try again.');
+        }
+        $event = trim($source['event_key']);
+        $couple = trim($source['couple_id']);
+        $operator = trim($source['operator_identity']);
+        if ($source['dataset'] !== 'contacts' || strlen($event) > 100 || !preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/D', $event)) throw new Exception('Choose a valid event contact list.');
+        if (!preg_match('/^[1-9][0-9]{0,17}$/D', $couple)) throw new Exception('Choose an existing couple account.');
+        if (!preg_match('/^(?:0|[1-9][0-9]{0,14})$/D', $source['expected_version']) || ($action === 'contact_add' ? $source['expected_version'] !== '0' : (int)$source['expected_version'] < 1)) throw new Exception('Refresh the contact list before making this change.');
+        if (!preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iD', $source['request_id'])) throw new Exception('Refresh the page and try again.');
+        if (!ww_qrbs_is_plain_text($operator, 3, 160, false)) throw new Exception('Enter your admin name for the change history.');
+        $payload = array('action' => $action, 'dataset' => 'contacts', 'event_key' => $event, 'couple_id' => $couple, 'expected_version' => (int)$source['expected_version'], 'request_id' => strtolower($source['request_id']), 'operator_identity' => $operator);
+        if ($action === 'contact_add') {
+            foreach (array('name', 'email', 'phone', 'wedding_date', 'wedding_venue') as $key) {
+                if (!isset($source[$key])) throw new Exception('Complete the contact form and try again.');
+                $payload[$key] = trim($source[$key]);
+            }
+            $payload['name'] = ww_qrbs_normalize_plain_text($payload['name']);
+            $payload['email'] = strtolower($payload['email']);
+            $payload['phone'] = ww_qrbs_normalize_plain_text($payload['phone']);
+            $payload['wedding_venue'] = ww_qrbs_normalize_plain_text($payload['wedding_venue']);
+            if (!ww_qrbs_is_plain_text($payload['name'], 1, 160, false) || in_array(strtolower($payload['name']), array('couple', 'weddingwin', 'weddingwin couple'), true)) throw new Exception('Enter the couple names. First names are fine.');
+            if (strlen($payload['email']) > 254 || ww_qrbs_contains_control_byte($payload['email'], true) || !filter_var($payload['email'], FILTER_VALIDATE_EMAIL) || substr($payload['email'], -strlen('@privaterelay.appleid.com')) === '@privaterelay.appleid.com') throw new Exception('Enter a direct contact email, not an Apple private relay address.');
+            $digits = preg_replace('/[^0-9]/', '', $payload['phone']);
+            if (!ww_qrbs_is_plain_text($payload['phone'], 7, 80, false) || strlen($digits) < 7 || strlen($digits) > 15) throw new Exception('Enter a valid phone number.');
+            $date = $payload['wedding_date'];
+            if ($date !== '' && (!preg_match('/^([0-9]{4})-([0-9]{2})-([0-9]{2})$/D', $date, $parts) || (int)$parts[1] < 1900 || !checkdate((int)$parts[2], (int)$parts[3], (int)$parts[1]))) throw new Exception('Choose a real wedding date.');
+            if (!ww_qrbs_is_plain_text($payload['wedding_venue'], 0, 200, false) || ($date === '' && $payload['wedding_venue'] !== '')) throw new Exception('Choose a wedding date before adding a venue.');
+        }
+        return $payload;
+    }
+    /* WW_QR_ADMIN_CONTACT_HELPERS_END */
+
+    /* WW_QR_ADMIN_DATA_HELPERS_START */
+    function ww_qrbs_data_filters($source) {
+        $allowed = array('csrf_token', 'action', 'dataset', 'event_key', 'vendor_id', 'search', 'page', 'page_size', 'operator_identity', 'contact_status');
+        foreach ($source as $key => $value) {
+            if (!in_array($key, $allowed, true) || !is_string($value)) throw new Exception('Review the data filters and try again.');
+        }
+        $dataset = isset($source['dataset']) ? $source['dataset'] : '';
+        if (!in_array($dataset, array('contacts', 'scans', 'entries', 'winners'), true)) throw new Exception('Choose a data list.');
+        $event = isset($source['event_key']) ? trim($source['event_key']) : '';
+        if (strlen($event) > 100 || !preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/D', $event)) throw new Exception('Enter a valid event key.');
+        $vendor = isset($source['vendor_id']) ? trim($source['vendor_id']) : '';
+        if ($vendor !== '' && !preg_match('/^[1-9][0-9]{0,18}$/D', $vendor)) throw new Exception('Choose a valid vendor.');
+        $search = isset($source['search']) ? trim($source['search']) : '';
+        if (!ww_qrbs_is_plain_text($search, 0, 120, false)) throw new Exception('Use a shorter search without special markup.');
+        $operator = isset($source['operator_identity']) ? trim($source['operator_identity']) : '';
+        if (($operator !== '' && !ww_qrbs_is_plain_text($operator, 3, 160, false)) || (isset($source['action']) && $source['action'] === 'data_export' && $operator === '')) throw new Exception('Enter your administrator name or work email for the audit record.');
+        $page = isset($source['page']) ? $source['page'] : '1';
+        $size = isset($source['page_size']) ? $source['page_size'] : '50';
+        if (!preg_match('/^[1-9][0-9]{0,4}$/D', $page) || (int)$page > 10000 || !preg_match('/^[1-9][0-9]{0,2}$/D', $size) || (int)$size > 100) throw new Exception('Use a valid page size.');
+        if (isset($source['contact_status']) && ($dataset !== 'contacts' || !in_array($source['contact_status'], array('active', 'removed', 'all'), true))) throw new Exception('Choose a valid contact list status.');
+        $filters = array('dataset' => $dataset, 'event_key' => $event, 'vendor_id' => $vendor, 'search' => $search,
+            'page' => (int)$page, 'page_size' => (int)$size, 'operator_identity' => $operator);
+        if ($dataset === 'contacts') $filters['contact_status'] = isset($source['contact_status']) ? $source['contact_status'] : 'active';
+        return $filters;
+    }
+
+    function ww_qrbs_csv_cell($value) {
+        $text = (string)$value;
+        // Spreadsheet formula protection includes leading whitespace/control bytes.
+        $index = 0;
+        while ($index < strlen($text) && ord($text[$index]) <= 32) $index += 1;
+        if ($index < strlen($text) && in_array($text[$index], array('=', '+', '@', '-'), true)) $text = "'" . $text;
+        return '"' . str_replace('"', '""', $text) . '"';
+    }
+
+    function ww_qrbs_scans_data($database, $filters, $config, $export) {
+        if (!is_array($config) || !isset($config['event_key'], $config['vendor_tag_id'], $config['history_starts_at'], $config['entry_closes_at'])
+            || $filters['event_key'] !== (string)$config['event_key']) throw new Exception('Website scan history is available for the current published event only.');
+        $start = ww_qrbs_validate_datetime(array_key_exists('scan_history_starts_at', $config) ? $config['scan_history_starts_at'] : $config['history_starts_at']);
+        $end = ww_qrbs_validate_datetime($config['entry_closes_at']);
+        $tag = (int)$config['vendor_tag_id'];
+        if ($start === '' || $end === '' || $tag < 1 || !function_exists('mysql_real_escape_string')) throw new Exception('The scan history window could not be verified.');
+        $sqlStart = mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($start)));
+        $sqlEnd = mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($end)));
+        $where = "vv.scan_date >= '" . $sqlStart . "' AND vv.scan_date < '" . $sqlEnd . "' AND EXISTS (SELECT 1 FROM rel_tags rt WHERE rt.object_id=vv.vendor_id AND rt.tag_id='" . $tag . "' AND rt.tag_type_id=1)";
+        if ($filters['vendor_id'] !== '') $where .= " AND vv.vendor_id='" . mysql_real_escape_string($filters['vendor_id']) . "'";
+        if ($filters['search'] !== '') {
+            $search = mysql_real_escape_string(str_replace(array(chr(92), '%', '_'), array(chr(92) . chr(92), chr(92) . '%', chr(92) . '_'), $filters['search']));
+            $where .= " AND (CONCAT_WS(' ',c.first_name,c.last_name,v.company,v.first_name,v.last_name,vv.user_id,vv.vendor_id) LIKE '%" . $search . "%')";
+        }
+        $from = ' FROM vendor_visits vv LEFT JOIN users_data c ON c.user_id=vv.user_id LEFT JOIN users_data v ON v.user_id=vv.vendor_id WHERE ' . $where;
+        $countQuery = mysql($database, 'SELECT COUNT(*) AS total' . $from);
+        $countRow = $countQuery ? mysql_fetch_assoc($countQuery) : false;
+        if (!$countRow || !isset($countRow['total']) || !is_numeric($countRow['total'])) throw new Exception('Scan history could not be loaded.');
+        $total = (int)$countRow['total'];
+        if ($export && $total > 5000) throw new Exception('This download is too large. Narrow the vendor or search filter to 5,000 rows or fewer.');
+        $limit = $export ? 5001 : $filters['page_size'];
+        $offset = $export ? 0 : ($filters['page'] - 1) * $filters['page_size'];
+        $result = mysql($database, "SELECT vv.user_id AS couple_id,TRIM(CONCAT_WS(' ',c.first_name,c.last_name)) AS name,vv.vendor_id AS vendor_id,COALESCE(NULLIF(v.company,''),TRIM(CONCAT_WS(' ',v.first_name,v.last_name))) AS vendor_name,vv.scan_date AS scanned_at" . $from . ' ORDER BY vv.scan_date DESC,vv.user_id ASC,vv.vendor_id ASC LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset);
+        if (!$result) throw new Exception('Scan history could not be loaded.');
+        $rows = array();
+        while ($row = mysql_fetch_assoc($result)) {
+            $clean = array('event_key' => $filters['event_key']);
+            foreach (array('couple_id', 'name', 'vendor_id', 'vendor_name', 'scanned_at') as $key) $clean[$key] = isset($row[$key]) ? (string)$row[$key] : '';
+            $rows[] = $clean;
+        }
+        if ($export && count($rows) > 5000) throw new Exception('The scan list changed. Narrow the filters and retry the download.');
+        $columns = array(array('key' => 'event_key', 'label' => 'Event'), array('key' => 'couple_id', 'label' => 'Couple ID'), array('key' => 'name', 'label' => 'Name'), array('key' => 'vendor_id', 'label' => 'Vendor ID'), array('key' => 'vendor_name', 'label' => 'Vendor'), array('key' => 'scanned_at', 'label' => 'Last scanned'));
+        return array('ok' => true, 'dataset' => 'scans', 'event_key' => $filters['event_key'], 'columns' => $columns, 'rows' => $rows,
+            'total' => $total, 'page' => $filters['page'], 'page_size' => $filters['page_size'], 'has_more' => $offset + count($rows) < $total);
+    }
+
+    function ww_qrbs_data_json($body, $status) {
+        while (function_exists('ob_get_level') && ob_get_level() > 0) @ob_end_clean();
+        http_response_code($status);
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('X-Content-Type-Options: nosniff');
+        echo json_encode($body);
+        exit();
+    }
+    /* WW_QR_ADMIN_DATA_HELPERS_END */
+
     function ww_qrbs_edge_call($database, $payload) {
         $failure = array(
             'transport_ok' => false,
@@ -886,6 +1052,7 @@ if (!function_exists('ww_qrbs_escape')) {
         unset($secret);
 
         $responseBody = '';
+        $responseLimit = isset($payload['action']) && $payload['action'] === 'data_export' ? 8388608 : 262144;
         $responseTooLarge = false;
         $handle = curl_init('https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-admin');
         if ($handle === false) { return $failure; }
@@ -909,8 +1076,8 @@ if (!function_exists('ww_qrbs_escape')) {
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_USERAGENT => 'WeddingWin-BD-QR-Admin/1.0',
-            CURLOPT_WRITEFUNCTION => function($curl, $chunk) use (&$responseBody, &$responseTooLarge) {
-                if (strlen($responseBody) + strlen($chunk) > 262144) {
+            CURLOPT_WRITEFUNCTION => function($curl, $chunk) use (&$responseBody, &$responseTooLarge, $responseLimit) {
+                if (strlen($responseBody) + strlen($chunk) > $responseLimit) {
                     $responseTooLarge = true;
                     return 0;
                 }
@@ -1055,6 +1222,82 @@ if ($ww_qrbs_method === 'POST') {
     $ww_qrbs_post_action = isset($_POST['action']) && is_string($_POST['action'])
         ? $_POST['action']
         : '';
+
+    /* WW_QR_ADMIN_CONTACT_REQUEST_START */
+    if (in_array($ww_qrbs_post_action, array('contact_lookup', 'contact_add', 'contact_remove', 'contact_restore'), true)) {
+        try {
+            $origin = isset($_SERVER['HTTP_ORIGIN']) ? strtolower((string)$_SERVER['HTTP_ORIGIN']) : '';
+            $host = isset($_SERVER['HTTP_HOST']) ? strtolower((string)$_SERVER['HTTP_HOST']) : '';
+            if (!in_array($host, array('www.weddingwin.ca', 'weddingwin.ca', 'ww2.managemydirectory.com'), true) || $origin !== 'https://' . $host) throw new Exception('Open this contact tool in the signed-in WeddingWin admin.');
+            if ($ww_qrbs_post_action === 'contact_lookup') {
+                $search = ww_qrbs_contact_lookup_request($_POST);
+                ww_qrbs_data_json(array('ok' => true, 'members' => ww_qrbs_contact_member_rows($ww_qrbs_database, $search, false)), 200);
+            }
+            $payload = ww_qrbs_contact_mutation($_POST);
+            if ($payload['action'] === 'contact_add') {
+                $members = ww_qrbs_contact_member_rows($ww_qrbs_database, $payload['couple_id'], true);
+                if (count($members) !== 1 || $members[0]['couple_id'] !== $payload['couple_id']) throw new Exception('Choose an active couple account. No contact was added.');
+                // Browser proof fields are not accepted by the allowlist. This
+                // assertion is built only from a fresh, scoped BD member read.
+                $payload['verified_couple'] = array('id' => $members[0]['couple_id'], 'subscription_id' => '18', 'active' => '2');
+            }
+            $result = ww_qrbs_edge_call($ww_qrbs_database, $payload);
+            if (!ww_qrbs_response_succeeded($result)) {
+                $status = isset($result['http_status']) ? (int)$result['http_status'] : 503;
+                $error = isset($result['payload']['error']) && is_string($result['payload']['error']) ? $result['payload']['error'] : '';
+                if (!in_array($status, array(400, 401, 403, 404, 409, 422, 429, 503), true)) $status = 503;
+                if (!ww_qrbs_is_plain_text($error, 1, 400, false)) $error = 'The change could not be confirmed. Refresh the list before trying again.';
+                ww_qrbs_data_json(array('ok' => false, 'error' => $error), $status);
+            }
+            $reply = $result['payload'];
+            if (!isset($reply['action'], $reply['dataset'], $reply['event_key'], $reply['couple_id'], $reply['request_id'], $reply['version'], $reply['removed']) || $reply['action'] !== $payload['action'] || $reply['dataset'] !== 'contacts' || $reply['event_key'] !== $payload['event_key'] || (string)$reply['couple_id'] !== $payload['couple_id'] || $reply['request_id'] !== $payload['request_id'] || !is_int($reply['version']) || $reply['version'] <= $payload['expected_version'] || !is_bool($reply['removed']) || $reply['removed'] !== ($payload['action'] === 'contact_remove')) throw new Exception('The change response could not be verified. Refresh the list before trying again.');
+            ww_qrbs_data_json($reply, 200);
+        } catch (Exception $error) {
+            ww_qrbs_data_json(array('ok' => false, 'error' => $error->getMessage()), 400);
+        }
+    }
+    /* WW_QR_ADMIN_CONTACT_REQUEST_END */
+
+    /* WW_QR_ADMIN_DATA_REQUEST_START */
+    if ($ww_qrbs_post_action === 'data_list' || $ww_qrbs_post_action === 'data_export') {
+        try {
+            $origin = isset($_SERVER['HTTP_ORIGIN']) ? strtolower((string)$_SERVER['HTTP_ORIGIN']) : '';
+            $host = isset($_SERVER['HTTP_HOST']) ? strtolower((string)$_SERVER['HTTP_HOST']) : '';
+            if (!in_array($host, array('www.weddingwin.ca', 'weddingwin.ca', 'ww2.managemydirectory.com'), true) || $origin !== 'https://' . $host) throw new Exception('Open this data tool in the signed-in WeddingWin admin.');
+            $filters = ww_qrbs_data_filters($_POST);
+            if ($filters['dataset'] === 'scans') {
+                $configResult = ww_qrbs_edge_call($ww_qrbs_database, array('action' => 'admin_get'));
+                if (!ww_qrbs_response_succeeded($configResult)) throw new Exception('Current event settings could not be verified.');
+                $export = $ww_qrbs_post_action === 'data_export';
+                $data = ww_qrbs_scans_data($ww_qrbs_database, $filters, $configResult['payload']['event_config'], $export);
+                if ($export) {
+                    $audit = $filters; unset($audit['page'], $audit['page_size']);
+                    $audit['action'] = 'data_export_audit'; $audit['row_count'] = count($data['rows']);
+                    $auditResult = ww_qrbs_edge_call($ww_qrbs_database, $audit);
+                    if (!ww_qrbs_response_succeeded($auditResult)) throw new Exception('The download audit could not be recorded. No file was downloaded; please try again.');
+                    $csvRows = array(); $heading = array();
+                    foreach ($data['columns'] as $column) $heading[] = ww_qrbs_csv_cell($column['label']);
+                    $csvRows[] = implode(',', $heading);
+                    foreach ($data['rows'] as $row) {
+                        $cells = array();
+                        foreach ($data['columns'] as $column) $cells[] = ww_qrbs_csv_cell($row[$column['key']]);
+                        $csvRows[] = implode(',', $cells);
+                    }
+                    $data = array('ok' => true, 'dataset' => 'scans', 'event_key' => $filters['event_key'], 'report' => array(
+                        'filename' => 'qr-bingo-scans-' . $filters['event_key'] . '.csv', 'mime_type' => 'text/csv;charset=utf-8',
+                        'csv' => implode(chr(13) . chr(10), $csvRows) . chr(13) . chr(10), 'row_count' => count($data['rows']), 'generated_at' => gmdate('c')));
+                }
+                ww_qrbs_data_json($data, 200);
+            }
+            $filters['action'] = $ww_qrbs_post_action;
+            $result = ww_qrbs_edge_call($ww_qrbs_database, $filters);
+            if (!ww_qrbs_response_succeeded($result)) throw new Exception('The data request could not be completed. Check the filters or narrow the download and try again.');
+            ww_qrbs_data_json($result['payload'], 200);
+        } catch (Exception $error) {
+            ww_qrbs_data_json(array('ok' => false, 'error' => $error->getMessage()), 400);
+        }
+    }
+    /* WW_QR_ADMIN_DATA_REQUEST_END */
 
     if ($ww_qrbs_post_action === 'declare_alternate_entry_reconciliation_complete') {
         $ww_qrbs_validation = ww_qrbs_validate_reconciliation_closure($_POST);
@@ -1377,6 +1620,7 @@ $ww_qrbs_defaults = array(
     'history_starts_at' => '',
     'app_card_enabled' => false,
     'scan_enabled' => false,
+    'scan_open_early' => false,
     'vendor_draws_enabled' => false,
     'email_delivery_mode' => 'disabled',
     'send_vendor_email' => false,
@@ -1525,6 +1769,61 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
   <h1>QR Bingo Settings</h1>
   <p class="ww-qrbs-lead">Choose the event, vendor group, dates, and email options used by both the Wedding Win app and website.</p>
 
+  <details class="ww-qrbs-data" id="wwQrData">
+    <summary>QR Bingo data &amp; downloads</summary>
+    <p class="ww-qrbs-data-note">View saved QR contact details, booth scans, opted-in draw entries, and winners. Downloads use the selected filters and are recorded in the admin audit. Nothing here sends an email or enters a draw.</p>
+    <div class="ww-qrbs-data-tabs" role="tablist" aria-label="QR Bingo data lists">
+      <button type="button" role="tab" data-dataset="contacts" aria-selected="true">Contacts</button>
+      <button type="button" role="tab" data-dataset="scans" aria-selected="false">Scans</button>
+      <button type="button" role="tab" data-dataset="entries" aria-selected="false">Draw entries</button>
+      <button type="button" role="tab" data-dataset="winners" aria-selected="false">Winners</button>
+    </div>
+    <form id="wwQrDataForm" action="<?php echo ww_qrbs_escape($ww_qrbs_action_url); ?>" method="post" autocomplete="off">
+      <input class="ww-qrbs-form-token" type="text" name="ww_qrbs_csrf_token" readonly tabindex="-1" aria-hidden="true" value="<?php echo ww_qrbs_escape($ww_qrbs_csrf); ?>">
+      <div class="ww-qrbs-data-fields">
+        <div><label for="wwQrDataEvent">Event</label><input id="wwQrDataEvent" name="event_key" required maxlength="100" value="<?php echo ww_qrbs_escape($ww_qrbs_event_key); ?>"></div>
+        <div><label for="wwQrDataVendor">Vendor (all if blank)</label><input id="wwQrDataVendor" name="vendor_id" list="wwQrDataVendors" inputmode="numeric" maxlength="19" placeholder="Vendor ID"><datalist id="wwQrDataVendors"><?php foreach ($ww_qrbs_reconciliation_vendor_options as $option): ?><option value="<?php echo ww_qrbs_escape($option['id']); ?>"><?php echo ww_qrbs_escape($option['label']); ?></option><?php endforeach; ?></datalist></div>
+        <div><label for="wwQrDataSearch">Search</label><input id="wwQrDataSearch" name="search" maxlength="120" placeholder="Name, email, or member ID"></div>
+        <div><label for="wwQrDataOperator">Your admin name (for changes &amp; downloads)</label><input id="wwQrDataOperator" name="operator_identity" maxlength="160" autocomplete="name" placeholder="Name or work email"></div>
+        <div id="wwQrDataContactStatusGroup"><label for="wwQrDataContactStatus">Contact list</label><select id="wwQrDataContactStatus" name="contact_status"><option value="active">Active contacts</option><option value="removed">Removed contacts</option><option value="all">All contacts</option></select></div>
+      </div>
+      <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button" type="submit">Show list</button><button class="ww-qrbs-button" id="wwQrDataExport" type="button">Download CSV</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrContactAddOpen" type="button" aria-expanded="false" aria-controls="wwQrContactPanel">Add contact</button></div>
+    </form>
+    <section class="ww-qrbs-contact-panel" id="wwQrContactPanel" aria-labelledby="wwQrContactHeading" hidden>
+      <h3 id="wwQrContactHeading">Add a Bingo contact</h3>
+      <p class="ww-qrbs-data-note" id="wwQrContactEvent"></p>
+      <p class="ww-qrbs-data-note">Choose an existing couple account. This adds contact details for this event only. It does not create an account, record a scan, enter a draw, or accept an agreement.</p>
+      <form id="wwQrContactLookupForm" autocomplete="off">
+        <label for="wwQrContactLookup">Find a couple</label>
+        <div class="ww-qrbs-contact-search"><input id="wwQrContactLookup" minlength="2" maxlength="120" required placeholder="Name, email, or member ID"><button class="ww-qrbs-button" type="submit">Search couples</button></div>
+      </form>
+      <div class="ww-qrbs-contact-matches" id="wwQrContactMatches" aria-label="Matching couple accounts"></div>
+      <form id="wwQrContactAddForm" autocomplete="off" hidden>
+        <p class="ww-qrbs-contact-chosen" id="wwQrContactChosen"></p>
+        <div class="ww-qrbs-data-fields">
+          <div><label for="wwQrContactName">Couple's names</label><input id="wwQrContactName" required maxlength="160" placeholder="Alex &amp; Jamie"></div>
+          <div><label for="wwQrContactEmail">Contact email</label><input id="wwQrContactEmail" type="email" required maxlength="254" autocomplete="off"></div>
+          <div><label for="wwQrContactPhone">Phone number</label><input id="wwQrContactPhone" type="tel" required maxlength="40" autocomplete="off"></div>
+          <div><label for="wwQrContactDate">Wedding date</label><input id="wwQrContactDate" type="date"><small class="ww-qrbs-data-note">Leave blank if it is not known.</small></div>
+          <div id="wwQrContactVenueGroup" hidden><label for="wwQrContactVenue">Wedding venue</label><input id="wwQrContactVenue" maxlength="200"></div>
+        </div>
+        <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button" type="submit">Add contact</button></div>
+      </form>
+      <p class="ww-qrbs-data-status" id="wwQrContactStatus" role="status" aria-live="polite"></p>
+      <button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrContactCancel" type="button">Cancel</button>
+    </section>
+    <section class="ww-qrbs-contact-panel" id="wwQrContactConfirm" aria-labelledby="wwQrContactConfirmHeading" hidden>
+      <h3 id="wwQrContactConfirmHeading">Confirm contact change</h3>
+      <p id="wwQrContactConfirmMessage"></p>
+      <p class="ww-qrbs-data-note">Only this event's Bingo contact list changes. Accounts, scans, draw entries, consent records, and winner history stay unchanged. Removed contacts can be restored from the Removed contacts list.</p>
+      <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button" id="wwQrContactConfirmAction" type="button">Remove contact</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrContactConfirmCancel" type="button">Cancel</button></div>
+    </section>
+    <p class="ww-qrbs-data-note" id="wwQrDataScanNote" hidden>Scans show the latest recorded visit per couple/vendor in the current published event window. Older visits may have been replaced by a later scan. Scan rows use account names; saved QR contact details are in Contacts.</p>
+    <p class="ww-qrbs-data-status" id="wwQrDataStatus" role="status" aria-live="polite">Choose a list and select Show list.</p>
+    <div class="ww-qrbs-data-table"><table aria-label="Selected QR Bingo records"><thead id="wwQrDataHead"></thead><tbody id="wwQrDataRows"></tbody></table></div>
+    <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button" id="wwQrDataPrevious" type="button" disabled>Previous</button><button class="ww-qrbs-button" id="wwQrDataNext" type="button" disabled>Next</button></div>
+  </details>
+
   <div class="ww-qrbs-guide">
     <h2>How to use this page</h2>
     <ol>
@@ -1638,6 +1937,13 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
         <label for="ww-qrbs-scan-enabled"><strong>Let couples scan booth QR codes</strong><br><span class="ww-qrbs-help">Turn this off only if you need to pause scanning. Saved booth visits are not deleted.</span></label>
       </div>
       <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'scan_enabled'); ?>
+      <div class="ww-qrbs-check">
+        <input id="ww-qrbs-scan-open-early" name="scan_open_early" type="checkbox" value="1"<?php echo ww_qrbs_truthy($ww_qrbs_form_config['scan_open_early']) ? ' checked' : ''; ?>>
+        <label for="ww-qrbs-scan-open-early"><strong>Open scanner early</strong><br><span class="ww-qrbs-help">Allow Bingo scanning before the show day. Otherwise, it opens automatically at midnight on the wedding show date, Toronto time. Pausing scanning still overrides this. Vendor draws still open during show hours and need a fresh booth scan.</span></label>
+      </div>
+      <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'scan_open_early'); ?>
+      <?php $ww_qrbs_auto_scan_date = substr(ww_qrbs_toronto_datetime_input_value($ww_qrbs_form_config['history_starts_at']), 0, 10); ?>
+      <p class="ww-qrbs-help">Automatic scanner opening: <strong><?php echo $ww_qrbs_auto_scan_date !== '' ? ww_qrbs_escape($ww_qrbs_auto_scan_date) . ' at 12:00 a.m. Toronto time' : 'midnight on the wedding show date'; ?></strong>. The wedding show start time and draw deadlines below stay unchanged.</p>
       <div class="ww-qrbs-check">
         <input id="ww-qrbs-draws-enabled" name="vendor_draws_enabled" type="checkbox" value="1"<?php echo ww_qrbs_truthy($ww_qrbs_form_config['vendor_draws_enabled']) ? ' checked' : ''; ?>>
         <label for="ww-qrbs-draws-enabled"><strong>Let couples optionally enter vendor prize draws</strong><br><span class="ww-qrbs-help">Each participating vendor still sets up its own prize and accepts the vendor terms.</span></label>

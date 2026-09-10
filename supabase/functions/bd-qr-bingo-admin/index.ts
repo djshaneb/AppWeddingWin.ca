@@ -1,5 +1,13 @@
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import {
+  handleQrAdminData,
+  QrAdminDataError,
+} from "../_shared/qr_bingo_admin_data.ts";
+import {
+  handleQrAdminContactMutation,
+  QrAdminContactError,
+} from "../_shared/qr_bingo_admin_contacts.ts";
+import {
   loadPublishedQrBingoConfig,
   publicQrBingoEventConfig,
 } from "../_shared/qr_bingo_config.ts";
@@ -422,6 +430,40 @@ Deno.serve(async (request) => {
     await requireSignedAdminRequest(request, rawBody);
     const body = JSON.parse(rawBody || "{}") as Record<string, unknown>;
     const action = String(body.action || "");
+
+    if (["contact_add", "contact_remove", "contact_restore"].includes(action)) {
+      try {
+        return jsonResponse(
+          await handleQrAdminContactMutation(requireAdmin(), body),
+        );
+      } catch (error) {
+        if (error instanceof QrAdminContactError) {
+          return jsonResponse({
+            ok: false,
+            code: error.code,
+            error: error.message,
+            ...(error.current_version === undefined
+              ? {}
+              : { current_version: error.current_version }),
+          }, error.status);
+        }
+        throw error;
+      }
+    }
+
+    if (["data_list", "data_export", "data_export_audit"].includes(action)) {
+      try {
+        return jsonResponse(await handleQrAdminData(requireAdmin(), body));
+      } catch (error) {
+        if (error instanceof QrAdminDataError) {
+          return jsonResponse(
+            { ok: false, error: error.message },
+            error.status,
+          );
+        }
+        throw error;
+      }
+    }
 
     if (action === "admin_get") {
       const config = await loadPublishedQrBingoConfig(requireAdmin());

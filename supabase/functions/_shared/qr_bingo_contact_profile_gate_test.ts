@@ -118,7 +118,6 @@ Deno.test("signup fallback names are never presented or accepted as QR contact n
   ]);
 
   const appGate = sourceBlock(app, "function missingQrContactFields");
-  const appEditor = sourceBlock(app, "function editableQrProfileFirstName");
   const profileSave = sourceBlock(app, "const saveProfile =");
   assert(
     app.includes("const RESERVED_QR_CONTACT_NAMES") &&
@@ -129,14 +128,13 @@ Deno.test("signup fallback names are never presented or accepted as QR contact n
   );
   assert(
       appGate.includes("isReservedQrContactName(displayName)") &&
-      appEditor.includes("return isReservedQrContactName(fullName) ? '' : firstName") &&
-      app.includes("editableQrProfileFirstName(member?.first_name, member?.last_name)") &&
+      app.includes("setProfileFirstName(qrContactProfile?.name || '')") &&
       profileSave.includes("isReservedQrContactName(profileDisplayName)") &&
-      app.includes('placeholder="Full name"') &&
-      app.includes("Add your full name to continue with QR Bingo") &&
-      app.includes("Add your full name here to continue with QR Bingo.") &&
-      app.includes("Add Full Name"),
-    "native profile completion must blank and reject fallback names with clear copy",
+      app.includes('placeholder="e.g. Alex & Jamie"') &&
+      app.includes("Your name &amp; your partner’s name") &&
+      app.includes("Add your name and your partner’s name here. First names are fine.") &&
+      app.includes("Add your names for QR Bingo"),
+    "native Bingo completion must use its own server contact draft and reject fallback names with clear copy",
   );
   for (const source of sources) {
     assert(
@@ -145,8 +143,10 @@ Deno.test("signup fallback names are never presented or accepted as QR contact n
     );
   }
   assert(
-    website.includes("array('couple', 'weddingwin', 'weddingwin couple')"),
-    "website QR validation must reject the same reserved fallback names",
+    sourceBlock(website, "function ww_qr_bingo_contact_profile").includes("ww_qr_bingo_vendor_draw_request('contact_profile_get', array())") &&
+      website.includes("ww_qr_bingo_vendor_draw_request('contact_profile_save'") &&
+      website.includes('id="qrContactName"'),
+    "website Bingo contact validation must use the authenticated authoritative contact service, not login-account fields",
   );
 });
 
@@ -401,7 +401,7 @@ Deno.test("native QR UI collects phone and gates real and emulated scans behind 
       'placeholder="Phone number"',
       "phone: profilePhone.trim()",
       "phone: profile.phone",
-      "phone_number: data.user?.phone_number || profile.phone",
+      "phone_number: data.user?.phone_number || profile?.phone",
       "function missingQrContactFields",
       "data.profile_complete === false",
       "setServerMissingContactFields",
@@ -463,7 +463,8 @@ Deno.test("couple phone and wedding date stay optional until QR Bingo needs a ph
   assert(
     app.includes("Add a phone number") &&
       app.includes("Add Phone Number") &&
-      app.includes("Wedding date (optional)") &&
+      app.includes('accessibilityLabel="Choose optional wedding date"') &&
+      !app.includes('testID="profile-wedding-date-input"') &&
       app.includes("Add a phone number to continue with QR Bingo.") &&
       !app.includes("Your wedding date is optional."),
     "the QR section must request missing contact details without adding wedding-date copy to the gate",
@@ -532,7 +533,7 @@ Deno.test("native contact save receives the first tap while the keyboard is open
     );
   }
   const busyGuardIndex = profileSave.indexOf(
-    "if (profileSaveLoading || profileSavePressInFlightRef.current) return;",
+    "if (!qrContactProfile || profileSaveLoading || profileSavePressInFlightRef.current) return;",
   );
   assert(
     busyGuardIndex >= 0 && busyGuardIndex < dismissIndex,
@@ -560,7 +561,8 @@ Deno.test("website QR UI and POST boundary use the same contact and participatio
       "function ww_qr_bingo_contact_profile",
       "'code' => 'profile_incomplete'",
       "'code' => 'participation_notice_required'",
-      "Complete Contact Details",
+      "Your QR Bingo contact details",
+      "contact_profile_save",
       "const CONTACT_PROFILE_COMPLETE",
       "const PARTICIPATION_NOTICE_VERSION",
       "if (!hasCurrentParticipationNotice())",

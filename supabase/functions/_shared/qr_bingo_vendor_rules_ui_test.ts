@@ -240,7 +240,7 @@ Deno.test("vendor draw autosave keeps the wizard mounted on partial conflicts", 
   );
 });
 
-Deno.test("locked prize terms still allow current rules reacceptance without mutating material fields", async () => {
+Deno.test("winner-email prize locks still allow current rules reacceptance without mutating prize fields", async () => {
   const app = await Deno.readTextFile(
     new URL("../../../app/(tabs)/index.tsx", import.meta.url),
   );
@@ -266,8 +266,6 @@ Deno.test("locked prize terms still allow current rules reacceptance without mut
       "currentSettings?.prize_title || draftPrizeTitle",
       "currentSettings?.prize_description || draftPrizeDescription",
       "Number(currentSettings?.prize_approx_value_cad || draftPrizeApproxValueCad)",
-      "normalizeRaffleMaxWinners(currentSettings?.max_winners)",
-      "currentSettings?.exclude_previous_winners !== false",
     ]
   ) {
     assert(
@@ -275,6 +273,15 @@ Deno.test("locked prize terms still allow current rules reacceptance without mut
       `locked save path is missing preserved material value ${lockedMaterialField}`,
     );
   }
+  assert(
+    save.includes("const prizeDetailsLocked = areVendorPrizeDetailsLocked(vendorRaffle);") &&
+      save.includes("const requestMaxWinners = 1;") &&
+      save.includes("const requestExcludePreviousWinners = true;") &&
+      websiteSave.includes("const locked = prizeDetailsLocked(state.data);") &&
+      websiteSave.includes("max_winners: 1") &&
+      websiteSave.includes("exclude_previous_winners: true"),
+    "both clients must use the email-specific prize lock and the fixed single-winner settings",
+  );
   assert(
     save.includes("const requestLegalAccepted = draftLegalAccepted;") &&
       includesIgnoringWhitespace(

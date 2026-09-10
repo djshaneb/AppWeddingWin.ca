@@ -14,6 +14,7 @@ const consent = {
 };
 const helpers = ['APPLE_BROWSER_RETURN_URL', 'buildNativeAppleStartUrl', 'parseNativeAppleReturnUrl'];
 const pure = loadAppDeclarations(helpers, { APP_BACKEND_URL: backend });
+const appStartParams = value => new URLSearchParams(new URL(value).hash.slice(1));
 const success = () => ({ response: { ok: true }, data: {
   ok: true, user: { user_id: 'offline-member', email: 'apple@example.invalid', subscription_id: '17' },
   native_session: { user_id: 'offline-member', token: 'offline-session' },
@@ -37,6 +38,7 @@ function harness(overrides = {}) {
     browserAuthInFlightRef: { get current() { return state.browserBusy; }, set current(v) { state.browserBusy = v; } },
     navigationIntentGenerationRef: { get current() { return state.navigation; } },
     nativeSessionGenerationRef: { get current() { return state.sessionGeneration; } },
+    authOperationGenerationRef: { get current() { return state.generation; } },
     beginAuthOperation(operation) { if (state.auth) return null; state.auth = operation; return ++state.generation; },
     authOperationIsCurrent: current,
     finishAuthOperation(operation, generation) { if (current(operation, generation)) state.auth = null; },
@@ -56,24 +58,26 @@ function finished(h) {
   assert.equal(h.state.loading, false);
 }
 
-test('Apple builder fixes provider endpoint/return URL and carries explicit vendor/couple consent', () => {
+test('Apple builder uses the branded HTTPS gateway with fragment-only app intent and explicit consent', () => {
   for (const role of ['vendor', 'couple']) {
     const start = new URL(pure.buildNativeAppleStartUrl(role, 'B'.repeat(43), consent));
-    assert.equal(start.origin, backend);
-    assert.equal(start.pathname, '/functions/v1/apple-native-oauth-start');
-    assert.equal(start.searchParams.get('return_to'), 'weddingwin://bd-apple-return');
-    assert.equal(start.searchParams.get('signup_role'), role);
-    assert.equal(start.searchParams.get('accepted_terms'), '1');
-    assert.equal(start.searchParams.get('accepted_privacy'), '1');
-    assert.equal(start.searchParams.get('terms_version'), consent.termsVersion);
-    assert.equal(start.searchParams.get('privacy_version'), consent.privacyVersion);
-    assert.equal(start.searchParams.get('accepted_at'), consent.acceptedAt);
-    assert.equal(start.searchParams.has('subscription_id'), false);
+    assert.equal(start.origin, 'https://www.weddingwin.ca');
+    assert.equal(start.pathname, '/app-apple-sign-in');
+    assert.equal(start.search, '');
+    const params = appStartParams(start);
+    assert.equal(params.get('return_to'), 'weddingwin://bd-apple-return');
+    assert.equal(params.get('signup_role'), role);
+    assert.equal(params.get('accepted_terms'), '1');
+    assert.equal(params.get('accepted_privacy'), '1');
+    assert.equal(params.get('terms_version'), consent.termsVersion);
+    assert.equal(params.get('privacy_version'), consent.privacyVersion);
+    assert.equal(params.get('accepted_at'), consent.acceptedAt);
+    assert.equal(params.has('subscription_id'), false);
   }
 });
 test('ordinary Apple browser login omits signup role and all consent', () => {
   const start = new URL(pure.buildNativeAppleStartUrl('vendor', 'B'.repeat(43)));
-  assert.deepEqual([...start.searchParams.keys()].sort(), ['code_challenge', 'return_to']);
+  assert.deepEqual([...appStartParams(start).keys()].sort(), ['code_challenge', 'return_to']);
 });
 test('invalid challenges and unaccepted signup agreements fail before opening Apple', () => {
   for (const challenge of ['', 'short', 'x'.repeat(44), '+'.repeat(43)]) {
@@ -113,16 +117,89 @@ test('signup-required callback asks the selected role to sign up without exchang
     }) });
     await h.run(role);
     assert.deepEqual(h.state.alerts, [[
-      'No WeddingWin account yet',
-      `Choose Sign up to create your ${role} account, then continue with Apple.`,
+      'Create your WeddingWin account',
+      `This Apple sign-in isn’t linked to a WeddingWin account yet. Sign up to create your ${role} account.`,
+      undefined,
     ]]);
     assert.equal(h.state.browserCalls.length, 1);
-    assert.equal(new URL(h.state.browserCalls[0][0]).searchParams.has('signup_role'), false);
+    assert.equal(appStartParams(h.state.browserCalls[0][0]).has('signup_role'), false);
     assert.equal(h.state.requests.length, 0);
     assert.equal(h.state.saved.length, 0);
     assert.equal(h.state.hidden, 0);
     finished(h);
   }
+});
+const signupRequiredResult = {
+  type: 'success', url: 'weddingwin://bd-apple-return?provider=apple&error=signup_required',
+};
+test('Create account opens the selected signup screen once after auth finishes, with fresh consent', async () => {
+  for (const role of ['couple', 'vendor']) {
+    const h = harness({ browser: async () => signupRequiredResult });
+    const screen = { role, mode: 'login', step: 2, consent: true, password: 'offline-dummy', showPassword: true };
+    let run;
+    let opened = 0;
+    const ui = loadAppDeclarations(['showSignupAfterAppleLogin', 'startAppleSignIn'], {
+      role, appleBrowserLoginLoading: false,
+      setSignupConsentAccepted(value) { screen.consent = value; },
+      setPassword(value) { screen.password = value; },
+      setShowPassword(value) { screen.showPassword = value; },
+      setAuthMode(value) { screen.mode = value; opened++; },
+      setWizardStep(value) { screen.step = value; },
+      onAppleSignIn(...args) { run = h.run(...args); },
+    });
+    ui.startAppleSignIn();
+    await run;
+    finished(h);
+    assert.equal(screen.mode, 'login', 'showing the alert must not navigate');
+    const buttons = h.state.alerts[0][2];
+    assert.deepEqual(Array.from(buttons, button => button.text), ['Not now', 'Create account']);
+    assert.equal(buttons[0].style, 'cancel');
+    assert.equal(buttons[0].onPress, undefined);
+    buttons[1].onPress();
+    buttons[1].onPress();
+    assert.deepEqual(screen, { role, mode: 'signup', step: 2, consent: false, password: '', showPassword: false });
+    assert.equal(opened, 1, 'rapid taps open signup only once');
+    assert.equal(h.state.browserCalls.length, 1, 'signup must wait for another explicit Apple tap');
+    assert.equal(h.state.requests.length, 0);
+    assert.equal(h.state.saved.length, 0);
+  }
+});
+test('a stale Create account alert cannot reopen signup after another login, navigation or session change', async () => {
+  for (const mutation of ['generation', 'navigation', 'sessionGeneration']) {
+    const h = harness({ browser: async () => signupRequiredResult });
+    let opened = 0;
+    await h.run('vendor', undefined, () => { opened++; });
+    finished(h);
+    h.state[mutation]++;
+    h.state.alerts[0][2][1].onPress();
+    assert.equal(opened, 0, mutation);
+    assert.equal(h.state.requests.length, 0);
+    assert.equal(h.state.saved.length, 0);
+  }
+});
+test('connection, provider, security and uncertain lookup errors never offer account creation', async () => {
+  for (const error of ['failed', 'sign_in_unavailable', 'state_nonce', 'cleanup_pending',
+    'email_unavailable', 'account_type_mismatch', 'SIGNUP_REQUIRED', 'signup_required_extra']) {
+    const h = harness({ browser: async () => ({ type: 'success',
+      url: `weddingwin://bd-apple-return?provider=apple&error=${error}`,
+    }) });
+    await h.run('couple', undefined, () => { assert.fail('must not open signup'); });
+    assert.equal(h.state.alerts.length, 1);
+    assert.equal(h.state.alerts[0][0], 'Apple sign-in failed');
+    assert.equal(h.state.alerts[0][2], undefined);
+    assert.equal(h.state.requests.length, 0);
+    finished(h);
+  }
+});
+test('the login screen wires the recovery action without submitting signup consent', () => {
+  assert.match(appSource, /onPress=\{startAppleSignIn\}/);
+  let calls = 0;
+  const ui = loadAppDeclarations(['startAppleSignIn'], {
+    role: 'vendor', appleBrowserLoginLoading: true,
+    onAppleSignIn() { calls++; }, showSignupAfterAppleLogin() {},
+  });
+  ui.startAppleSignIn();
+  assert.equal(calls, 0, 'loading guard prevents duplicate sign-in');
 });
 test('signup-required callback cannot show a stale prompt after auth, navigation or session changes', async () => {
   for (const mutation of ['generation', 'navigation', 'sessionGeneration']) {
@@ -144,7 +221,7 @@ test('browser signup uses in-memory PKCE, Apple-only exchange, and server-return
   await h.run('vendor', consent);
   assert.equal(h.state.browserCalls.length, 1);
   assert.equal(h.state.browserCalls[0][1], 'weddingwin://bd-apple-return');
-  assert.equal(new URL(h.state.browserCalls[0][0]).searchParams.get('signup_role'), 'vendor');
+  assert.equal(appStartParams(h.state.browserCalls[0][0]).get('signup_role'), 'vendor');
   assert.equal(h.state.browserCalls[0][0].includes('offline-memory-only-verifier'), false);
   assert.equal(h.state.requests[0][0], `${backend}/functions/v1/apple-native-exchange`);
   assert.deepEqual(JSON.parse(h.state.requests[0][1].body), { code: exchangeCode, code_verifier: 'offline-memory-only-verifier' });
@@ -156,7 +233,7 @@ test('browser signup uses in-memory PKCE, Apple-only exchange, and server-return
 test('ordinary browser login preserves the returned membership even when picker differs', async () => {
   const h = harness();
   await h.run('couple');
-  assert.equal(new URL(h.state.browserCalls[0][0]).searchParams.has('signup_role'), false);
+  assert.equal(appStartParams(h.state.browserCalls[0][0]).has('signup_role'), false);
   assert.equal(h.state.saved[0][0].subscription_id, '17');
   finished(h);
 });
@@ -269,7 +346,8 @@ test('primary branded Apple buttons use the browser flow without duplicate links
   assert.match(appSource, /onAppleSignIn=\{runAppleLoginInSystemBrowser\}/);
   assert.doesNotMatch(appSource, /onAppleSignIn=\{runNativeAppleLogin\}|onAppleBrowserSignIn|startAppleBrowserSignup|accessibilityLabel="Use Apple in browser"/);
   assert.match(appSource, /onPress=\{startAppleSignup\}/);
-  assert.match(appSource, /if \(!appleBrowserLoginLoading\) onAppleSignIn\(role\)/);
+  assert.match(appDeclaration('startAppleSignIn'), /if \(appleBrowserLoginLoading\) return/);
+  assert.match(appDeclaration('startAppleSignIn'), /onAppleSignIn\(role, undefined, showSignupAfterAppleLogin\)/);
   assert.equal((appSource.match(/<AppleAuthentication\.AppleAuthenticationButton\b/g) || []).length, 2);
   assert.equal((appSource.match(/accessibilityState=\{\{ busy: appleBrowserLoginLoading \}\}/g) || []).length, 2);
 });

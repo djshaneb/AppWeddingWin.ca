@@ -13,9 +13,11 @@
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
-  function winnerCount(value) {
-    const parsed = Math.floor(number(value));
-    return parsed >= 1 && parsed <= 3 ? parsed : 1;
+  function prizeDetailsLocked(data) {
+    // An older response cannot prove that a winner email is not in flight.
+    return data && typeof data.prize_details_locked === 'boolean'
+      ? data.prize_details_locked
+      : Boolean(data && data.material_terms_locked);
   }
 
   function firstLine(value) {
@@ -143,8 +145,6 @@
     const enabled = find('[data-field="enabled"]');
     const description = find('[data-field="prize_description"]');
     const prizeValue = find('[data-field="prize_approx_value_cad"]');
-    const maxWinners = find('[data-field="max_winners"]');
-    const excludePreviousWinners = find('[data-field="exclude_previous_winners"]');
     const legalAccepted = find('[data-field="legal_terms_accepted"]');
     const vendorResponsibilityDisclosure = find('[data-role="vendor-responsibility-disclosure"]');
     const vendorResponsibilityDetails = find('[data-role="vendor-responsibility-details"]');
@@ -251,8 +251,7 @@
       const rulesVersion = text(data.rules_version);
       const prizeReady = Boolean(
         text(description.value) &&
-        number(prizeValue.value) > 0 &&
-        winnerCount(maxWinners.value) === number(maxWinners.value)
+        number(prizeValue.value) > 0
       );
       const acceptanceReady = Boolean(
         legalAccepted.checked &&
@@ -296,8 +295,7 @@
 
     function currentDraftSignature() {
       return JSON.stringify([
-        enabled.checked, description.value, prizeValue.value, maxWinners.value,
-        excludePreviousWinners.checked, legalAccepted.checked,
+        enabled.checked, description.value, prizeValue.value, legalAccepted.checked,
         state.rulesViewedVersion, state.responsibilityViewedVersion,
       ]);
     }
@@ -328,8 +326,7 @@
     }
 
     function configuredWinnerCount() {
-      const settings = state.data && state.data.settings ? state.data.settings : {};
-      return winnerCount(settings.max_winners || (state.data && state.data.max_winners) || maxWinners.value);
+      return 1;
     }
 
     function updateRulesReviewProgress() {
@@ -387,15 +384,13 @@
         drawButton.disabled = true;
       } else if (canSelect) {
         drawStatusLabel.textContent = 'Ready to choose';
-        drawStatus.textContent = `${remaining} of ${maximum} ${remaining === 1 ? 'winner remains' : 'winners remain'} to be selected.`;
-        drawButton.textContent = `Select winner ${verified.length + 1} of ${maximum}`;
+        drawStatus.textContent = 'Choose one couple at random.';
+        drawButton.textContent = 'Select potential winner';
         drawButton.disabled = state.busy;
       } else if (remaining <= 0 || data.draw_limit_reached) {
-        drawStatusLabel.textContent = 'All winners chosen';
-        drawStatus.textContent = maximum === 1
-          ? 'Your winner has been chosen. Send their email below.'
-          : `All ${maximum} winners have been chosen. Send each email below.`;
-        drawButton.textContent = 'All winners selected';
+        drawStatusLabel.textContent = 'Winner chosen';
+        drawStatus.textContent = 'Your winner has been chosen. Check their email status below.';
+        drawButton.textContent = 'Winner selected';
         drawButton.disabled = true;
       } else if (data.settings && !data.settings.enabled) {
         drawStatusLabel.textContent = 'Entries are off';
@@ -566,8 +561,8 @@
       const inPersonScanRequired = poolStatus === 'in_person_scan_required';
       const inSelectionPool = !replaced && (poolStatus
         ? poolStatus === 'included'
-        : included && !(previousWinner && excludePreviousWinners.checked));
-      const selectionProtected = disqualified || alreadySelected || replaced || reacceptanceRequired || inPersonScanRequired || (previousWinner && included && excludePreviousWinners.checked);
+        : included && !previousWinner);
+      const selectionProtected = disqualified || alreadySelected || replaced || reacceptanceRequired || inPersonScanRequired || (previousWinner && included);
       const statusLabel = inSelectionPool
         ? 'In the draw'
         : alreadySelected
@@ -681,6 +676,7 @@
           entryValue(record.entry, ['email', 'couple_email']),
           entryValue(record.entry, ['phone', 'couple_phone']),
           entryValue(record.entry, ['wedding_date', 'couple_wedding_date']),
+          entryValue(record.entry, ['wedding_venue', 'couple_wedding_venue']),
         ].join(' ').toLowerCase();
         const matchesQuery = !query || fields.includes(query);
         const matchesFilter = state.entrantFilter === 'all'
@@ -732,6 +728,7 @@
         appendContactItem(contactGrid, 'Email', entryValue(entry, ['email', 'couple_email']), 'email');
         appendContactItem(contactGrid, 'Phone', entryValue(entry, ['phone', 'couple_phone']), 'phone');
         appendContactItem(contactGrid, 'Wedding date', formatWeddingDate(entryValue(entry, ['wedding_date', 'couple_wedding_date'])), 'date');
+        appendContactItem(contactGrid, 'Wedding venue', entryValue(entry, ['wedding_venue', 'couple_wedding_venue']), 'venue');
         card.appendChild(contactGrid);
 
         const adminDetails = makeElement('details', 'ww-qrvd-entry-admin');
@@ -751,7 +748,7 @@
                 ? 'They have been chosen. Complete their checks in the Winner step.'
                 : selection.disqualified
                   ? 'They cannot be added back to this draw.'
-                  : selection.previousWinner && selection.included && excludePreviousWinners.checked
+                  : selection.previousWinner && selection.included
                     ? 'They have already won and cannot be chosen again.'
                     : '';
         if (statusHelp) adminBody.appendChild(makeElement('p', 'ww-qrvd-entry-reason', statusHelp));
@@ -961,8 +958,6 @@
           Number(draftFormatting.prizeValue) === Number(settings.prize_approx_value_cad)
             ? draftFormatting.prizeValue
             : number(settings.prize_approx_value_cad) > 0 ? String(settings.prize_approx_value_cad) : '';
-        maxWinners.value = String(winnerCount(settings.max_winners));
-        excludePreviousWinners.checked = settings.exclude_previous_winners !== false;
         legalAccepted.checked = currentRulesAccepted;
         state.rulesViewedVersion = currentRulesAccepted ? currentRulesVersion : '';
         state.responsibilityViewedVersion = currentRulesAccepted ? currentRulesVersion : '';
@@ -984,11 +979,16 @@
       drawAt.textContent = formatDate(data.draw_at || settings.draw_at);
       odds.textContent = text(data.odds_basis || settings.odds_basis) || 'Odds depend on the number of eligible entries received.';
 
-      const locked = Boolean(data.material_terms_locked);
+      const locked = prizeDetailsLocked(data);
       description.disabled = locked;
       prizeValue.disabled = locked;
-      maxWinners.disabled = locked;
-      excludePreviousWinners.disabled = locked;
+      materialLock.textContent = data.prize_details_lock_reason === 'sending'
+        ? 'The winner email is being sent. Prize details are temporarily locked.'
+        : data.prize_details_lock_reason === 'unconfirmed'
+          ? 'Email delivery is being checked. Prize details are temporarily locked.'
+          : data.prize_details_lock_reason === 'sent'
+            ? 'Prize details are locked because the winner email has been sent.'
+            : 'Prize details are currently locked. Refresh to check their status.';
       materialLock.classList.toggle('is-hidden', !locked);
 
       const count = Math.max(0, Math.floor(number(data.entrant_count != null ? data.entrant_count : data.entry_count)));
@@ -1040,7 +1040,6 @@
       if (!enabled.checked) return null;
       if (!text(description.value)) return { message: 'Add the prize details before opening entries.', step: 1 };
       if (number(prizeValue.value) <= 0) return { message: 'Add a positive prize value or maximum savings in CAD before opening entries.', step: 1 };
-      if (winnerCount(maxWinners.value) !== number(maxWinners.value)) return { message: 'Choose one, two, or three winners before opening entries.', step: 1 };
       const version = text(state.data && state.data.rules_version);
       if (!version) return { message: 'Reload the current Official Rules before opening entries.', step: 2 };
       const settings = state.data && state.data.settings ? state.data.settings : {};
@@ -1065,26 +1064,18 @@
 
       const descriptionValue = text(description.value);
       const settings = state.data.settings || {};
-      const materialTermsLocked = Boolean(state.data.material_terms_locked);
-      const requestDescription = materialTermsLocked
+      const locked = prizeDetailsLocked(state.data);
+      const requestDescription = locked
         ? text(settings.prize_description)
         : descriptionValue;
-      const requestPrizeTitle = materialTermsLocked
+      const requestPrizeTitle = locked
         ? text(settings.prize_title)
         : firstLine(descriptionValue);
-      const requestPrizeValue = materialTermsLocked
+      const requestPrizeValue = locked
         ? number(settings.prize_approx_value_cad)
         : number(prizeValue.value);
-      const requestMaxWinners = materialTermsLocked
-        ? winnerCount(settings.max_winners)
-        : winnerCount(maxWinners.value);
-      const requestExcludePreviousWinners = materialTermsLocked
-        ? settings.exclude_previous_winners !== false
-        : Boolean(excludePreviousWinners.checked);
-      // Prize terms stay locked after a draw opens, but accepting a newly
-      // published rules version is a fresh vendor action. Never freeze this
-      // value to the previously saved acceptance just because prize fields are
-      // locked.
+      // Accepting a newly published rules version remains a fresh vendor action,
+      // independent of the winner-email prize lock.
       const requestLegalAccepted = Boolean(legalAccepted.checked);
       const rulesVersion = text(state.data.rules_version);
       const rulesReviewed = Boolean(
@@ -1104,8 +1095,8 @@
           prize_title: requestPrizeTitle,
           prize_description: requestDescription,
           prize_approx_value_cad: requestPrizeValue,
-          max_winners: requestMaxWinners,
-          exclude_previous_winners: requestExcludePreviousWinners,
+          max_winners: 1,
+          exclude_previous_winners: true,
           legal_terms_accepted: combinedAcceptance,
           consent_version: rulesVersion,
           rules_viewed: combinedAcceptance,
@@ -1151,12 +1142,11 @@
 
     async function drawPotentialWinner() {
       if (state.busy || !state.data) return;
-      const nextWinner = verifiedDraws().length + 1;
-      const maximum = configuredWinnerCount();
-      if (!window.confirm(`Select winner ${nextWinner} of ${maximum} at random? This does not send an email.`)) return;
+      if (activeDraws().length > 0 || state.data.draw_limit_reached) return;
+      if (!window.confirm('Select one potential winner at random? This does not send an email.')) return;
 
       setBusy(true);
-      setStatus(`Selecting winner ${nextWinner} of ${maximum} at random…`);
+      setStatus('Selecting your potential winner at random…');
       try {
         const data = await request(root, 'vendor_raffle_draw', {
           draw_reason: 'initial',
@@ -1426,11 +1416,6 @@
     });
     description.addEventListener('input', updateWizardSummary);
     prizeValue.addEventListener('input', updateWizardSummary);
-    maxWinners.addEventListener('change', updateWizardSummary);
-    excludePreviousWinners.addEventListener('change', function () {
-      updateWizardSummary();
-      renderEntrants();
-    });
     enabled.addEventListener('change', updateWizardSummary);
 
     saveButton.addEventListener('click', save);

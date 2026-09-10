@@ -47,7 +47,7 @@ function section(source: string, startMarker: string, endMarker: string) {
   return source.slice(start, end);
 }
 
-Deno.test("website records production visits only inside the published show window", async () => {
+Deno.test("website enforces the scanner schedule while retaining separate in-show draw proof", async () => {
   const website = await Deno.readTextFile(websiteUrl);
   const scanBranch = section(
     website,
@@ -67,33 +67,43 @@ Deno.test("website records production visits only inside the published show wind
       "$config['entry_closes_at_unix'] = $entryClosesTimestamp;",
     ) &&
       website.includes(
-        "intval($eventConfig['history_starts_at_unix'])",
+        "intval($eventConfig['scan_opens_at_unix'])",
       ) &&
       website.includes(
         "$eventScanClosesAt = date(",
       ) &&
+      website.includes("$eventHistoryStartsAt = (string)$eventConfig['scan_history_starts_at_sql'];") &&
       !website.includes("- (4 * 60 * 60)"),
-    "website runtime must use the published history start and entry close without deriving a hard-coded duration",
+    "website runtime must preserve the original show start and use the separate scanner opening/history boundaries",
   );
   assert(
     fixtureExit >= 0 && windowGate > fixtureExit &&
       activeVendorLookup > windowGate && visitInsert > activeVendorLookup &&
       scanBranch.includes(
-        "time() < $scanWindowOpensAt || time() >= $scanWindowClosesAt",
+        "!ww_qr_bingo_scan_window_open($eventConfig, $scanRequestTime)",
       ) &&
       scanBranch.includes("http_response_code(403);") &&
       scanBranch.includes("'code' => 'show_scan_window_closed'") &&
       scanBranch.includes("AND rt.tag_id = '$eventTagId'") &&
       scanBranch.includes("AND rt.tag_type_id = 1") &&
       scanBranch.includes("AND u.active = 2"),
-    "production website scans must fail before an active tagged-vendor lookup or visit write outside show hours",
+    "production website scans must fail before an active tagged-vendor lookup or visit write outside the approved scanner window",
   );
   assert(
     (website.match(/vv\.scan_date >= '\$eventHistoryStartsAt'/g) || [])
           .length >= 3 &&
       (website.match(/vv\.scan_date < '\$eventScanClosesAt'/g) || [])
           .length >= 3,
-    "website progress and draw eligibility must exclude visits outside the same show window",
+    "website progress must retain the approved scanner history floor and published closing boundary",
+  );
+  const scannerGate = section(website, "function ww_qr_bingo_scan_window_open(", "function ww_qr_bingo_duplicate_scan_floor(");
+  assert(
+    scannerGate.includes("!empty($config['scan_enabled'])") &&
+      scannerGate.includes("$now < $config['entry_closes_at_unix']") &&
+      scannerGate.includes("!empty($config['scan_open_early']) || $now >= $config['scan_opens_at_unix']") &&
+      website.includes("'in_show_scanned' => $inShowScanned") &&
+      website.includes("strtotime($row['scan_date']) >= (int)$eventConfig['history_starts_at_unix']"),
+    "early access must not bypass master pause or closing, and pre-show progress must remain distinct from draw proof",
   );
 });
 
@@ -157,7 +167,7 @@ Deno.test("website refreshes its full event snapshot once after an exact stale-c
   );
 });
 
-Deno.test("Edge scan, offer review, and opt-in share the published show-window gate while isolated fixtures remain usable", async () => {
+Deno.test("Edge uses the operational scanner gate without opening draw entry before show hours", async () => {
   const sources = await Promise.all(syncUrls.map((url) => Deno.readTextFile(url)));
   for (const source of sources) {
     const scan = section(
@@ -193,10 +203,11 @@ Deno.test("Edge scan, offer review, and opt-in share the published show-window g
     );
     assert(
       scan.indexOf("if (isReviewScan && reviewFixture)") <
-          scan.indexOf("if (!productionShowScanWindowOpen())") &&
+          scan.indexOf("if (!qrBingoScannerWindowOpen(qrBingoConfig()))") &&
         scan.includes('code: "show_scan_window_closed"') &&
-        scan.indexOf("if (!productionShowScanWindowOpen())") <
-          scan.indexOf("const scanResult = await postQrAction("),
+        scan.indexOf("if (!qrBingoScannerWindowOpen(qrBingoConfig()))") <
+          scan.indexOf("const scanResult = await postQrAction(") &&
+        scan.includes("const raffleOffer = productionShowScanWindowOpen()"),
       "production scan must fail before the website write while the exact isolated fixture bypass remains available",
     );
     for (const [label, actionBranch] of [["offer", offer], ["opt-in", optIn]]) {
@@ -214,7 +225,7 @@ Deno.test("Edge scan, offer review, and opt-in share the published show-window g
   }
 });
 
-Deno.test("native scanner preserves and enforces both published show-window boundaries", async () => {
+Deno.test("native scanner separates operational opening from unchanged show and draw boundaries", async () => {
   const app = await Deno.readTextFile(appUrl);
   const configType = section(
     app,
@@ -229,6 +240,8 @@ Deno.test("native scanner preserves and enforces both published show-window boun
   assert(
     configType.includes("history_starts_at: string;") &&
       configType.includes("entry_closes_at: string;") &&
+      configType.includes("scan_open_early: boolean;") &&
+      configType.includes("scan_opens_at: string;") &&
       normalizer.includes(
         "const historyStartsAt = normalizedText(payload.history_starts_at, 80);",
       ) &&
@@ -237,22 +250,25 @@ Deno.test("native scanner preserves and enforces both published show-window boun
       ) &&
       normalizer.includes("historyStartsAtMs >= entryClosesAtMs") &&
       normalizer.includes("history_starts_at: historyStartsAt") &&
-      normalizer.includes("entry_closes_at: entryClosesAt"),
-    "native event configuration must retain both published show-window boundaries",
+      normalizer.includes("entry_closes_at: entryClosesAt") &&
+      normalizer.includes("scan_open_early: scanOpenEarly") &&
+      normalizer.includes("scan_opens_at: scanOpensAt") &&
+      normalizer.includes("typeof scanOpenEarly !== 'boolean'"),
+    "native event configuration must retain show boundaries and validate the separate scanner controls",
   );
+  const scannerGate = section(app, "function isQrBingoScanWindowOpen(", "function isQrBingoInShowWindow(");
+  const drawGate = section(app, "function isQrBingoInShowWindow(", "function normalizeQrBingoEventConfig(");
   assert(
-    includesIgnoringWhitespace(
-      app,
-      "new Date(String(eventConfig?.history_starts_at || '')).getTime()",
-    ) &&
-      includesIgnoringWhitespace(
-        app,
-        "new Date(String(eventConfig?.entry_closes_at || '')).getTime()",
-      ) &&
-      app.includes("scanWindowNow >= scanOpensAt") &&
-      app.includes("scanWindowNow < scanClosesAt") &&
+    scannerGate.includes("config.scan_enabled !== true") &&
+      scannerGate.includes("Date.parse(config.scan_opens_at)") &&
+      scannerGate.includes("Date.parse(config.entry_closes_at)") &&
+      scannerGate.includes("nowMs < closesAt") &&
+      scannerGate.includes("config.scan_open_early === true || nowMs >= opensAt") &&
+      drawGate.includes("Date.parse(config.history_starts_at)") &&
+      drawGate.includes("nowMs >= startsAt && nowMs < closesAt") &&
+      !drawGate.includes("scan_open_early") &&
       !app.includes("scanClosesAt - (4 * 60 * 60 * 1000)"),
-    "native scanner must use the published start and close instead of a derived four-hour window",
+    "native early scanning must respect pause/close while the vendor draw keeps its original in-show opening",
   );
 });
 

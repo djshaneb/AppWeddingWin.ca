@@ -55,6 +55,18 @@ check('exact test subject required', alias, false, { subject: 'Changed subject' 
 check('ordinary production recipient unaffected', 'couple@example.invalid', true,
   { fixture: false, data: { ...valid, email_test_fixture: '0' } });
 check('test marker prohibited on production', alias, false, { fixture: false });
+check('explicit vendor copy goes to exact base mailbox', base, true,
+  { vendor: true, data: { ...valid, email_test_vendor_copy: '1' }, vendorRecipient: base });
+check('vendor-only retry after couple sent', base, true,
+  { vendor: true, couple: false, data: { ...valid, email_test_vendor_copy: '1' }, vendorRecipient: base });
+check('couple-only retry after vendor sent', base, true,
+  { data: { ...valid, email_test_vendor_copy: '1' }, vendorRecipient: base });
+check('vendor copy cannot use old authorized couple alias', alias, false,
+  { vendor: true, data: { ...valid, email_test_vendor_copy: '1' }, vendorRecipient: alias });
+check('vendor copy cannot use actual vendor mailbox', base, false,
+  { vendor: true, data: { ...valid, email_test_vendor_copy: '1' }, vendorRecipient: 'vendor@example.invalid' });
+check('vendor copy cannot smuggle recipient on couple-only retry', base, false,
+  { data: { ...valid, email_test_vendor_copy: '1' }, vendorRecipient: 'vendor@example.invalid' });
 
 test('actual PHP preserves production and admits only the two exact authorized test recipients', () => {
   const encoded = Buffer.from(JSON.stringify(cases)).toString('base64');
@@ -64,6 +76,7 @@ test('actual PHP preserves production and admits only the two exact authorized t
     $results = array();
     foreach ($cases as $case) {
       $data = $case['data']; $coupleTo = $case['recipient'];
+      $vendorTo = isset($case['vendorRecipient']) ? $case['vendorRecipient'] : '';
       $isEmailTestFixture = $case['fixture']; $sendVendor = $case['vendor'];
       $sendCouple = $case['couple']; $incomingCoupleSubject = $case['subject'];
       $allowed = true;
@@ -81,7 +94,7 @@ test('actual PHP preserves production and admits only the two exact authorized t
     assert.equal(result.name, cases[index].name);
     assert.equal(result.allowed, cases[index].allowed, result.name);
   }
-  assert.equal([...gate.matchAll(/hash_equals\(/g)].length, 2, 'No broader recipient path');
+  assert.equal([...gate.matchAll(/hash_equals\(/g)].length, 4, 'Existing exact couple hashes plus stricter exact base and equal vendor-copy target');
   assert.ok(widget.indexOf("strpos($eventKey, 'app-review-') === 0") < widget.indexOf(productionGate),
     'App Review suppression must remain before the test allowlist');
 });

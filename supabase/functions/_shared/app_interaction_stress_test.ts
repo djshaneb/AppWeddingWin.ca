@@ -371,8 +371,8 @@ Deno.test(
       appSource.includes('vendorRaffleSettingsMutationBusy') &&
         appSource.includes('editable={!vendorRafflePrizeTextDisabled}') &&
         appSource.includes('disabled={vendorRaffleSettingsMutationBusy}') &&
-        appSource.includes('disabled={vendorRafflePrizeControlsDisabled}'),
-      'draft text must use its autosave-safe guard while agreement and discrete settings retain their mutation guards',
+        !appSource.includes('disabled={vendorRafflePrizeControlsDisabled}'),
+      'draft text must use its autosave-safe guard while agreement and open/close retain mutation guards without removed winner controls',
     );
     for (const action of [
       'entry:${participantReference}',
@@ -396,43 +396,49 @@ Deno.test(
 Deno.test(
   'autosave preserves typing while deferred vendor actions still lock all settings controls',
   () => {
-    const start = appSource.indexOf('const vendorRaffleMaterialLocked =');
+    const start = appSource.indexOf('const vendorRafflePrizeDetailsLocked =');
     const end = appSource.indexOf('const vendorRaffleSaveMessageLower =', start);
     assert(start >= 0 && end > start, 'settings guard definitions must exist');
+    const helperStart = appSource.indexOf('function areVendorPrizeDetailsLocked(');
+    const helperBody = appSource.indexOf('{', helperStart);
+    const helperEnd = appSource.indexOf('\n}', helperBody);
+    assert(helperStart >= 0 && helperEnd > helperBody, 'prize-email lock helper must exist');
     const flags = [
       'vendorRaffleSaving', 'vendorRaffleDrawing', 'vendorRaffleSendingDrawId',
       'vendorRaffleReviewing', 'vendorRaffleExporting', 'vendorRaffleEntryUpdatingReference',
     ];
     const evaluate = new Function(
       'vendorRaffle', 'raffleEnabled', ...flags,
-      appSource.slice(start, end) +
-        '\nreturn { busy: vendorRaffleSettingsMutationBusy, choices: vendorRafflePrizeControlsDisabled, text: vendorRafflePrizeTextDisabled };',
+      'function areVendorPrizeDetailsLocked(data) ' + appSource.slice(helperBody, helperEnd + 2) + '\n' +
+        appSource.slice(start, end) +
+        '\nreturn { busy: vendorRaffleSettingsMutationBusy, text: vendorRafflePrizeTextDisabled };',
     );
     const autosaving = evaluate({ material_terms_locked: false }, false, true, false, false, false, false, false);
     assert(
-      autosaving.busy && autosaving.choices && !autosaving.text,
-      'autosave must keep prize text editable without enabling agreement, open/close, winner-count or no-repeat mutations',
+      autosaving.busy && !autosaving.text,
+      'autosave must keep prize text editable without enabling agreement or open/close mutations',
     );
     for (let flag = 1; flag < flags.length; flag += 1) {
       const values = flags.map((_, index) => index === flag);
       const pending = evaluate({ material_terms_locked: false }, false, ...values);
       assert(
-        pending.busy && pending.choices && pending.text,
+        pending.busy && pending.text,
         `all settings must remain locked during ${flags[flag]}`,
       );
     }
     const locked = evaluate({ material_terms_locked: true }, false, ...flags.map(() => false));
     const opening = evaluate({ material_terms_locked: false }, true, ...flags.map(() => false));
+    const selected = evaluate({ material_terms_locked: true, prize_details_locked: false, active_winner_count: 1 }, true, ...flags.map(() => false));
+    const emailed = evaluate({ material_terms_locked: false, prize_details_locked: true }, false, ...flags.map(() => false));
     assert(
-      locked.choices && locked.text && opening.text,
-      'material locks and a locally opening draw must still prevent prize text edits',
+      locked.text && !opening.text && !selected.text && emailed.text,
+      'older responses and winner-email locks must protect prize text, while opening and selection alone permit edits',
     );
     assert(
       (appSource.match(/disabled=\{vendorRaffleSettingsMutationBusy\}/g) || [])
         .length >= 2 &&
-        (appSource.match(/disabled=\{vendorRafflePrizeControlsDisabled\}/g) || []).length >= 2 &&
         (appSource.match(/editable=\{!vendorRafflePrizeTextDisabled\}/g) || []).length === 2,
-      'both prize inputs and the agreement, open/close, winner-count and no-repeat controls must use their correct split guards',
+      'both prize inputs and the agreement and open/close controls must use their correct split guards',
     );
   },
 );

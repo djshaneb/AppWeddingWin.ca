@@ -270,7 +270,7 @@ for (const path of endpointPaths) {
     const body = bodyBetween(
       source,
       "getQrPage",
-      "const response =",
+      'let bootstrapCsrf = ""',
       "postQrAction",
     )
       .replaceAll("extractJsonAssignment<string>", "extractJsonAssignment")
@@ -302,7 +302,9 @@ for (const path of endpointPaths) {
         new Map(),
         "37823",
         "https://www.weddingwin.ca",
-        async () => new Response(html, { status }),
+        async (_url: string, _jar: unknown, init: RequestInit = {}) => init.method === "POST"
+          ? new Response(JSON.stringify({ status: "success", authenticated_member_id: "37823", qr_csrf: "a".repeat(64) }), { status: 200 })
+          : new Response(html, { status }),
         extract,
         (value: unknown) => {
           normalized++;
@@ -338,5 +340,146 @@ for (const path of endpointPaths) {
       () => invoke("37823", "a".repeat(64), 302),
       "QR Bingo page unavailable",
     );
+  });
+
+  Deno.test(`${endpoint} QR session bootstrap rejects bad identity and preserves its cookie and CSRF`, async () => {
+    const source = await Deno.readTextFile(new URL(path, import.meta.url));
+    const body = bodyBetween(source, "getQrPage", 'let bootstrapCsrf = ""', "postQrAction")
+      .replaceAll("extractJsonAssignment<string>", "extractJsonAssignment")
+      .replaceAll("extractJsonAssignment<unknown[]>", "extractJsonAssignment")
+      .replaceAll("(vendor): vendor is QrVendor =>", "(vendor) =>");
+    const pageImpl = new AsyncFunction("cookieJar", "expectedMemberId", "BD_API_BASE_URL", "fetchWithCookies",
+      "extractJsonAssignment", "normalizeVendor", body);
+    const fetchImpl = new AsyncFunction("url", "cookieJar", "init", "fetch", "cookieHeader", "getSetCookieHeaders", "appendCookie",
+      bodyBetween(source, "fetchWithCookies", "const target =", "loginWebsiteSession"));
+    const functions = cookieFunctions();
+    const csrf = "a".repeat(64);
+    const valid = { status: "success", authenticated_member_id: "37823", qr_csrf: csrf };
+    async function invoke(bootstrap: unknown, status = 200, pageCsrf = csrf, expectedId: string | undefined = "37823") {
+      const calls: { method: string; cookie: string; origin: string; action: string }[] = [];
+      const jar = new Map([["userid", "37823"]]);
+      const fakeFetch = async (_url: string, init: RequestInit = {}) => {
+        const headers = new Headers(init.headers);
+        calls.push({ method: init.method || "GET", cookie: headers.get("Cookie") || "",
+          origin: headers.get("Origin") || "", action: new URLSearchParams(String(init.body || "")).get("action") || "" });
+        if (init.method === "POST") return new Response(JSON.stringify(bootstrap), {
+          status, headers: { "Set-Cookie": "__Secure-sessionID5=unit-test-php-session; Secure; HttpOnly" },
+        });
+        return new Response("unit-test-html", { status: 200 });
+      };
+      const transport = (url: string, cookies: Map<string, string>, init: RequestInit = {}) => fetchImpl(url, cookies, init, fakeFetch,
+        functions.cookieHeader, functions.getSetCookieHeaders, functions.appendCookie);
+      const extract = (_html: string, name: string) => name === "QR_AUTHENTICATED_MEMBER_ID" ? "37823"
+        : name === "QR_WEBSITE_CSRF" ? pageCsrf : [];
+      try {
+        const result = await pageImpl(jar, expectedId, "https://www.weddingwin.ca", transport, extract, (v: unknown) => v);
+        return { result, calls };
+      } catch (error) {
+        return { error, calls };
+      }
+    }
+    for (const invalid of [null, {}, { ...valid, status: "error" }, { ...valid, authenticated_member_id: "wrong" },
+      { ...valid, authenticated_member_id: 37823 }, { ...valid, qr_csrf: "" }, { ...valid, qr_csrf: "z".repeat(64) }]) {
+      const result = await invoke(invalid);
+      assert(result.error instanceof Error && result.error.message.includes("could not be initialized") && result.calls.length === 1,
+        "Bad bootstrap reached the QR page");
+    }
+    const rejected = await invoke(valid, 403);
+    assert(rejected.error instanceof Error && rejected.calls.length === 1);
+    const good = await invoke(valid);
+    assert(!good.error && good.result.requestCsrf === csrf && good.calls.length === 2);
+    assert(good.calls[0].method === "POST" && good.calls[0].origin === "https://www.weddingwin.ca" && good.calls[0].action === "scanner_session");
+    assert(good.calls[1].method === "GET" && good.calls[1].cookie.includes("__Secure-sessionID5=unit-test-php-session"),
+      "The bootstrap session cookie did not reach the identity-checked GET");
+    const changed = await invoke(valid, 200, "b".repeat(64));
+    assert(changed.error instanceof Error && changed.error.message.includes("does not match the authenticated member"),
+      "A different GET session CSRF was accepted");
+    const vendor = await invoke(valid, 200, csrf, "");
+    assert(!vendor.error && vendor.calls.length === 1 && vendor.calls[0].method === "GET",
+      "Vendor page loading unexpectedly required a couple bootstrap");
+  });
+
+  Deno.test(`${endpoint} token login leaves the exact QR destination to the identity-checked page loader`, async () => {
+    const source = await Deno.readTextFile(new URL(path, import.meta.url));
+    const implementation = new AsyncFunction("session", "BD_API_BASE_URL", "fetchWithCookies",
+      bodyBetween(source, "loginWebsiteSession", "const token =", "extractJsonAssignment")
+        .replaceAll("new Map<string, string>()", "new Map()"));
+    async function invoke(destination: string, addCookie = true) {
+      const calls: string[] = [];
+      const result = await implementation({ token: "unit-test-token" }, "https://www.weddingwin.ca",
+        async (url: string, jar: Map<string, string>) => {
+          calls.push(url);
+          if (addCookie) jar.set("session", "unit-test-cookie");
+          return calls.length === 1
+            ? new Response(null, { status: 302, headers: { location: destination } })
+            : new Response("page", { status: 200 });
+        });
+      return { calls, result };
+    }
+    for (const destination of ["/qr", "https://www.weddingwin.ca/qr", "/account/qr", "https://www.weddingwin.ca/account/qr"]) {
+      const result = await invoke(destination);
+      assert(result.calls.length === 1 && result.result.size === 1,
+        "Token login performed the redundant full QR bootstrap GET");
+    }
+    for (const destination of ["/qr?preview=1", "/qr#section", "/qr/", "/account/qr/", "/account/qr?preview=1", "/login/continue"]) {
+      const result = await invoke(destination);
+      assert(result.calls.length === 2, "A noncanonical redirect bypassed its normal request handling");
+    }
+    await rejects(() => invoke("/qr", false), "Website session could not be created");
+    assert(source.includes("await getQrPage(cookieJar, authenticatedMemberId)"),
+      "Normal couple transport lost the mandatory identity/CSRF check");
+  });
+
+  Deno.test(`${endpoint} only normal scans skip the unused pre-save history request`, async () => {
+    const source = await Deno.readTextFile(new URL(path, import.meta.url));
+    const start = source.indexOf("const progress = isVendorRaffleAction");
+    const end = source.indexOf('\n      }\n\n      if (action === "scan")', start);
+    assert(start > 0 && end > start);
+    const implementation = new AsyncFunction("action", "isVendorRaffleAction", "page", "getFreshScanned",
+      "let scanned, inShowScanned; const cookieJar = new Map();\n" + source.slice(start, end) + "\nreturn {scanned,inShowScanned};");
+    let historyReads = 0;
+    const fresh = async () => { historyReads++; return { scanned: ["vendor-fresh"], inShowScanned: ["vendor-fresh"] }; };
+    const page = { scanned: ["vendor-old", "vendor-old"] };
+    const scan = await implementation("scan", false, page, fresh);
+    assert(historyReads === 0 && scan.scanned.length === 1 && scan.scanned[0] === "vendor-old" && scan.inShowScanned.length === 0,
+      "Normal scan fetched unused history or invented in-show proof");
+    for (const action of ["list", "raffle_offer", "raffle_opt_in"]) {
+      const result = await implementation(action, false, page, fresh);
+      assert(result.inShowScanned[0] === "vendor-fresh", "Draw/list action lost authoritative history");
+    }
+    assert(historyReads === 3);
+    const vendor = await implementation("vendor_raffle_get", true, page, fresh);
+    assert(historyReads === 3 && vendor.scanned.length === 0 && vendor.inShowScanned.length === 0);
+    const afterWrite = source.slice(source.indexOf('if (scanResult.status !== "success")'), source.indexOf('if (action === "raffle_offer")'));
+    assert(afterWrite.includes("const progress = await getFreshScanned(cookieJar, page)") &&
+      afterWrite.includes("productionShowScanWindowOpen() &&") &&
+      afterWrite.includes("progress.inShowScanned.includes(matchedVendor.id)"),
+      "Post-save verification or draw eligibility was weakened");
+  });
+
+  Deno.test(`${endpoint} scan rejection diagnostics contain only fixed codes and numeric status`, async () => {
+    const source = await Deno.readTextFile(new URL(path, import.meta.url));
+    const start = source.indexOf("const upstreamStatus = Number(scanResult.__http_status || 0)");
+    const end = source.indexOf("return jsonResponse({", start);
+    assert(start > 0 && end > start);
+    const implementation = new AsyncFunction("scanResult", "console", source.slice(start, end));
+    const logs: unknown[][] = [];
+    const logger = { warn: (...args: unknown[]) => logs.push(args) };
+    for (const [input, code, status] of [
+      [{ __http_status: 403, error: "Refresh QR Bingo before continuing." }, "website_csrf_rejected", 403],
+      [{ __http_status: 503, message: "Your scan could not be saved. Please try again." }, "website_scan_write_failed", 503],
+      [{ __http_status: 409, code: "stale_event_config" }, "stale_event_config", 409],
+      [{ __http_status: "private-session-token", code: "secret-customer@example.invalid", message: "raw-secret-cookie" }, "scan_failed", 0],
+    ] as const) {
+      await implementation(input, logger);
+      const record = logs.at(-1)!;
+      assert(record[0] === "qr_bingo_website_scan_rejected");
+      const details = record[1] as Record<string, unknown>;
+      assert(Object.keys(details).sort().join(",") === "code,stage,upstream_status" &&
+        details.stage === "scan_vendor" && details.code === code && details.upstream_status === status);
+    }
+    const serialized = JSON.stringify(logs);
+    for (const secret of ["private-session-token", "secret-customer@example.invalid", "raw-secret-cookie"])
+      assert(!serialized.includes(secret), "Diagnostic log exposed arbitrary response data");
   });
 }

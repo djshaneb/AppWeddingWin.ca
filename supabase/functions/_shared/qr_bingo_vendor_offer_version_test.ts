@@ -381,7 +381,8 @@ Deno.test("authenticated offers are minimized snapshots, public discovery is ret
       for (
         const required of [
           "vendor_offer_version",
-          "prize_count: raffleMaxWinners(snapshot!.max_winners)",
+          "prize_count: 1",
+          "max_winners: 1",
           "exclude_previous_winners",
           "entry_opens_at",
           "entry_closes_at",

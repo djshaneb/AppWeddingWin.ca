@@ -1,0 +1,9 @@
+.ww-app-apple{box-sizing:border-box;min-height:65vh;display:flex;align-items:center;justify-content:center;padding:32px 16px;background:#faf5f5;color:rgb(41,41,41)}
+.ww-app-apple *{box-sizing:border-box}
+.ww-app-apple-card{width:100%;max-width:500px;border:1px solid rgba(171,98,97,.25);border-radius:20px;background:#fff;padding:36px 30px;text-align:center;box-shadow:0 10px 35px rgba(44,31,31,.06)}
+.ww-app-apple-logo{display:block;width:70%;max-width:230px;height:auto;margin:0 auto 24px}
+.ww-app-apple h1{margin:0 0 16px;font-size:28px;line-height:1.2;font-weight:750;color:rgb(62,62,62)}
+.ww-app-apple p,.ww-app-apple noscript{font-size:16px;line-height:1.6;color:rgb(85,85,85)}
+.ww-app-apple p{margin:0}
+.ww-app-apple [hidden]{display:none!important}
+@media(max-width:480px){.ww-app-apple{padding:20px 12px}.ww-app-apple-card{padding:28px 20px;border-radius:16px}.ww-app-apple h1{font-size:25px}}

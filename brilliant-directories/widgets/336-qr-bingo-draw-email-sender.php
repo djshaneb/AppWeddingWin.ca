@@ -75,6 +75,67 @@ if (!function_exists('ww_qbdes_json')) {
         }
         return trim(implode(' ', $out));
     }
+    function ww_qbdes_prize_text($value, $max = 1000) {
+        $text = trim(str_replace(array(chr(13) . chr(10), chr(13)), chr(10), (string)$value));
+        // Older PHP rejects literal NUL inside a regex pattern. Remove these
+        // bytes directly, retaining tabs and normalized line breaks.
+        $controls = array_merge(range(0, 8), array(11, 12), range(14, 31), array(127));
+        $text = str_replace(array_map('chr', $controls), '', $text);
+        // Count UTF-8 characters, not bytes, and keep intentional line breaks.
+        return preg_match('/^.{0,' . intval($max) . '}/us', $text, $match) ? $match[0] : '';
+    }
+    function ww_qbdes_prize_value($value) {
+        $value = ww_qbdes_clean_header($value, 80);
+        if (!preg_match('/^[$]([0-9]+(?:,[0-9]{3})*(?:[.][0-9]{1,2})?) CAD$/D', $value, $match)) { return ''; }
+        return (float)str_replace(',', '', $match[1]) > 0 ? $value : '';
+    }
+    function ww_qbdes_prize_details($vendorText, $coupleText, $data = array()) {
+        // New signed payloads carry the claim-time prize separately from prose.
+        // Fail closed if either explicit field is invalid; never parse an old
+        // or contradictory body in place of a provided authoritative snapshot.
+        if (array_key_exists('prize_description', $data) || array_key_exists('prize_approx_value_cad', $data)) {
+            if (!isset($data['prize_description'], $data['prize_approx_value_cad'])
+                || !is_string($data['prize_description'])
+                || !(is_string($data['prize_approx_value_cad']) || is_int($data['prize_approx_value_cad']) || is_float($data['prize_approx_value_cad']))) { return false; }
+            $description = trim(str_replace(array(chr(13) . chr(10), chr(13)), chr(10), $data['prize_description']));
+            $amount = trim((string)$data['prize_approx_value_cad']);
+            if ($description === '' || ww_qbdes_prize_text($description) !== $description
+                || !preg_match('/^[0-9]+(?:[.][0-9]{1,2})?$/D', $amount)
+                || !is_finite((float)$amount) || (float)$amount <= 0) { return false; }
+            return array('description' => $description, 'value' => '$' . number_format((float)$amount, 2, '.', '') . ' CAD');
+        }
+        $nl = chr(10);
+        $couple = str_replace(array(chr(13) . $nl, chr(13)), $nl, (string)$coupleText);
+        $vendor = str_replace(array(chr(13) . $nl, chr(13)), $nl, (string)$vendorText);
+        $prize = ''; $value = '';
+        if (preg_match('/(?:^|' . $nl . ')(?:Draw item|Prize):[[:blank:]]*/i', $couple, $start, PREG_OFFSET_CAPTURE)) {
+            $prize = substr($couple, $start[0][1] + strlen($start[0][0]));
+            if (preg_match('/' . $nl . '[[:blank:]]*' . $nl . '(?:What happens next|Next steps|Why you received this|WeddingWin[.]ca)(?:' . $nl . '|$)/i', $prize, $end, PREG_OFFSET_CAPTURE)) {
+                $prize = substr($prize, 0, $end[0][1]);
+            } else {
+                $prize = preg_split('/' . $nl . '[[:blank:]]*' . $nl . '/', $prize, 2)[0];
+            }
+        }
+        if (!$prize && preg_match('/(?:^|' . $nl . ')(Draw item|Draw record)' . $nl . '(.*?)(?=' . $nl . '[[:blank:]]*' . $nl . '(?:Couple notification|Next step|Contact information|Winner details)(?:' . $nl . '|$)|$)/is', $vendor, $section)) {
+            $prize = trim($section[2]);
+            if (strcasecmp($section[1], 'Draw record') === 0) {
+                $prize = preg_replace('/^Prize details are included below for your reference[.]' . $nl . '/', '', $prize);
+                // The current Draw record contains a title followed by its full description.
+                $parts = explode($nl, $prize, 2);
+                if (count($parts) === 2 && strpos($parts[1], 'Approximate value:') !== 0) { $prize = $parts[1]; }
+            }
+        }
+        $prize = trim($prize);
+        if (preg_match('/(?:^|' . $nl . ')Approximate value:[[:blank:]]*([^' . $nl . ']+)$/i', $prize, $match, PREG_OFFSET_CAPTURE)) {
+            $value = ww_qbdes_prize_value($match[1][0]);
+            if ($value) { $prize = trim(substr($prize, 0, $match[0][1])); }
+        }
+        if (!$value) {
+            // Old senders may include the value only in the vendor reference copy.
+            $value = ww_qbdes_prize_value(ww_qbdes_line_after($vendor, 'Approximate value:'));
+        }
+        return array('description' => ww_qbdes_prize_text($prize), 'value' => $value);
+    }
     function ww_qbdes_vendor_from_couple_text($text) {
         $direct = ww_qbdes_line_after($text, 'Vendor:');
         if (!$direct) { $direct = ww_qbdes_line_after($text, 'Selected booth:'); }
@@ -93,10 +154,12 @@ if (!function_exists('ww_qbdes_json')) {
     function ww_qbdes_heading($text) {
         return '<p style="margin:0 0 8px;color:#aa565d;font-size:12px;font-weight:bold;letter-spacing:.4px;text-transform:uppercase;">' . ww_qbdes_e($text) . '</p>';
     }
-    function ww_qbdes_text_body($winnerName, $vendorName, $prizeTitle, $profileUrl) {
+    function ww_qbdes_text_body($winnerName, $vendorName, $prizeTitle, $profileUrl, $prizeValue = '') {
         $winner = ww_qbdes_label($winnerName, 'there', 80);
         $vendor = ww_qbdes_label($vendorName, 'the vendor', 140);
-        $prize = ww_qbdes_label($prizeTitle, 'the booth draw item', 500);
+        $prize = ww_qbdes_prize_text($prizeTitle);
+        if (!$prize) { $prize = 'the booth draw item'; }
+        $value = ww_qbdes_prize_value($prizeValue);
         $lines = array(
             'Hi ' . $winner . ',',
             '',
@@ -104,7 +167,7 @@ if (!function_exists('ww_qbdes_json')) {
             '',
             'Your draw',
             'Vendor: ' . $vendor,
-            'Draw item: ' . $prize,
+            'Draw item: ' . $prize . ($value ? PHP_EOL . 'Approximate value: ' . $value : ''),
             '',
             'What happens next',
             $vendor . ' will follow up with the prize details and next steps.',
@@ -117,29 +180,35 @@ if (!function_exists('ww_qbdes_json')) {
         );
         return implode(PHP_EOL, $lines);
     }
-    function ww_qbdes_couple_html($winnerName, $vendorName, $prizeTitle, $profileUrl) {
+    function ww_qbdes_couple_html($winnerName, $vendorName, $prizeTitle, $profileUrl, $prizeValue = '') {
         $winner = ww_qbdes_label($winnerName, 'there', 80);
         $vendor = ww_qbdes_label($vendorName, 'the vendor', 140);
-        $prize = ww_qbdes_label($prizeTitle, 'the booth draw item', 500);
+        $prize = ww_qbdes_prize_text($prizeTitle);
+        if (!$prize) { $prize = 'the booth draw item'; }
+        $value = ww_qbdes_prize_value($prizeValue);
+        $valueHtml = $value ? '<p style="margin:8px 0 0;"><strong>Approximate value:</strong> ' . ww_qbdes_e($value) . '</p>' : '';
         $profile = $profileUrl ? '<p style="margin:14px 0 0;"><a href="' . ww_qbdes_e($profileUrl) . '" target="_blank" style="background-color:#aa565d;border-radius:6px;color:#ffffff;display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;line-height:18px;padding:11px 16px;text-decoration:none;">View vendor profile</a></p>' : '';
         $html = '';
         $html .= ww_qbdes_section('<p style="margin:0 0 14px;font-size:16px;line-height:1.55;">Hi ' . ww_qbdes_e($winner) . ',</p><p style="margin:0;font-size:16px;line-height:1.55;"><strong>Congratulations,</strong> your name was selected by ' . ww_qbdes_e($vendor) . ' for their draw.</p>');
-        $html .= ww_qbdes_section(ww_qbdes_heading('Your draw') . '<p style="margin:0 0 8px;"><strong>Vendor:</strong> ' . ww_qbdes_e($vendor) . '</p><p style="margin:0;"><strong>Draw item:</strong> ' . ww_qbdes_e($prize) . '</p>', '#fff7f6', '1px solid #efd8d5');
+        $html .= ww_qbdes_section(ww_qbdes_heading('Your draw') . '<p style="margin:0 0 8px;"><strong>Vendor:</strong> ' . ww_qbdes_e($vendor) . '</p><p style="margin:0;overflow-wrap:anywhere;"><strong>Draw item:</strong> ' . nl2br(ww_qbdes_e($prize)) . '</p>' . $valueHtml, '#fff7f6', '1px solid #efd8d5');
         $html .= ww_qbdes_section(ww_qbdes_heading('What happens next') . '<p style="margin:0;">' . ww_qbdes_e($vendor) . ' will follow up with the prize details and next steps.</p>' . $profile);
         $html .= ww_qbdes_section(ww_qbdes_heading('Why you received this') . '<p style="margin:0;">You opted in after scanning this vendor&#39;s QR code at the wedding show.</p>');
         $html .= '<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="width:100%;"><tr><td style="padding:4px 20px 0;font-family:Arial,Helvetica,sans-serif;color:#2e2e32;font-size:15px;line-height:1.55;">WeddingWin.ca</td></tr></table>';
         return $html;
     }
-    function ww_qbdes_vendor_html($winnerName, $winnerEmail, $winnerPhone, $winnerWeddingDate, $prizeTitle) {
+    function ww_qbdes_vendor_html($winnerName, $winnerEmail, $winnerPhone, $winnerWeddingDate, $prizeTitle, $prizeValue = '') {
         $winner = ww_qbdes_label($winnerName, 'Winner', 120);
-        $email = ww_qbdes_label($winnerEmail, 'Not provided', 180);
+        $email = ww_qbdes_label($winnerEmail, 'Not provided', 254);
         $phone = ww_qbdes_label($winnerPhone, 'Not provided', 120);
         $date = ww_qbdes_label($winnerWeddingDate, 'Not provided', 120);
-        $prize = ww_qbdes_label($prizeTitle, 'the booth draw item', 500);
+        $prize = ww_qbdes_prize_text($prizeTitle);
+        if (!$prize) { $prize = 'the booth draw item'; }
+        $value = ww_qbdes_prize_value($prizeValue);
+        $valueHtml = $value ? '<p style="margin:8px 0 0;"><strong>Approximate value:</strong> ' . ww_qbdes_e($value) . '</p>' : '';
         $html = '';
         $html .= ww_qbdes_section('<p style="margin:0;font-size:16px;line-height:1.55;">WeddingWin recorded your business&#39;s confirmation that the selected couple meets the draw rules, answered the required short math question correctly, and completed any required declaration or release step. WeddingWin did not perform or certify the vendor checks. Your business remains responsible for the lawful promotion, winner notice, and prize fulfilment.</p>');
-        $html .= ww_qbdes_section(ww_qbdes_heading('Winner details') . '<p style="margin:0 0 6px;"><strong>Name:</strong> ' . ww_qbdes_e($winner) . '</p><p style="margin:0 0 6px;"><strong>Email:</strong> <a href="mailto:' . ww_qbdes_e($email) . '" style="color:#aa565d;">' . ww_qbdes_e($email) . '</a></p><p style="margin:0 0 6px;"><strong>Phone:</strong> ' . ww_qbdes_e($phone) . '</p><p style="margin:0;"><strong>Wedding date:</strong> ' . ww_qbdes_e($date) . '</p>', '#fff7f6', '1px solid #efd8d5');
-        $html .= ww_qbdes_section(ww_qbdes_heading('Draw item') . '<p style="margin:0;">' . ww_qbdes_e($prize) . '</p>');
+        $html .= ww_qbdes_section(ww_qbdes_heading('Winner details') . '<p style="margin:0 0 6px;"><strong>Name:</strong> ' . ww_qbdes_e($winner) . '</p><p style="margin:0 0 6px;overflow-wrap:anywhere;"><strong>Email:</strong> <a href="mailto:' . ww_qbdes_e($email) . '" style="color:#aa565d;overflow-wrap:anywhere;">' . ww_qbdes_e($email) . '</a></p><p style="margin:0 0 6px;"><strong>Phone:</strong> ' . ww_qbdes_e($phone) . '</p><p style="margin:0;"><strong>Wedding date:</strong> ' . ww_qbdes_e($date) . '</p>', '#fff7f6', '1px solid #efd8d5');
+        $html .= ww_qbdes_section(ww_qbdes_heading('Draw item') . '<p style="margin:0;overflow-wrap:anywhere;">' . nl2br(ww_qbdes_e($prize)) . '</p>' . $valueHtml);
         $html .= ww_qbdes_section(ww_qbdes_heading('Contact information') . '<p style="margin:0;">This couple accepted your draw and agreed that your business may use the shared contact information for this draw and wedding-related marketing. Honour unsubscribe requests and protect the information under the Vendor Draw Rules. Your business is responsible for the promotion, winner confirmation, notice, and prize fulfilment; WeddingWin provides the technical record and email delivery.</p>');
         return $html;
     }
@@ -297,17 +366,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
         $drawId = ww_qbdes_clean_header(isset($data['draw_id']) ? $data['draw_id'] : '', 80);
         $fixtureId = ww_qbdes_clean_header(isset($data['fixture_id']) ? $data['fixture_id'] : '', 80);
         $emailTestFlag = isset($data['email_test_fixture']) && (string)$data['email_test_fixture'] === '1';
+        $emailTestVendorCopy = isset($data['email_test_vendor_copy']) && (string)$data['email_test_vendor_copy'] === '1';
         $expectedRecipientHash = '05d7d3b40670d8471795b130efde1c37d9b391c9561550e5f34b5e07cf92b6fc';
         $expectedCoupleAliasHash = 'e1375389609977e97e17682cc8e198e88db77ca801f3d2729b73d1473dec19ea';
         $validUuid = '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/Di';
         if (
             !$emailTestFlag
-            || $sendVendor
-            || !$sendCouple
+            || (!$sendVendor && !$sendCouple)
+            || ($sendVendor && !$emailTestVendorCopy)
+            || (!$emailTestVendorCopy && !$sendCouple)
             || !preg_match($validUuid, $drawId)
             || !preg_match($validUuid, $fixtureId)
             || !(hash_equals($expectedRecipientHash, hash('sha256', $coupleTo))
                 || hash_equals($expectedCoupleAliasHash, hash('sha256', $coupleTo)))
+            // Optional vendor copies require the signed fixture opt-in marker.
+            // Both copies are pinned to the same exact owner-approved address;
+            // no real vendor address or alternate alias can receive this copy.
+            || ($emailTestVendorCopy && (
+                !hash_equals($expectedRecipientHash, hash('sha256', $coupleTo))
+                || !hash_equals($coupleTo, $vendorTo)
+            ))
             || $incomingCoupleSubject !== 'Your name was selected for a QR Bingo booth draw'
         ) {
             ww_qbdes_json(false, 'The isolated email-test request is not allowlisted.');
@@ -335,15 +413,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ww_qr_draw_email_acti
     $winnerEmail = ww_qbdes_line_after($vendorText, 'Email:');
     $winnerPhone = ww_qbdes_line_after($vendorText, 'Phone:');
     $winnerWeddingDate = ww_qbdes_line_after($vendorText, 'Wedding date:');
-    $prizeTitle = ww_qbdes_section_after($vendorText, 'Draw item');
-    if (!$prizeTitle) { $prizeTitle = ww_qbdes_line_after($incomingCoupleText, 'Prize:'); }
-    if (!$prizeTitle) { $prizeTitle = ww_qbdes_line_after($incomingCoupleText, 'Draw item:'); }
+    $prizeDetails = ww_qbdes_prize_details($vendorText, $incomingCoupleText, $data);
+    if ($prizeDetails === false) { ww_qbdes_json(false, 'The signed prize details are missing or invalid.'); }
+    $prizeTitle = $prizeDetails['description'];
+    $prizeValue = $prizeDetails['value'];
     $vendorName = ww_qbdes_vendor_from_couple_text($incomingCoupleText);
     $profileUrl = ww_qbdes_profile_url_from_text($incomingCoupleText);
     $coupleSubject = $incomingCoupleSubject ? $incomingCoupleSubject : 'Your name was selected for a QR Bingo booth draw';
-    $coupleText = ww_qbdes_text_body($winnerName, $vendorName, $prizeTitle, $profileUrl);
-    $coupleHtml = ww_qbdes_couple_html($winnerName, $vendorName, $prizeTitle, $profileUrl);
-    $vendorHtml = ww_qbdes_vendor_html($winnerName, $winnerEmail, $winnerPhone, $winnerWeddingDate, $prizeTitle);
+    $coupleText = ww_qbdes_text_body($winnerName, $vendorName, $prizeTitle, $profileUrl, $prizeValue);
+    $coupleHtml = ww_qbdes_couple_html($winnerName, $vendorName, $prizeTitle, $profileUrl, $prizeValue);
+    $vendorHtml = ww_qbdes_vendor_html($winnerName, $winnerEmail, $winnerPhone, $winnerWeddingDate, $prizeTitle, $prizeValue);
     $vendorPayloadHash = hash('sha256', json_encode(array($vendorTo, $vendorSubject, $vendorText)));
     $couplePayloadHash = hash('sha256', json_encode(array($coupleTo, $coupleSubject, $coupleText)));
     $vendorClaim = $sendVendor

@@ -64,7 +64,7 @@ Deno.test("one linked short agreement appears before the camera, with full detai
       "I have read and agree to the QR Bingo Terms and Draw Rules.",
       "I confirm I meet the age and residency requirements and am not excluded under those rules.",
       "If I choose Enter Draw, Wedding Win Inc. will share my name, email address,",
-      "phone number, wedding date, and entry/consent evidence with that named vendor.",
+      "phone number, wedding date, wedding venue if provided, and entry/consent evidence with that named vendor.",
       "offers and promotions",
       "unsubscribe from vendor marketing",
       "Each vendor is responsible for its draw, winner verification, and prize fulfilment.",

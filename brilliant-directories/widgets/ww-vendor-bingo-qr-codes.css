@@ -1,0 +1,65 @@
+/* BD keeps a 50px mobile-header offset even when this page's native Hide Header is on. */
+html:has(#wwVendorCodes){background:#fff}
+body:has(#wwVendorCodes){margin-top:0!important;min-height:100vh}
+.ww-vendor-codes{--ww-rose:#a94f58;--ww-ink:#352e31;max-width:1180px;margin:0 auto;padding:36px 24px 56px;color:var(--ww-ink);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-sizing:border-box}
+.ww-vendor-codes *{box-sizing:border-box}.ww-vendor-codes [hidden]{display:none!important}
+.ww-vendor-codes-header{text-align:center;margin-bottom:28px}.ww-vendor-codes-brand{margin:0 0 10px;color:var(--ww-rose);font-size:20px;font-weight:800;letter-spacing:.02em}.ww-vendor-codes h1{font-size:clamp(27px,4vw,40px);line-height:1.15;letter-spacing:-.025em;margin:0 0 14px;color:var(--ww-ink)}.ww-vendor-codes-intro{margin:0 auto 20px;max-width:600px;color:#706368}
+.ww-vendor-codes-event{padding:16px 22px;border:1px solid #ebd6da;border-radius:16px;background:#fff6f5;min-height:98px}.ww-vendor-codes-event h2{margin:0;color:var(--ww-rose);font-size:21px;line-height:1.4}.ww-vendor-codes-event p{margin:4px 0 0;color:#65545b;min-height:24px}
+.ww-vendor-codes-tools{display:flex;gap:18px;align-items:flex-end;justify-content:space-between}.ww-vendor-codes-search{flex:1;max-width:480px}.ww-vendor-codes-search label{display:block;font-size:14px;font-weight:700;margin-bottom:6px}.ww-vendor-codes-search input{appearance:none;width:100%;height:48px;padding:10px 14px;border:1px solid #d9c7cc;border-radius:10px;background:#fff;color:var(--ww-ink);font:inherit}.ww-vendor-codes-buttons{display:flex;gap:8px}.ww-vendor-codes button{min-height:48px;padding:10px 17px;border:1px solid #d9c7cc;border-radius:10px;background:#fff;color:var(--ww-rose);font:inherit;font-weight:700;cursor:pointer}.ww-vendor-codes button.ww-vendor-codes-primary{background:var(--ww-rose);border-color:var(--ww-rose);color:#fff}.ww-vendor-codes button:disabled{opacity:.55;cursor:wait}.ww-vendor-codes button:focus-visible,.ww-vendor-codes input:focus-visible{outline:3px solid #793943;outline-offset:3px}
+.ww-vendor-codes-summary{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 16px;margin-top:14px;color:#74636a;font-size:13px}.ww-vendor-codes-summary p{margin:0}.ww-vendor-codes-status{min-height:44px;margin:6px 0 16px;font-size:14px;line-height:1.5;color:#74636a}.ww-vendor-codes-status[data-state=error]{color:#9a2929}.ww-vendor-codes-print-summary{display:none}
+.ww-vendor-codes-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;align-items:stretch}.ww-vendor-codes-card{min-width:0;display:flex;flex-direction:column;align-items:center;padding:22px 16px 18px;border:1px solid #ead8dc;border-radius:16px;background:#fff;text-align:center;break-inside:avoid;page-break-inside:avoid}.ww-vendor-codes-card h3{font-size:19px;line-height:1.3;margin:0 0 12px;width:100%;overflow-wrap:anywhere;color:var(--ww-ink)}.ww-vendor-codes-card svg{display:block;width:100%;max-width:240px;height:auto;aspect-ratio:1;flex-shrink:0;background:#fff;shape-rendering:crispEdges;margin:auto 0 0}.ww-vendor-codes-card p{font-size:12px;color:#76646d;margin:12px 0 0}.ww-vendor-codes-card .ww-vendor-codes-card-caption{font-size:13px;font-weight:700;color:var(--ww-rose);margin-top:8px}.ww-vendor-codes-empty{text-align:center;padding:36px 16px;border:1px dashed #d9c7cc;border-radius:14px;color:#74636a}
+@media(max-width:900px){.ww-vendor-codes-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.ww-vendor-codes{padding:24px 16px 40px}.ww-vendor-codes-header{margin-bottom:22px}.ww-vendor-codes-tools{display:block}.ww-vendor-codes-search{max-width:none}.ww-vendor-codes-buttons{margin-top:12px}.ww-vendor-codes-buttons button{flex:1;padding:10px}.ww-vendor-codes-grid{grid-template-columns:1fr}.ww-vendor-codes-card{padding:20px}.ww-vendor-codes-event{padding:14px}.ww-vendor-codes-summary{display:block}.ww-vendor-codes-summary p+p{margin-top:4px}}
+.ww-vendor-codes-sheet{display:contents}
+.ww-vendor-codes-tools{flex-wrap:wrap}
+.ww-vendor-codes-print-options{flex:1;min-width:360px;max-width:380px}
+.ww-vendor-codes-print-options label{display:block;font-size:14px;font-weight:700;margin-bottom:6px}
+.ww-vendor-codes-print-options select{width:100%;min-height:48px;padding:10px 32px 10px 12px;border:1px solid #d9c7cc;border-radius:10px;background:#fff;color:var(--ww-ink);font:inherit}
+.ww-vendor-codes-print-help{margin:10px 0 0;color:#74636a;font-size:13px}
+.ww-vendor-codes-card .ww-vendor-codes-qr{margin:0;max-width:100%}
+.ww-vendor-codes-card .ww-vendor-codes-name{margin:8px 0 0;min-height:2.5em;display:flex;align-items:center;justify-content:center;font-size:13px;line-height:1.25;white-space:normal;overflow-wrap:anywhere}
+.ww-vendor-codes-card{padding:12px}
+.ww-vendor-codes-buttons{flex-wrap:wrap}
+.ww-vendor-codes-custom{display:flex;gap:12px;flex:1 0 100%;max-width:380px}
+.ww-vendor-codes-custom>div{flex:1;min-width:0}
+.ww-vendor-codes-custom label{display:block;font-size:14px;font-weight:700;margin-bottom:6px}
+.ww-vendor-codes-custom input{width:100%;min-height:48px;padding:10px 12px;border:1px solid #d9c7cc;border-radius:10px;background:#fff;color:var(--ww-ink);font:inherit}
+.ww-vendor-codes-layout-error{color:#9a2929;font-size:14px}
+@media(max-width:600px){.ww-vendor-codes-print-options{max-width:none;min-width:0;margin-top:14px}}
+.ww-vendor-codes-orientation{flex:0 1 190px;min-width:180px}
+.ww-vendor-codes-orientation label{display:block;font-size:14px;font-weight:700;margin-bottom:6px}
+.ww-vendor-codes-orientation select{width:100%;min-height:48px;padding:10px 30px 10px 12px;border:1px solid #d9c7cc;border-radius:10px;background:#fff;color:var(--ww-ink);font:inherit}
+.ww-vendor-codes select:focus-visible{outline:3px solid #793943;outline-offset:3px}
+.ww-vendor-codes[data-card-orientation="horizontal"] .ww-vendor-codes-card{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,1fr);column-gap:8px;align-items:center}
+.ww-vendor-codes[data-card-orientation="horizontal"] .ww-vendor-codes-name{margin:0;min-width:0;min-height:0}
+@media(max-width:600px){.ww-vendor-codes-orientation{margin-top:14px;min-width:0}.ww-vendor-codes-custom{margin-top:14px;max-width:none}}
+@page ww-vendor-portrait{size:letter portrait;margin:.25in}
+@page ww-vendor-landscape{size:letter landscape;margin:.25in}
+@page ww-vendor-tabloid-portrait{size:11in 17in;margin:.25in}
+@page ww-vendor-tabloid-landscape{size:17in 11in;margin:.25in}
+@media print{
+  html:has(#wwVendorCodes){page:ww-vendor-portrait}
+  html:has(#wwVendorCodes[data-print-page="letter-portrait"]){page:ww-vendor-portrait}
+  html:has(#wwVendorCodes[data-print-page="letter-landscape"]){page:ww-vendor-landscape}
+  html:has(#wwVendorCodes[data-print-page="tabloid-portrait"]){page:ww-vendor-tabloid-portrait}
+  html:has(#wwVendorCodes[data-print-page="tabloid-landscape"]){page:ww-vendor-tabloid-landscape}
+  html:has(#wwVendorCodes),body:has(#wwVendorCodes){margin:0!important;padding:0!important;background:#fff!important;height:auto!important;min-height:0!important}
+  /* All physical dimensions come from the shared print/PDF geometry engine. */
+  .ww-vendor-codes{max-width:none;margin:0;padding:0;color:#000;font-family:Arial,Helvetica,sans-serif}
+  .ww-vendor-codes-header,.ww-vendor-codes-tools,.ww-vendor-codes-summary,.ww-vendor-codes-status,.ww-vendor-codes-empty,.ww-vendor-codes-print-summary,.ww-vendor-codes-print-help,.ww-vendor-codes-layout-error{display:none!important}
+  .ww-vendor-codes[data-layout-valid="false"] .ww-vendor-codes-grid{display:none!important}
+  .ww-vendor-codes[data-layout-valid="false"] .ww-vendor-codes-layout-error{display:block!important}
+  .ww-vendor-codes-grid{display:block}
+  .ww-vendor-codes-sheet{display:grid;grid-template-columns:repeat(var(--columns),var(--card-width));grid-template-rows:repeat(var(--rows),var(--card-height));gap:0;width:var(--sheet-width);height:var(--sheet-height);margin:0 auto;page:ww-vendor-portrait;break-after:page;page-break-after:always;break-inside:avoid;page-break-inside:avoid}
+  .ww-vendor-codes-sheet:last-child{break-after:auto;page-break-after:auto}
+  .ww-vendor-codes[data-print-page="letter-portrait"] .ww-vendor-codes-sheet{page:ww-vendor-portrait}
+  .ww-vendor-codes[data-print-page="letter-landscape"] .ww-vendor-codes-sheet{page:ww-vendor-landscape}
+  .ww-vendor-codes[data-print-page="tabloid-portrait"] .ww-vendor-codes-sheet{page:ww-vendor-tabloid-portrait}
+  .ww-vendor-codes[data-print-page="tabloid-landscape"] .ww-vendor-codes-sheet{page:ww-vendor-tabloid-landscape}
+  .ww-vendor-codes .ww-vendor-codes-card,.ww-vendor-codes .ww-vendor-codes-card[hidden]{display:grid!important;grid-template-columns:minmax(0,1fr);grid-template-rows:var(--qr-size) minmax(0,1fr);gap:var(--card-gap);justify-items:center;align-items:center;box-sizing:border-box;width:var(--card-width);height:var(--card-height);min-width:var(--card-width);max-width:var(--card-width);padding:var(--card-padding);border:.5pt solid #bbb;border-radius:0;box-shadow:none;background:#fff;break-inside:avoid;page-break-inside:avoid}
+  .ww-vendor-codes[data-card-orientation="horizontal"] .ww-vendor-codes-card,.ww-vendor-codes[data-card-orientation="horizontal"] .ww-vendor-codes-card[hidden]{grid-template-columns:var(--qr-size) minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:var(--card-gap)}
+  .ww-vendor-codes-card .ww-vendor-codes-qr{width:var(--qr-size);height:var(--qr-size);max-width:none;margin:0;background:#fff;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+  .ww-vendor-codes-card .ww-vendor-codes-name{width:100%;min-width:0;min-height:0;margin:0;color:#000;font-size:var(--name-size);line-height:1.1;font-weight:700}
+  .ww-vendor-codes-card .ww-vendor-codes-name-long{font-size:var(--name-long-size)}
+  .ww-vendor-codes-card .ww-vendor-codes-name-longest{font-size:var(--name-longest-size)}
+}

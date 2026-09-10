@@ -1,4 +1,180 @@
 <?php
+/* WW_EMAIL_VERIFICATION_CORE_START */
+// Embedded unchanged in standalone widgets. Provision the private table once as admin.
+if (!function_exists('ww_email_verification_state')) {
+    function ww_ev_escape($value) { return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8'); }
+    function ww_ev_db_escape($value) {
+        return function_exists('mysql_real_escape_string') ? mysql_real_escape_string((string)$value) : addslashes((string)$value);
+    }
+    function ww_ev_member_id($value) {
+        $text = (string)$value;
+        if (!preg_match('/^[1-9][0-9]{0,18}$/D', $text) || (string)intval($text) !== $text) throw new Exception('Please sign in again.');
+        return intval($text);
+    }
+    function ww_ev_query($sql) {
+        global $w;
+        $result = mysql($w['database'], $sql);
+        if ($result === false) throw new Exception('Email verification is temporarily unavailable. Please try again.');
+        return $result;
+    }
+    function ww_ev_user($userId) {
+        $id = ww_ev_member_id($userId);
+        $result = ww_ev_query("SELECT user_id,email,active FROM users_data WHERE user_id='" . $id . "' LIMIT 1");
+        $row = mysql_fetch_assoc($result);
+        if (!$row || (string)$row['user_id'] !== (string)$id || (string)$row['active'] !== '2') throw new Exception('Please sign in to an active WeddingWin account.');
+        return $row;
+    }
+    function ww_ev_current_member() {
+        global $w;
+        if (!class_exists('user') || empty($_COOKIE['userid']) || !user::isUserLogged($_COOKIE)) throw new Exception('Please sign in before changing your email.');
+        // BD's cookie is encoded; only getUser resolves the authenticated canonical ID.
+        $member = getUser($_COOKIE['userid'], $w);
+        if (!is_array($member) || empty($member['user_id'])) throw new Exception('Please sign in again.');
+        return ww_ev_user($member['user_id']);
+    }
+    function ww_ev_lock() {
+        // One global lock serializes both member changes and competing target addresses.
+        // Older MySQL releases do not safely retain two independent named locks.
+        $result = ww_ev_query("SELECT GET_LOCK('ww_email_verification_mutations',5) AS acquired");
+        $row = mysql_fetch_assoc($result);
+        if (!$row || intval($row['acquired']) !== 1) throw new Exception('Another email request is in progress. Please try again.');
+    }
+    function ww_ev_unlock() {
+        global $w;
+        mysql($w['database'], "SELECT RELEASE_LOCK('ww_email_verification_mutations')");
+    }
+    function ww_ev_is_relay($email) { return preg_match('/@privaterelay\.appleid\.com$/iD', trim((string)$email)) === 1; }
+    function ww_ev_utc_time($value) { return is_string($value) && $value !== '' ? strtotime($value . ' UTC') : false; }
+    function ww_ev_private_state($userId) {
+        $id = ww_ev_member_id($userId);
+        $result = ww_ev_query("SELECT * FROM ww_email_verification_state WHERE user_id='" . $id . "' LIMIT 1");
+        return mysql_fetch_assoc($result);
+    }
+    function ww_ev_legacy_meta($userId, $key) {
+        $id = ww_ev_member_id($userId);
+        $result = ww_ev_query("SELECT `value` FROM users_meta WHERE `database`='users_data' AND database_id='" . $id . "' AND `key`='" . ww_ev_db_escape($key) . "' ORDER BY meta_id DESC LIMIT 1");
+        $row = mysql_fetch_assoc($result);
+        return $row ? (string)$row['value'] : '';
+    }
+    function ww_email_verification_state($member) {
+        $id = ww_ev_member_id(isset($member['user_id']) ? $member['user_id'] : '');
+        $current = strtolower(trim(isset($member['email']) ? (string)$member['email'] : ''));
+        if (!filter_var($current, FILTER_VALIDATE_EMAIL)) throw new Exception('Please refresh your account and try again.');
+        $row = ww_ev_private_state($id);
+        // Old user metadata can only require a new secure link, never establish proof.
+        $pending = strtolower(trim($row ? (string)$row['pending_email'] : ww_ev_legacy_meta($id, 'custom_pending_email')));
+        $required = ($row ? (string)$row['verification_required'] === '1' : ww_ev_legacy_meta($id, 'custom_email_verification_required') === '1') || $pending !== '';
+        $requested = $row ? ww_ev_utc_time($row['requested_at']) : false;
+        $status = 'none';
+        if ($required) {
+            $status = $row && filter_var($pending, FILTER_VALIDATE_EMAIL) && $requested && $requested <= time() + 30 && time() - $requested <= 86400 ? 'pending' : 'expired';
+        } elseif ($row && (string)$row['confirmed_email'] === $current && ww_ev_utc_time($row['confirmed_at'])) {
+            $status = 'confirmed';
+        }
+        return array('ok' => true, 'user_id' => (string)$id, 'current_email' => $current,
+            'pending_email' => $pending !== '' && filter_var($pending, FILTER_VALIDATE_EMAIL) ? $pending : null,
+            'email_confirmation_required' => $required, 'email_verification_status' => $status);
+    }
+    function ww_ev_random_token() {
+        if (function_exists('random_bytes')) return bin2hex(random_bytes(32));
+        if (function_exists('openssl_random_pseudo_bytes')) {
+            $strong = false;
+            $bytes = openssl_random_pseudo_bytes(32, $strong);
+            if ($strong && is_string($bytes) && strlen($bytes) === 32) return bin2hex($bytes);
+        }
+        throw new Exception('Secure email verification is temporarily unavailable.');
+    }
+    function ww_ev_owner($email) {
+        $result = ww_ev_query("SELECT user_id FROM users_data WHERE LOWER(email)='" . ww_ev_db_escape($email) . "' LIMIT 2");
+        $first = mysql_fetch_assoc($result);
+        if (mysql_fetch_assoc($result)) throw new Exception('That email is already connected to a WeddingWin account.');
+        return $first ? (string)$first['user_id'] : '';
+    }
+    function ww_ev_require_origin() {
+        $origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '';
+        if ($origin !== 'https://www.weddingwin.ca' && $origin !== 'https://weddingwin.ca') throw new Exception('Please open this form on WeddingWin.ca and try again.');
+    }
+    function ww_ev_json($body, $status) {
+        while (function_exists('ob_get_level') && ob_get_level() > 0) @ob_end_clean();
+        http_response_code($status);
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+        header('Referrer-Policy: no-referrer');
+        echo json_encode($body);
+        exit();
+    }
+    function ww_ev_send($member, $newEmail, $verifyPath) {
+        $id = ww_ev_member_id($member['user_id']);
+        $newEmail = strtolower(trim((string)$newEmail));
+        if (strlen($newEmail) > 254 || !filter_var($newEmail, FILTER_VALIDATE_EMAIL)) throw new Exception('Enter a valid email address.');
+        if (ww_ev_is_relay($newEmail)) throw new Exception('Use the email address where you would like vendors to contact you, rather than an Apple relay address.');
+        if ($verifyPath !== '/verify-email-change' && $verifyPath !== '/verify-email-change-app') throw new Exception('Invalid verification route.');
+        ww_ev_lock();
+        try {
+            $current = ww_ev_user($id);
+            $oldEmail = strtolower(trim((string)$current['email']));
+            $state = ww_email_verification_state($current);
+            if ($oldEmail === $newEmail && !$state['email_confirmation_required']) throw new Exception('That is already your current email address.');
+            $owner = ww_ev_owner($newEmail);
+            if ($owner !== '' && $owner !== (string)$id) throw new Exception('That email is already connected to another WeddingWin account.');
+            $previous = ww_ev_private_state($id);
+            $last = $previous ? ww_ev_utc_time($previous['requested_at']) : false;
+            if ($last && time() - $last < 60) throw new Exception('Please wait one minute before requesting another email.');
+            $token = ww_ev_random_token();
+            $hash = hash('sha256', $token);
+            $now = gmdate('Y-m-d H:i:s');
+            ww_ev_query("INSERT INTO ww_email_verification_state (user_id,verification_required,pending_email,existing_email,token_hash,requested_at,generation) VALUES ('" . $id . "',1,'" . ww_ev_db_escape($newEmail) . "','" . ww_ev_db_escape($oldEmail) . "','" . $hash . "','" . $now . "',1) ON DUPLICATE KEY UPDATE verification_required=1,pending_email=VALUES(pending_email),existing_email=VALUES(existing_email),token_hash=VALUES(token_hash),requested_at=VALUES(requested_at),generation=generation+1");
+            $saved = ww_ev_private_state($id);
+            if (!$saved || (string)$saved['token_hash'] !== $hash || (string)$saved['pending_email'] !== $newEmail || (string)$saved['verification_required'] !== '1') throw new Exception('Email verification could not be saved. Please try again.');
+        } catch (Exception $error) {
+            ww_ev_unlock();
+            throw $error;
+        }
+        ww_ev_unlock();
+        // No network/mail operations while the database mutation lock is held.
+        $url = 'https://www.weddingwin.ca' . $verifyPath . '?token=' . rawurlencode($token);
+        $headers = 'From: WeddingWin.ca <noreply@weddingwin.ca>' . PHP_EOL . 'Reply-To: noreply@weddingwin.ca' . PHP_EOL . 'Content-Type: text/plain; charset=UTF-8';
+        $body = 'Confirm your WeddingWin contact email by opening this link and choosing Confirm Email:' . PHP_EOL . $url . PHP_EOL . PHP_EOL . 'The link expires in 24 hours. Your current email stays unchanged until you confirm. If you did not request this, ignore this email.';
+        if (!@mail($newEmail, 'Confirm your WeddingWin email', $body, $headers)) throw new Exception('Your request was saved, but the email could not be sent. Please try again in a minute.');
+        if (filter_var($oldEmail, FILTER_VALIDATE_EMAIL)) @mail($oldEmail, 'WeddingWin email change requested', 'A request was made to change your WeddingWin contact email. It will change only after the new address is confirmed. If this was not you, contact WeddingWin support.', $headers);
+        return 'Check your email for the confirmation link. Your current email has not changed.';
+    }
+    function ww_ev_confirm($token) {
+        if (!preg_match('/^[a-f0-9]{64}$/D', (string)$token)) throw new Exception('This confirmation link is invalid or has already been used.');
+        $hash = hash('sha256', $token);
+        $result = ww_ev_query("SELECT user_id FROM ww_email_verification_state WHERE token_hash='" . $hash . "' LIMIT 2");
+        $row = mysql_fetch_assoc($result);
+        if (!$row || mysql_fetch_assoc($result)) throw new Exception('This confirmation link is invalid or has already been used. Please request a new email.');
+        $id = ww_ev_member_id($row['user_id']);
+        ww_ev_lock();
+        try {
+            $private = ww_ev_private_state($id);
+            if (!$private || !function_exists('hash_equals') || !hash_equals((string)$private['token_hash'], $hash)) throw new Exception('This confirmation link is invalid or has already been used.');
+            $member = ww_ev_user($id);
+            $state = ww_email_verification_state($member);
+            $oldEmail = (string)$private['existing_email'];
+            if ($state['email_verification_status'] !== 'pending') throw new Exception('This link has expired. Request a new confirmation email.');
+            $next = $state['pending_email'];
+            if (!$next || ww_ev_is_relay($next)) throw new Exception('Please request confirmation for a direct contact email.');
+            if ($oldEmail === '' || ($state['current_email'] !== $oldEmail && $state['current_email'] !== $next)) throw new Exception('Your account email changed after this request. Please request a new confirmation email.');
+            $owner = ww_ev_owner($next);
+            if ($owner !== '' && $owner !== (string)$id) throw new Exception('That email is already connected to another WeddingWin account.');
+            ww_ev_query("UPDATE users_data SET email='" . ww_ev_db_escape($next) . "' WHERE user_id='" . $id . "' AND LOWER(email)='" . ww_ev_db_escape($state['current_email']) . "' LIMIT 1");
+            $updated = ww_ev_user($id);
+            if (strtolower(trim($updated['email'])) !== $next || ww_ev_owner($next) !== (string)$id) throw new Exception('Your email update could not be confirmed. Please try again.');
+            ww_ev_query("UPDATE ww_email_verification_state SET confirmed_email='" . ww_ev_db_escape($next) . "',confirmed_at='" . gmdate('Y-m-d H:i:s') . "',verification_required=0,pending_email=NULL,existing_email=NULL,token_hash=NULL,requested_at=NULL WHERE user_id='" . $id . "' AND token_hash='" . $hash . "' LIMIT 1");
+            $confirmed = ww_email_verification_state($updated);
+            if ($confirmed['email_verification_status'] !== 'confirmed' || $confirmed['email_confirmation_required']) throw new Exception('Your email confirmation could not be saved. Please try again.');
+        } catch (Exception $error) {
+            ww_ev_unlock();
+            throw $error;
+        }
+        ww_ev_unlock();
+        return $updated;
+    }
+}
+/* WW_EMAIL_VERIFICATION_CORE_END */
+
 // QR Bingo Scanner for Brilliant Directories
 // This code checks if user is logged in and has proper subscription
 
@@ -46,6 +222,40 @@ if (!function_exists('ww_qr_bingo_runtime_config')) {
             && ($offsetHour !== 14 || $offsetMinute === 0)
             && strtotime($value) !== false;
     }
+    /* WW_QR_SCANNER_WINDOW_HELPERS_START */
+    function ww_qr_bingo_scanner_config($config) {
+        if (!is_array($config) || !isset($config['history_starts_at'], $config['entry_closes_at'])
+            || !ww_qr_bingo_is_rfc3339_timestamp($config['history_starts_at'])
+            || !ww_qr_bingo_is_rfc3339_timestamp($config['entry_closes_at'])) return null;
+        $hasNew = array_key_exists('scan_open_early', $config) || array_key_exists('scan_opens_at', $config) || array_key_exists('scan_history_starts_at', $config);
+        if (!$hasNew) {
+            $config['scan_open_early'] = false;
+            $config['scan_opens_at'] = $config['history_starts_at'];
+            $config['scan_history_starts_at'] = $config['history_starts_at'];
+        }
+        if (!isset($config['scan_open_early']) || !is_bool($config['scan_open_early'])
+            || !isset($config['scan_opens_at'], $config['scan_history_starts_at'])
+            || !ww_qr_bingo_is_rfc3339_timestamp($config['scan_opens_at'])
+            || !ww_qr_bingo_is_rfc3339_timestamp($config['scan_history_starts_at'])) return null;
+        if (array_key_exists('scan_early_access_starts_at', $config) && $config['scan_early_access_starts_at'] !== null
+            && !ww_qr_bingo_is_rfc3339_timestamp($config['scan_early_access_starts_at'])) return null;
+        $opens = strtotime($config['scan_opens_at']); $floor = strtotime($config['scan_history_starts_at']);
+        $show = strtotime($config['history_starts_at']); $closes = strtotime($config['entry_closes_at']);
+        if ($floor > $opens || $opens > $show || $show >= $closes) return null;
+        $config['scan_opens_at_unix'] = $opens;
+        $config['scan_history_starts_at_unix'] = $floor;
+        $config['scan_history_starts_at_sql'] = date('Y-m-d H:i:s', $floor);
+        return $config;
+    }
+    function ww_qr_bingo_scan_window_open($config, $now, $fixture = false) {
+        return !empty($config['scan_enabled']) && ($fixture || (isset($config['scan_opens_at_unix'], $config['entry_closes_at_unix'])
+            && $now < $config['entry_closes_at_unix'] && (!empty($config['scan_open_early']) || $now >= $config['scan_opens_at_unix'])));
+    }
+    function ww_qr_bingo_duplicate_scan_floor($config, $now) {
+        $floor = (int)$config['scan_history_starts_at_unix'];
+        return $now >= (int)$config['history_starts_at_unix'] ? max($floor, (int)$config['history_starts_at_unix']) : $floor;
+    }
+    /* WW_QR_SCANNER_WINDOW_HELPERS_END */
     function ww_qr_bingo_runtime_config() {
         $url = 'https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-admin?action=public_config';
         $body = '';
@@ -115,7 +325,7 @@ if (!function_exists('ww_qr_bingo_runtime_config')) {
         $config['history_starts_at_sql'] = date('Y-m-d H:i:s', $historyTimestamp);
         $config['history_starts_at_unix'] = $historyTimestamp;
         $config['entry_closes_at_unix'] = $entryClosesTimestamp;
-        return $config;
+        return ww_qr_bingo_scanner_config($config);
     }
 }
 
@@ -146,10 +356,10 @@ if (!function_exists('ww_qr_bingo_vendor_draw_request')) {
             || !in_array((string)$member['subscription_id'], array('4', '18'), true)) {
             return ww_qrb_request_error(403, 'Sign in with a couple account to use QR Bingo.');
         }
-        if (!in_array($action, array('fixture_context', 'scan', 'raffle_offer', 'raffle_opt_in'), true)) {
+        if (!in_array($action, array('fixture_context', 'contact_profile_get', 'contact_profile_save', 'scan', 'raffle_offer', 'raffle_opt_in'), true)) {
             return ww_qrb_request_error(400, 'This couple action is not available.');
         }
-        if ($action !== 'fixture_context') {
+        if ($action !== 'fixture_context' && $action !== 'contact_profile_get') {
             $saved = isset($_SESSION['ww_qr_couple_website_csrf']) ? $_SESSION['ww_qr_couple_website_csrf'] : null;
             if (!isset($_SERVER['REQUEST_METHOD'], $_SERVER['HTTP_ORIGIN']) || $_SERVER['REQUEST_METHOD'] !== 'POST'
                 || $_SERVER['HTTP_ORIGIN'] !== 'https://www.weddingwin.ca' || !is_array($saved)
@@ -235,36 +445,71 @@ if (!function_exists('ww_qr_bingo_vendor_draw_request')) {
 
 if (!function_exists('ww_qr_bingo_contact_profile')) {
     function ww_qr_bingo_contact_profile($user) {
-        $firstName = isset($user['first_name']) ? trim((string)$user['first_name']) : '';
-        $lastName = isset($user['last_name']) ? trim((string)$user['last_name']) : '';
-        $name = trim($firstName . ' ' . $lastName);
-        $normalizedName = strtolower($name);
-        $email = isset($user['email']) ? strtolower(trim((string)$user['email'])) : '';
-        $phone = '';
-        foreach (array('phone_number', 'phone', 'phone2', 'mobile_phone') as $phoneField) {
-            if (isset($user[$phoneField]) && trim((string)$user[$phoneField]) !== '') {
-                $phone = trim((string)$user[$phoneField]);
-                break;
-            }
+        // QR contact details belong to the authenticated couple and current event.
+        // They never change, confirm, or replace the account's login email.
+        $response = ww_qr_bingo_vendor_draw_request('contact_profile_get', array());
+        $body = isset($response['body']) && is_array($response['body']) ? $response['body'] : array();
+        $available = isset($response['status_code']) && (int)$response['status_code'] === 200
+            && isset($body['ok']) && $body['ok'] === true
+            && isset($body['contact_profile']) && is_array($body['contact_profile']);
+        $contact = $available ? $body['contact_profile'] : array();
+        $fields = array('name' => '', 'email' => '', 'phone' => '', 'wedding_date' => '', 'wedding_venue' => '', 'version' => 0);
+        foreach (array('name', 'email', 'phone', 'wedding_date', 'wedding_venue') as $field) {
+            if (isset($contact[$field]) && is_string($contact[$field])) $fields[$field] = $contact[$field];
         }
-        $phoneDigits = preg_replace('/[^0-9]/', '', $phone);
+        if (isset($contact['version']) && is_int($contact['version']) && $contact['version'] >= 0) $fields['version'] = $contact['version'];
         $missing = array();
-        if ($name === '' || in_array($normalizedName, array('couple', 'weddingwin', 'weddingwin couple'), true)) {
-            $missing[] = 'name';
-        }
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $missing[] = 'email';
-        }
-        if (strlen($phoneDigits) < 7 || strlen($phoneDigits) > 15) {
-            $missing[] = 'phone number';
+        foreach (isset($body['missing_profile_fields']) && is_array($body['missing_profile_fields']) ? $body['missing_profile_fields'] : array() as $field) {
+            if (is_string($field) && in_array($field, array('name', 'email', 'contact email', 'phone', 'phone number'), true)) $missing[] = $field;
         }
         return array(
-            'complete' => count($missing) === 0,
+            'available' => $available,
+            'complete' => $available && isset($body['profile_complete']) && $body['profile_complete'] === true,
             'missing_fields' => $missing,
-            'profile_edit_url' => '/account/contact'
+            'profile_edit_url' => '/qr#qrContactGate',
+            'event_key' => isset($body['event_key']) && is_string($body['event_key']) ? $body['event_key'] : '',
+            'contact_profile' => $fields
         );
     }
 }
+
+/* WW_QR_CONTACT_SCRIPT_DELIVERY_START */
+if (!function_exists('ww_qr_bingo_emit_contact_script')) {
+    function ww_qr_bingo_emit_contact_script() {
+        global $w;
+        $path = isset($_SERVER['REQUEST_URI']) ? parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) : '';
+        if (!in_array($path, array('/qr', '/qr/'), true) || !isset($_SERVER['REQUEST_METHOD']) || $_SERVER['REQUEST_METHOD'] !== 'GET') return false;
+        // The standalone /qr renderer skips the widget JS field. Emit only this
+        // fixed widget's stored companion; its initializer is safe to run twice.
+        $result = isset($w['database']) && function_exists('mysql') && function_exists('mysql_fetch_assoc')
+            ? mysql($w['database'], 'SELECT widget_javascript FROM data_widgets WHERE widget_id=258 LIMIT 1') : false;
+        $row = $result ? mysql_fetch_assoc($result) : false;
+        $script = is_array($row) && isset($row['widget_javascript']) && is_string($row['widget_javascript']) ? trim($row['widget_javascript']) : '';
+        if (strlen($script) > 0 && strlen($script) <= 65536 && substr($script, 0, 8) === '<script>'
+            && substr($script, -9) === '</script>' && strpos($script, 'WW_QR_CONTACT_FORM_START') !== false) {
+            echo $script;
+            return true;
+        }
+        echo '<p role="alert" class="qr-contact-status">The contact form could not load. <a href="/qr">Refresh QR Bingo</a> to try again.</p>';
+        return false;
+    }
+}
+/* WW_QR_CONTACT_SCRIPT_DELIVERY_END */
+
+/* WW_QR_JSON_RESPONSE_START */
+if (!function_exists('ww_qr_bingo_prepare_json_response')) {
+    function ww_qr_bingo_prepare_json_response() {
+        // BD can emit widget CSS before executing the standalone page's PHP.
+        // Discard that presentation output before any AJAX JSON response.
+        while (function_exists('ob_get_level') && ob_get_level() > 0) {
+            if (!@ob_end_clean()) break;
+        }
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('X-Content-Type-Options: nosniff');
+    }
+}
+/* WW_QR_JSON_RESPONSE_END */
 
 if (!function_exists('ww_qr_bingo_fixture_context')) {
     function ww_qr_bingo_fixture_context($response) {
@@ -338,19 +583,52 @@ if (!function_exists('ww_qr_bingo_fixture_context')) {
     }
 }
 
+/* WW_QR_SCANNER_SESSION_BOOTSTRAP_START */
+if (!function_exists('ww_qr_bingo_scanner_session_reply')) {
+    function ww_qr_bingo_scanner_session_reply($status, $body) {
+        ww_qr_bingo_prepare_json_response();
+        http_response_code($status);
+        echo json_encode($body);
+        exit();
+    }
+}
+$qrScannerSessionRequest = isset($_SERVER['REQUEST_METHOD'], $_POST['action'])
+    && $_SERVER['REQUEST_METHOD'] === 'POST' && $_POST['action'] === 'scanner_session';
+if ($qrScannerSessionRequest) {
+    // This read-only bootstrap issues no roster, contact, consent or scan action.
+    // Clear buffered BD presentation before PHP needs to issue its session cookie.
+    ww_qr_bingo_prepare_json_response();
+    if (!isset($_SERVER['HTTP_ORIGIN']) || $_SERVER['HTTP_ORIGIN'] !== 'https://www.weddingwin.ca') {
+        ww_qr_bingo_scanner_session_reply(403, array('status' => 'error', 'message' => 'Open QR Bingo on WeddingWin.ca.'));
+    }
+}
+/* WW_QR_SCANNER_SESSION_BOOTSTRAP_END */
+
 // Check if user is logged in
 if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COOKIE['userid'])
     && ctype_digit($_COOKIE['userid']) && (int)$_COOKIE['userid'] > 0) {
     $loggedInUser = getUser($_COOKIE['userid'], $w);
     if (!is_array($loggedInUser) || !isset($loggedInUser['user_id'])
         || (string)$loggedInUser['user_id'] !== (string)$_COOKIE['userid']) {
+        if ($qrScannerSessionRequest) {
+            ww_qr_bingo_scanner_session_reply(401, array('status' => 'error', 'message' => 'Sign in again to use QR Bingo.'));
+        }
         http_response_code(401); echo '<p>Sign in again to use QR Bingo.</p>'; return;
     }
     $userId = (string)$loggedInUser['user_id'];
+    if ($qrScannerSessionRequest && (!isset($loggedInUser['active'], $loggedInUser['subscription_id'])
+        || (string)$loggedInUser['active'] !== '2'
+        || !in_array((string)$loggedInUser['subscription_id'], array('4', '18'), true))) {
+        ww_qr_bingo_scanner_session_reply(403, array('status' => 'error', 'message' => 'Sign in with an active couple account to use QR Bingo.'));
+    }
     $qrWebsiteCsrf = '';
     if (function_exists('session_status')) {
         if (session_status() !== PHP_SESSION_ACTIVE) { @session_start(); }
     } elseif (session_id() === '') { @session_start(); }
+    $qrWebsiteSessionActive = function_exists('session_status') && session_status() === PHP_SESSION_ACTIVE;
+    if ($qrScannerSessionRequest && !$qrWebsiteSessionActive) {
+        ww_qr_bingo_scanner_session_reply(503, array('status' => 'error', 'message' => 'A secure QR Bingo session could not be saved. Please try again.'));
+    }
     if (session_id() !== '' && function_exists('hash_equals')) {
         if (!isset($_SESSION['ww_qr_couple_website_csrf']) || !is_array($_SESSION['ww_qr_couple_website_csrf'])
             || !isset($_SESSION['ww_qr_couple_website_csrf']['member_id'], $_SESSION['ww_qr_couple_website_csrf']['token'])
@@ -363,6 +641,9 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         $qrWebsiteCsrf = (string)$_SESSION['ww_qr_couple_website_csrf']['token'];
     }
     if (strlen($qrWebsiteCsrf) !== 64) {
+        if ($qrScannerSessionRequest) {
+            ww_qr_bingo_scanner_session_reply(503, array('status' => 'error', 'message' => 'A secure QR Bingo session is unavailable. Please try again.'));
+        }
         http_response_code(503); echo '<p>A secure QR Bingo session is unavailable. Please refresh.</p>'; return;
     }
     if (!headers_sent()) {
@@ -371,13 +652,24 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     }
     // Release the PHP lock before read-only fixture/Edge calls; the scoped
     // CSRF remains in this request's session snapshot.
-    if (function_exists('session_write_close')) { session_write_close(); }
+    $qrWebsiteSessionWritten = function_exists('session_write_close') ? session_write_close() : false;
+    /* WW_QR_SCANNER_SESSION_RESULT_START */
+    if ($qrScannerSessionRequest) {
+        if (!$qrWebsiteSessionActive || $qrWebsiteSessionWritten !== true
+            || !ctype_xdigit($qrWebsiteCsrf) || strlen($qrWebsiteCsrf) !== 64) {
+            ww_qr_bingo_scanner_session_reply(503, array('status' => 'error', 'message' => 'A secure QR Bingo session could not be saved. Please try again.'));
+        }
+        ww_qr_bingo_scanner_session_reply(200, array('status' => 'success',
+            'authenticated_member_id' => $userId, 'qr_csrf' => $qrWebsiteCsrf));
+    }
+    /* WW_QR_SCANNER_SESSION_RESULT_END */
 
     // The website and native app consume this same published, versioned event
     // configuration. Fail closed rather than silently reverting to an old tag.
     $eventConfig = ww_qr_bingo_runtime_config();
     if (!$eventConfig) {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            ww_qr_bingo_prepare_json_response();
             http_response_code(503);
             header('Content-Type: application/json; charset=UTF-8');
             echo json_encode(array('status' => 'error', 'message' => 'QR Bingo configuration is temporarily unavailable.'));
@@ -387,10 +679,10 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         return;
     }
     $eventTagId = intval($eventConfig['vendor_tag_id']);
-    // Production progress and draw eligibility count only scans recorded during
-    // the published wedding-show window.
+    // Progress includes authorized early scans. Draw eligibility separately
+    // requires a fresh scan during the published wedding-show hours.
     // Isolated review fixtures keep their separate service-side scan history.
-    $eventHistoryStartsAt = (string)$eventConfig['history_starts_at_sql'];
+    $eventHistoryStartsAt = (string)$eventConfig['scan_history_starts_at_sql'];
     $eventScanClosesAt = date(
         'Y-m-d H:i:s',
         intval($eventConfig['entry_closes_at_unix'])
@@ -422,6 +714,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     $qrContactProfile = ww_qr_bingo_contact_profile($loggedInUser);
     $qrContactComplete = !empty($qrContactProfile['complete']);
     $qrContactMissingLabel = implode(', ', $qrContactProfile['missing_fields']);
+    $qrContactFields = $qrContactProfile['contact_profile'];
 
     // Scan history is restricted to couple memberships. Vendor draw lookup uses
     // the BD API/tag fallback and does not depend on this presentation page.
@@ -434,16 +727,13 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
             array()
         );
         $fixtureContext = ww_qr_bingo_fixture_context($fixtureProbeResponse);
-        $productionScanWindowOpensAt = intval($eventConfig['history_starts_at_unix']);
+        $productionScanWindowOpensAt = intval($eventConfig['scan_opens_at_unix']);
         $productionScanWindowClosesAt = intval($eventConfig['entry_closes_at_unix']);
-        $showScanWindowOpen = !empty($fixtureContext)
-            || ($productionScanWindowClosesAt > 0
-                && time() >= $productionScanWindowOpensAt
-                && time() < $productionScanWindowClosesAt);
+        $showScanWindowOpen = ww_qr_bingo_scan_window_open($eventConfig, time(), !empty($fixtureContext));
 
         // Handle AJAX requests for scanning vendors
         if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-            header('Content-Type: application/json');
+            ww_qr_bingo_prepare_json_response();
             if (!isset($_SERVER['HTTP_ORIGIN']) || $_SERVER['HTTP_ORIGIN'] !== 'https://www.weddingwin.ca'
                 || !isset($_POST['qr_csrf']) || !is_string($_POST['qr_csrf']) || !hash_equals($qrWebsiteCsrf, $_POST['qr_csrf'])) {
                 http_response_code(403);
@@ -471,6 +761,46 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                         'revision' => $eventConfigRevision
                     )
                 ));
+                exit();
+            }
+
+            if ($_POST['action'] === 'contact_profile_save') {
+                $contactPayload = array();
+                foreach (array('name', 'email', 'phone', 'wedding_date') as $field) {
+                    if (!isset($_POST[$field]) || !is_string($_POST[$field]) || strlen($_POST[$field]) > 500) {
+                        http_response_code(400);
+                        echo json_encode(array('ok' => false, 'error' => 'Review your QR Bingo contact details and try again.'));
+                        exit();
+                    }
+                    $contactPayload[$field] = trim($_POST[$field]);
+                }
+                // Optional for already-open clients; the backend preserves an
+                // omitted venue and clears it whenever the date is cleared.
+                if (isset($_POST['wedding_venue'])) {
+                    if (!is_string($_POST['wedding_venue']) || strlen($_POST['wedding_venue']) > 800) {
+                        http_response_code(400);
+                        echo json_encode(array('ok' => false, 'error' => 'Use a shorter wedding venue name.'));
+                        exit();
+                    }
+                    $contactPayload['wedding_venue'] = trim($_POST['wedding_venue']);
+                }
+                $version = isset($_POST['expected_version']) && is_string($_POST['expected_version']) ? $_POST['expected_version'] : '';
+                if (!preg_match('/^(0|[1-9][0-9]{0,8})$/D', $version)) {
+                    http_response_code(400);
+                    echo json_encode(array('ok' => false, 'error' => 'Refresh your QR Bingo contact details and try again.'));
+                    exit();
+                }
+                $contactPayload['expected_version'] = (int)$version;
+                $contactEventKey = isset($_POST['contact_event_key']) && is_string($_POST['contact_event_key']) ? $_POST['contact_event_key'] : '';
+                if (!ww_qr_bingo_is_event_key($contactEventKey)) {
+                    http_response_code(400);
+                    echo json_encode(array('ok' => false, 'error' => 'Refresh QR Bingo before saving your contact details.'));
+                    exit();
+                }
+                $contactResponse = ww_qr_bingo_vendor_draw_request('contact_profile_save', array('contact_profile' => $contactPayload, 'expected_event_key' => $contactEventKey));
+                http_response_code((int)$contactResponse['status_code']);
+                header('Cache-Control: no-store');
+                echo json_encode($contactResponse['body']);
                 exit();
             }
 
@@ -517,6 +847,11 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                 if (empty($eventConfig['vendor_draws_enabled'])) {
                     http_response_code(503);
                     echo json_encode(array('ok' => false, 'error' => 'Optional vendor draws are temporarily unavailable.'));
+                    exit();
+                }
+                if (!$fixtureContext && (time() < (int)$eventConfig['history_starts_at_unix'] || time() >= (int)$eventConfig['entry_closes_at_unix'])) {
+                    http_response_code(403);
+                    echo json_encode(array('ok' => false, 'code' => 'show_draw_window_closed', 'error' => 'Vendor draws open during the wedding show. Scan the vendor again at the show to enter.'));
                     exit();
                 }
                 $drawVendorId = isset($_POST['vendor_id']) && is_string($_POST['vendor_id'])
@@ -670,18 +1005,19 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                     ));
                     exit();
                 }
-                $scanWindowOpensAt = isset($eventConfig['history_starts_at_unix'])
-                    ? intval($eventConfig['history_starts_at_unix'])
+                $scanWindowOpensAt = isset($eventConfig['scan_opens_at_unix'])
+                    ? intval($eventConfig['scan_opens_at_unix'])
                     : 0;
                 $scanWindowClosesAt = isset($eventConfig['entry_closes_at_unix'])
                     ? intval($eventConfig['entry_closes_at_unix'])
                     : 0;
-                if (!$scanWindowOpensAt || !$scanWindowClosesAt || time() < $scanWindowOpensAt || time() >= $scanWindowClosesAt) {
+                $scanRequestTime = time();
+                if (!$scanWindowOpensAt || !$scanWindowClosesAt || !ww_qr_bingo_scan_window_open($eventConfig, $scanRequestTime)) {
                     http_response_code(403);
                     echo json_encode(array(
                         'status' => 'error',
                         'code' => 'show_scan_window_closed',
-                        'message' => 'QR Bingo booth scans are accepted only during the published wedding-show hours.'
+                        'message' => 'QR Bingo scanning is not open right now.'
                     ));
                     exit();
                 }
@@ -704,12 +1040,21 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
                 if ($vendorUserRow) {
                     $actualVendorUserId = $vendorUserRow['user_id'];
-
-                    // Insert or update the visit using the stable BD user ID
-                    $query = "INSERT INTO vendor_visits (user_id, vendor_id)
+                    $duplicateFloor = mysql_real_escape_string(date('Y-m-d H:i:s', ww_qr_bingo_duplicate_scan_floor($eventConfig, $scanRequestTime)));
+                    $existingVisit = mysql($w['database'], "SELECT scan_date FROM vendor_visits WHERE user_id='$userId' AND vendor_id='$actualVendorUserId' AND scan_date >= '$duplicateFloor' AND scan_date < '$eventScanClosesAt' LIMIT 1");
+                    if ($existingVisit === false) {
+                        http_response_code(503); echo json_encode(array('status' => 'error', 'message' => 'Your scan could not be checked. Please try again.')); exit();
+                    }
+                    if (!mysql_fetch_assoc($existingVisit)) {
+                        // A prior early scan may be refreshed once during show
+                        // hours so it becomes valid in-show draw evidence.
+                        $query = "INSERT INTO vendor_visits (user_id, vendor_id)
                              VALUES ('$userId', '$actualVendorUserId')
                              ON DUPLICATE KEY UPDATE scan_date = NOW()";
-                    mysql($w['database'], $query);
+                        if (mysql($w['database'], $query) === false) {
+                            http_response_code(503); echo json_encode(array('status' => 'error', 'message' => 'Your scan could not be saved. Please try again.')); exit();
+                        }
+                    }
                 } else {
                     echo json_encode(['status' => 'error', 'message' => 'Invalid vendor ID']);
                     exit();
@@ -752,6 +1097,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
                 echo json_encode([
                     'status' => 'success',
+                    'in_show_scan' => $scanRequestTime >= (int)$eventConfig['history_starts_at_unix'] && $scanRequestTime < (int)$eventConfig['entry_closes_at_unix'],
                     'scanned_count' => $scannedCount,
                     'completed' => ($scannedCount >= $totalVendors)
                 ]);
@@ -762,13 +1108,14 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                 if ($fixtureContext) {
                     echo json_encode(array(
                         'status' => 'success',
-                        'scanned' => $fixtureContext['scanned']
+                        'scanned' => $fixtureContext['scanned'],
+                        'in_show_scanned' => $fixtureContext['scanned']
                     ));
                     exit();
                 }
                 // Return only current-event vendor visits, keyed by stable BD user ID.
                 $scannedQuery = "
-                    SELECT DISTINCT vv.vendor_id
+                    SELECT DISTINCT vv.vendor_id, vv.scan_date
                     FROM vendor_visits vv
                     INNER JOIN rel_tags rt ON rt.object_id = vv.vendor_id
                     INNER JOIN users_data u ON u.user_id = vv.vendor_id
@@ -781,14 +1128,16 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                     ORDER BY vv.vendor_id ASC
                 ";
                 $scannedResult = mysql($w['database'], $scannedQuery);
-                $scanned = [];
+                $scanned = []; $inShowScanned = array();
                 while ($row = mysql_fetch_assoc($scannedResult)) {
                     $scanned[] = (string)$row['vendor_id'];
+                    if (strtotime($row['scan_date']) >= (int)$eventConfig['history_starts_at_unix']) $inShowScanned[] = (string)$row['vendor_id'];
                 }
 
                 echo json_encode([
                     'status' => 'success',
-                    'scanned' => $scanned
+                    'scanned' => $scanned,
+                    'in_show_scanned' => $inShowScanned
                 ]);
                 exit();
             }
@@ -799,12 +1148,13 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         }
 
         // Get current-event progress using stable BD vendor IDs.
-        $scannedVendors = array();
+        $scannedVendors = array(); $inShowScannedVendors = array();
         if ($fixtureContext) {
             $scannedVendors = $fixtureContext['scanned'];
+            $inShowScannedVendors = $fixtureContext['scanned'];
         } else {
             $scannedQuery = "
-                SELECT DISTINCT vv.vendor_id
+                SELECT DISTINCT vv.vendor_id, vv.scan_date
                 FROM vendor_visits vv
                 INNER JOIN rel_tags rt ON rt.object_id = vv.vendor_id
                 INNER JOIN users_data u ON u.user_id = vv.vendor_id
@@ -821,6 +1171,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
             if ($scannedResult) {
                 while ($row = mysql_fetch_assoc($scannedResult)) {
                     $scannedVendors[] = (string)$row['vendor_id'];
+                    if (strtotime($row['scan_date']) >= (int)$eventConfig['history_starts_at_unix']) $inShowScannedVendors[] = (string)$row['vendor_id'];
                 }
             }
         }
@@ -1347,24 +1698,50 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
 	  <div class="wrap">
 
-    <?php if (empty($eventConfig['scan_enabled'])) { ?>
-      <div class="alert alert-warning" role="status" style="margin-bottom:16px;">
-        QR Bingo scanning is temporarily disabled by the event administrator. Your saved progress is unchanged.
-      </div>
-    <?php } elseif (empty($showScanWindowOpen)) { ?>
-      <div class="alert alert-info" role="status" style="margin-bottom:16px;">
-        QR Bingo booth scanning is available only during the published hours for <?php echo htmlspecialchars($eventName, ENT_QUOTES, 'UTF-8'); ?>.
-      </div>
-    <?php } ?>
+    <div id="qrScannerAvailability" role="status" aria-live="polite" style="min-height:48px;margin-bottom:12px;">
+      <?php if (empty($eventConfig['scan_enabled'])) { ?>Scanning is paused. Your saved progress is unchanged.
+      <?php } elseif (empty($showScanWindowOpen)) { ?>Scanning opens at the scheduled time for <?php echo htmlspecialchars($eventName, ENT_QUOTES, 'UTF-8'); ?>.
+      <?php } else { ?>QR Bingo scanning is open.<?php } ?>
+    </div>
+    <p id="qrScannerRefreshNotice" hidden><a href="/qr">Refresh QR Bingo</a> when you are ready to load the new show settings.</p>
 
-    <?php if (!$qrContactComplete) { ?>
-      <section class="qr-contact-gate" role="alert" aria-labelledby="qrContactGateTitle">
-        <h2 id="qrContactGateTitle">Complete your contact details</h2>
-        <p>Before scanning, add your <?php echo htmlspecialchars($qrContactMissingLabel, ENT_QUOTES, 'UTF-8'); ?>. This keeps every booth visit connected to a usable couple profile.</p>
-        <p>If you enter a vendor draw, that named vendor receives these contact details for the draw and may use them to send wedding-related offers and promotions. You may unsubscribe from vendor marketing at any time.</p>
-        <a href="/account/contact">Complete Contact Details</a>
-      </section>
-    <?php } ?>
+    <?php if ($qrContactComplete) { ?><button class="qr-contact-edit" id="qrContactEdit" type="button">Contact details</button><?php } ?>
+    <section class="qr-contact-gate" id="qrContactGate" aria-labelledby="qrContactGateTitle"<?php echo $qrContactComplete ? ' hidden' : ''; ?>>
+      <h2 id="qrContactGateTitle">Your QR Bingo contact details</h2>
+      <p>Use the details you want to share with vendors whose draws you enter. Your sign-in email stays the same.</p>
+      <?php if (empty($qrContactProfile['available'])) { ?>
+        <p role="alert">Your saved details could not be loaded. Refresh this page to try again.</p>
+        <a href="/qr">Refresh QR Bingo</a>
+      <?php } else { ?>
+        <form class="qr-contact-form" id="qrContactForm">
+          <label for="qrContactName">Your name &amp; your partner’s name</label>
+          <p class="qr-contact-field-hint" id="qrContactNameHint">First names are fine.</p>
+          <input id="qrContactName" name="ww_qr_contact_name" autocomplete="name" placeholder="e.g. Alex &amp; Jamie" aria-describedby="qrContactNameHint" maxlength="160" required value="<?php echo htmlspecialchars($qrContactFields['name'], ENT_QUOTES, 'UTF-8'); ?>">
+          <label for="qrContactEmail">Contact email</label>
+          <input id="qrContactEmail" name="ww_qr_contact_email" type="email" autocomplete="email" maxlength="254" required value="<?php echo htmlspecialchars($qrContactFields['email'], ENT_QUOTES, 'UTF-8'); ?>">
+          <label for="qrContactPhone">Phone number</label>
+          <input id="qrContactPhone" name="ww_qr_contact_phone" type="tel" autocomplete="tel" maxlength="80" required value="<?php echo htmlspecialchars($qrContactFields['phone'], ENT_QUOTES, 'UTF-8'); ?>">
+          <label for="qrContactDateOpen">Wedding date</label>
+          <div class="qr-contact-date-row">
+            <button class="qr-contact-date-open" id="qrContactDateOpen" type="button" aria-haspopup="dialog" disabled>Choose wedding date</button>
+            <button class="qr-contact-date-unsure" id="qrContactDateUnsure" type="button" disabled>Not sure yet</button>
+          </div>
+          <div class="qr-contact-venue" id="qrContactVenueGroup"<?php echo $qrContactFields['wedding_date'] !== '' ? '' : ' hidden'; ?>>
+            <label for="qrContactVenue">Wedding venue</label>
+            <input id="qrContactVenue" name="ww_qr_contact_venue" type="text" autocomplete="off" maxlength="200" value="<?php echo htmlspecialchars($qrContactFields['wedding_date'] !== '' ? $qrContactFields['wedding_venue'] : '', ENT_QUOTES, 'UTF-8'); ?>">
+          </div>
+          <button class="qr-contact-save" id="qrContactSave" type="submit" disabled>Save &amp; Continue to QR Bingo</button>
+          <p class="qr-contact-status" id="qrContactStatus" role="status" aria-live="polite"></p>
+          <button class="qr-contact-edit" id="qrContactReload" type="button" hidden>Refresh contact details</button>
+        </form>
+        <dialog class="qr-contact-date-dialog" id="qrContactDateDialog" aria-labelledby="qrContactDateTitle">
+          <div class="qr-contact-date-header"><h2 id="qrContactDateTitle">Wedding date</h2><button class="qr-contact-date-close" id="qrContactDateClose" type="button" aria-label="Close wedding date calendar">&times;</button></div>
+          <label for="qrContactDatePicker">Choose a date</label>
+          <input id="qrContactDatePicker" type="date" aria-label="Wedding date (optional)">
+          <button id="qrContactDateClear" type="button">Clear date</button>
+        </dialog>
+      <?php } ?>
+    </section>
 
     <div id="qrScannerExperience"<?php echo $qrContactComplete ? '' : ' hidden'; ?>>
 
@@ -1460,12 +1837,12 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
     <section class="done" id="doneBar" aria-live="polite">
       <div style="display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;">
-	        <div><strong>All participating booths visited!</strong> Your QR Bingo card is complete. Any vendor prize entry remains separate and optional.</div>
+	        <div><strong>Congratulations!</strong> You’ve completed Vendor Bingo. You’re now entered in the grand prize draw.</div>
       </div>
     </section>
     </div>
 
-    <div class="footer">© 2025 Wedding Win Inc.</div>
+    <div class="footer">© <?php echo date('Y'); ?> Wedding Win Inc.</div>
   </div>
 
   <!-- Success Animation Overlay -->
@@ -1514,11 +1891,18 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       'vendor_tag_id' => $eventTagId,
       'scan_enabled' => !empty($eventConfig['scan_enabled']),
       'show_scan_window_open' => !empty($showScanWindowOpen),
+      'scan_open_early' => !empty($eventConfig['scan_open_early']),
+      'scan_opens_at' => (string)$eventConfig['scan_opens_at'],
+      'scan_history_starts_at' => (string)$eventConfig['scan_history_starts_at'],
       'history_starts_at' => isset($eventConfig['history_starts_at']) ? (string)$eventConfig['history_starts_at'] : '',
       'entry_closes_at' => isset($eventConfig['entry_closes_at']) ? (string)$eventConfig['entry_closes_at'] : '',
+      'official_rules_url' => (string)$officialRulesUrl,
+      'draw_opens_at' => isset($eventConfig['draw_opens_at']) ? (string)$eventConfig['draw_opens_at'] : '',
+      'draw_at' => isset($eventConfig['draw_at']) ? (string)$eventConfig['draw_at'] : '',
       'vendor_draws_enabled' => !empty($eventConfig['vendor_draws_enabled'])
     ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const CONTACT_PROFILE_COMPLETE = <?php echo $qrContactComplete ? 'true' : 'false'; ?>;
+    const QR_CONTACT_PROFILE = <?php echo json_encode(array('event_key' => $qrContactProfile['event_key'], 'version' => $qrContactFields['version'], 'name' => $qrContactFields['name'], 'email' => $qrContactFields['email'], 'phone' => $qrContactFields['phone'], 'wedding_date' => $qrContactFields['wedding_date'], 'wedding_venue' => $qrContactFields['wedding_venue']), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const PARTICIPATION_NOTICE_VERSION = <?php echo json_encode($participationNoticeVersion, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const VENDORS = <?php
     // Retrieve the exact private fixture roster only when the authenticated Edge
@@ -1618,6 +2002,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const QR_AUTHENTICATED_MEMBER_ID = <?php echo json_encode((string)$userId, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const QR_WEBSITE_CSRF = <?php echo json_encode($qrWebsiteCsrf, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const INITIAL_SCANNED = <?php echo json_encode($scannedVendors, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
+    const IN_SHOW_SCANNED = <?php echo json_encode($inShowScannedVendors, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
+    const QR_SCANNER_FIXTURE = <?php echo !empty($fixtureContext) ? 'true' : 'false'; ?>;
   </script>
 
   <!-- jsQR library -->
@@ -1627,6 +2013,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
   <script>
     // --- State Management ---
     let scanned = new Set(INITIAL_SCANNED);
+    let inShowScanned = new Set(typeof IN_SHOW_SCANNED === 'undefined' ? [] : IN_SHOW_SCANNED);
+    const vendorScanRequests = new Map();
     let rafId = null;
     let stream = null;
     let decoding = false;
@@ -1746,6 +2134,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         if (!response.ok || data.status !== 'success') {
           throw new Error(data.message || 'Vendor scan could not be saved');
         }
+        if (data.in_show_scan === true || (typeof QR_SCANNER_FIXTURE !== 'undefined' && QR_SCANNER_FIXTURE === true)) inShowScanned.add(vendorId);
         console.log('✅ Vendor scan saved to database');
         if (data.completed) {
           console.log('🎉 Bingo completed!');
@@ -1774,6 +2163,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         if (refreshPageAfterStaleEventConfig(response, data)) return;
         if (data.status === 'success') {
           scanned = new Set(data.scanned);
+          inShowScanned = new Set(Array.isArray(data.in_show_scanned) ? data.in_show_scanned : []);
           hydrateTiles();
         }
       } catch (error) {
@@ -1950,6 +2340,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       return Boolean(
         !vendorDrawEntryInFlight &&
         !vendorDrawEntryRecorded &&
+        canReviewVendorDraw(currentVendorDrawVendor && currentVendorDrawVendor.id) &&
         hasCurrentParticipationNotice() &&
         version === String(EVENT_CONFIG.rules_version || '').trim() &&
         offerVersion &&
@@ -2013,14 +2404,11 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       const value = Number(offer.prize_approx_value_cad);
       vendorDrawDisclosure.textContent = [
         `Approximate prize value / maximum savings: $${Number.isFinite(value) ? value.toFixed(2) : '0.00'} CAD`,
-        `Number of winners and prizes: ${offeredWinnerCount}`,
+        "One winning couple per draw.",
         cleanPromotionText(offer.eligibility_region) ? `Eligibility: ${cleanPromotionText(offer.eligibility_region)}` : '',
         cleanPromotionText(offer.entry_closes_at) ? `Entries close: ${formatPromotionDate(offer.entry_closes_at)}` : '',
         cleanPromotionText(offer.draw_at) ? `Scheduled draw: ${formatPromotionDate(offer.draw_at)}` : '',
         cleanPromotionText(offer.odds_basis) ? `Odds: ${cleanPromotionText(offer.odds_basis)}` : '',
-        offer.exclude_previous_winners
-          ? "Repeat-winner rule: A couple who is confirmed as a winner is excluded only from later selections for this vendor's current prize offer. It does not affect another vendor's draw."
-          : "Repeat-winner rule: A confirmed winner remains eligible for another selection in this vendor's current prize offer.",
         'No purchase from this vendor is required.',
         'This in-show QR entry replaces a paper ballot. Eligibility, dates, odds, admission, and entry limits are explained in the Draw Rules.'
       ].filter(Boolean).join(String.fromCharCode(10));
@@ -2061,6 +2449,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
     async function openVendorDrawOffer(vendor, showUnavailable = false) {
       if (!hasCurrentParticipationNotice() || !EVENT_CONFIG.vendor_draws_enabled || !vendor ||
+          !canReviewVendorDraw(vendor.id) ||
           vendorDrawOfferInFlight || vendorDrawEntryInFlight || !vendorDrawModal.hidden) return;
       vendorDrawOfferInFlight = true;
       vendorDrawReturnFocus = document.activeElement instanceof HTMLElement
@@ -2238,7 +2627,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
           drawButton.className = 'vendor-draw-review';
           drawButton.id = `vendor-draw-review-${v.id}`;
           drawButton.textContent = 'Review optional prize draw';
-          drawButton.hidden = !scanned.has(v.id);
+          drawButton.hidden = !canReviewVendorDraw(v.id);
           drawButton.addEventListener('click', event => {
             event.stopPropagation();
             openVendorDrawOffer(v, true);
@@ -2254,10 +2643,15 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     async function markScanned(id) {
       if (!hasCurrentParticipationNotice()) return false;
       if (!VENDORS.find(v => v.id === id)) return false;
-      if (scanned.has(id)) return true;
+      const alreadyRecorded = isWebsiteDrawWindowOpen() ? inShowScanned.has(id) : scanned.has(id);
+      if (alreadyRecorded) return true;
+      if (vendorScanRequests.has(id)) return vendorScanRequests.get(id);
 
       // Never show a successful scan until the server confirms persistence.
-      const saved = await saveVendorScan(id);
+      const pending = saveVendorScan(id);
+      vendorScanRequests.set(id, pending);
+      let saved;
+      try { saved = await pending; } finally { vendorScanRequests.delete(id); }
       if (!saved) return false;
       scanned.add(id);
 
@@ -2266,7 +2660,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         tile.classList.remove('locked');
         tile.classList.add('scanned');
         const drawButton = document.getElementById(`vendor-draw-review-${id}`);
-        if (drawButton) drawButton.hidden = false;
+        if (drawButton) drawButton.hidden = !canReviewVendorDraw(id);
       }
       updateProgress();
       return true;
@@ -2275,13 +2669,13 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     function updateProgress() {
       const total = VENDORS.length;
       const count = scanned.size;
-      const pct = Math.round((count / total) * 100);
+      const pct = total > 0 ? Math.round((count / total) * 100) : 0;
       progressEl.style.width = pct + '%';
       const bar = document.querySelector('.progress-bar');
       bar.setAttribute('aria-valuenow', count);
       bar.setAttribute('aria-valuemax', total);
       progressTextEl.textContent = `${count} / ${total} scanned`;
-      doneBar.classList.toggle('on', count === total);
+      doneBar.classList.toggle('on', total > 0 && count === total);
     }
 
     function showSuccessAnimation() {
@@ -2299,7 +2693,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
           tile?.classList.remove('locked');
           tile?.classList.add('scanned');
           const drawButton = document.getElementById(`vendor-draw-review-${v.id}`);
-          if (drawButton) drawButton.hidden = false;
+          if (drawButton) drawButton.hidden = !canReviewVendorDraw(v.id);
         }
       });
       updateProgress();
@@ -2322,6 +2716,90 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const cameraSelectMobile2 = document.getElementById('cameraSelectMobile2');
     const scanningIndicator = document.getElementById('scanningIndicator');
     const cameraLoading = document.getElementById('cameraLoading');
+    /* WW_QR_WEB_SCANNER_WINDOW_START */
+    let scannerConfigUnavailable = false, scannerSettingsRequireRefresh = false;
+    let scannerPublicPollInFlight = false, scannerLastPollAt = Date.now(), scannerAvailabilityState = '';
+    function isWebsiteScannerWindowOpen(now = Date.now()) {
+      if (scannerConfigUnavailable || scannerSettingsRequireRefresh || EVENT_CONFIG.scan_enabled !== true) return false;
+      if (typeof QR_SCANNER_FIXTURE !== 'undefined' && QR_SCANNER_FIXTURE === true) return true;
+      const opens = Date.parse(EVENT_CONFIG.scan_opens_at || EVENT_CONFIG.history_starts_at), closes = Date.parse(EVENT_CONFIG.entry_closes_at);
+      return Number.isFinite(opens) && Number.isFinite(closes) && now < closes && (EVENT_CONFIG.scan_open_early === true || now >= opens);
+    }
+    function isWebsiteDrawWindowOpen(now = Date.now()) {
+      if (scannerConfigUnavailable || scannerSettingsRequireRefresh || EVENT_CONFIG.scan_enabled !== true) return false;
+      if (typeof QR_SCANNER_FIXTURE !== 'undefined' && QR_SCANNER_FIXTURE === true) return true;
+      const opens = Date.parse(EVENT_CONFIG.history_starts_at), closes = Date.parse(EVENT_CONFIG.entry_closes_at);
+      return Number.isFinite(opens) && Number.isFinite(closes) && now >= opens && now < closes;
+    }
+    function canReviewVendorDraw(vendorId) {
+      return EVENT_CONFIG.vendor_draws_enabled === true && isWebsiteDrawWindowOpen() && typeof vendorId === 'string' && inShowScanned.has(vendorId);
+    }
+    function scannerAvailabilityMessage() {
+      if (scannerSettingsRequireRefresh) return 'The show settings changed. Refresh QR Bingo when you are ready; your entered details have not been cleared.';
+      if (scannerConfigUnavailable) return 'Scanner availability could not be checked. Retrying shortly; your saved progress is unchanged.';
+      if (EVENT_CONFIG.scan_enabled !== true) return 'Scanning is paused. Your saved progress is unchanged.';
+      if (!isWebsiteScannerWindowOpen()) return Date.now() >= Date.parse(EVENT_CONFIG.entry_closes_at) ? 'Scanning for this wedding show has closed.' : 'Scanner opens ' + formatPromotionDate(EVENT_CONFIG.scan_opens_at || EVENT_CONFIG.history_starts_at) + '.';
+      if (!isWebsiteDrawWindowOpen()) return 'Bingo scanning is open. Vendor draws open ' + formatPromotionDate(EVENT_CONFIG.history_starts_at) + '; scan again at the show to enter.';
+      return 'QR Bingo scanning is open.';
+    }
+    function syncWebsiteScannerAvailability() {
+      const open = isWebsiteScannerWindowOpen(); EVENT_CONFIG.show_scan_window_open = open;
+      const noticeAccepted = hasCurrentParticipationNotice(), canStart = open && CONTACT_PROFILE_COMPLETE && noticeAccepted;
+      const state = String(open) + '|' + String(canStart) + '|' + String(isWebsiteDrawWindowOpen()) + '|' + String(EVENT_CONFIG.revision) + '|' + String(scannerConfigUnavailable) + '|' + String(scannerSettingsRequireRefresh);
+      const label = document.getElementById('qrScannerAvailability'); if (label) label.textContent = scannerAvailabilityMessage();
+      const reload = document.getElementById('qrScannerRefreshNotice'); if (reload) reload.hidden = !scannerSettingsRequireRefresh;
+      if (!open && stream) stopScanner();
+      if (state !== scannerAvailabilityState || !canStart) {
+        scannerAvailabilityState = state;
+        const starting = cameraLoading.classList.contains('show');
+        startBtn.disabled = !canStart || Boolean(stream) || starting; mobileStartBtn.disabled = startBtn.disabled;
+        if (!stream && !starting) {
+          startBtn.textContent = !open ? (EVENT_CONFIG.scan_enabled === true ? 'Scanner Not Open' : 'Scanner Paused') : !CONTACT_PROFILE_COMPLETE ? 'Complete Contact Details' : !noticeAccepted ? 'Accept Notice First' : 'Start Scanner';
+          mobileStartBtn.title = startBtn.textContent;
+        }
+        if (!open) { stopBtn.disabled = true; mobileStopBtn.disabled = true; cameraLoading.classList.remove('show'); }
+      }
+      VENDORS.forEach(vendor => { const button = document.getElementById('vendor-draw-review-' + vendor.id); if (button) button.hidden = !canReviewVendorDraw(vendor.id); });
+      updateVendorDrawEntryButton(); updateFixtureScanButton();
+    }
+    function websiteScannerRefreshConfig(payload) {
+      if (!payload || typeof payload !== 'object' || !Number.isSafeInteger(payload.revision) || payload.revision < EVENT_CONFIG.revision || typeof payload.scan_enabled !== 'boolean' || typeof payload.vendor_draws_enabled !== 'boolean' || (Object.prototype.hasOwnProperty.call(payload, 'published') && payload.published !== true)) throw new Error('Invalid event settings.');
+      const newFields = ['scan_open_early', 'scan_opens_at', 'scan_history_starts_at'];
+      const hasNew = newFields.some(key => Object.prototype.hasOwnProperty.call(payload, key));
+      const early = hasNew ? payload.scan_open_early : false;
+      const opens = hasNew ? payload.scan_opens_at : payload.history_starts_at;
+      const floor = hasNew ? payload.scan_history_starts_at : payload.history_starts_at;
+      if (typeof early !== 'boolean' || !trustedVendorOfferVersion(opens) || !trustedVendorOfferVersion(floor) || !trustedVendorOfferVersion(payload.history_starts_at) || !trustedVendorOfferVersion(payload.entry_closes_at) || Date.parse(floor) > Date.parse(opens) || Date.parse(opens) > Date.parse(payload.history_starts_at) || Date.parse(payload.history_starts_at) >= Date.parse(payload.entry_closes_at)) throw new Error('Invalid scanner schedule.');
+      if (Object.prototype.hasOwnProperty.call(payload, 'scan_early_access_starts_at') && payload.scan_early_access_starts_at !== null && !trustedVendorOfferVersion(payload.scan_early_access_starts_at)) throw new Error('Invalid early scan schedule.');
+      const identityFields = ['event_key', 'event_name', 'vendor_tag_id', 'rules_version', 'official_rules_url', 'history_starts_at', 'entry_closes_at', 'draw_opens_at', 'draw_at'];
+      if (identityFields.some(key => payload[key] !== EVENT_CONFIG[key])) return null;
+      return { revision: payload.revision, scan_enabled: payload.scan_enabled, vendor_draws_enabled: payload.vendor_draws_enabled, scan_open_early: early, scan_opens_at: opens, scan_history_starts_at: floor };
+    }
+    async function refreshWebsiteScannerConfig() {
+      if (scannerPublicPollInFlight || document.hidden || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
+      scannerPublicPollInFlight = true; scannerLastPollAt = Date.now();
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const response = await fetch('https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-admin?action=public_config', { method: 'GET', cache: 'no-store', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
+        if (!response.ok) throw new Error('Event settings unavailable.');
+        const body = await response.text(); if (body.length > 32768) throw new Error('Event settings were too large.');
+        const result = JSON.parse(body), next = websiteScannerRefreshConfig(result.event_config);
+        if (vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
+        scannerConfigUnavailable = false;
+        if (!next) { scannerSettingsRequireRefresh = true; syncWebsiteScannerAvailability(); return; }
+        const historyChanged = next.scan_history_starts_at !== EVENT_CONFIG.scan_history_starts_at;
+        Object.keys(next).forEach(key => { EVENT_CONFIG[key] = next[key]; });
+        scannerSettingsRequireRefresh = false; syncWebsiteScannerAvailability();
+        if (historyChanged && CONTACT_PROFILE_COMPLETE) void loadScannedVendors();
+      } catch (error) { scannerConfigUnavailable = true; syncWebsiteScannerAvailability(); }
+      finally { clearTimeout(timeout); scannerPublicPollInFlight = false; }
+    }
+    function initializeWebsiteScannerPolling() {
+      syncWebsiteScannerAvailability();
+      setInterval(() => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(); } }, 30000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) { syncWebsiteScannerAvailability(); if (Date.now() - scannerLastPollAt >= 30000) void refreshWebsiteScannerConfig(); } });
+    }
+    /* WW_QR_WEB_SCANNER_WINDOW_END */
 
     async function enumerateCameras() {
       cameraSelect.innerHTML = '';
@@ -2653,8 +3131,10 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     }
 
     async function startScanner() {
+      syncWebsiteScannerAvailability();
       if (!CONTACT_PROFILE_COMPLETE) {
-        window.location.assign('/account/contact');
+        const contactGate = document.getElementById('qrContactGate');
+        if (contactGate) { contactGate.hidden = false; contactGate.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
         return;
       }
       if (!hasCurrentParticipationNotice()) {
@@ -2663,7 +3143,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         return;
       }
       if (!EVENT_CONFIG.scan_enabled || !EVENT_CONFIG.show_scan_window_open) {
-        lastScanEl.textContent = 'Scanning is available only during the wedding show while the scanner is enabled.';
+        lastScanEl.textContent = scannerAvailabilityMessage();
         return;
       }
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -3137,13 +3617,13 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
       if (!EVENT_CONFIG.show_scan_window_open) {
         startBtn.disabled = true;
-        startBtn.textContent = 'Opens at the Show';
+        startBtn.textContent = 'Scanner Not Open';
         mobileStartBtn.disabled = true;
-        mobileStartBtn.title = 'Scanning opens at the show';
+        mobileStartBtn.title = 'Scanner not open';
         stopBtn.disabled = true;
         mobileStopBtn.disabled = true;
         cameraLoading.classList.remove('show');
-        lastScan.textContent = `Scanning is available from ${formatPromotionDate(EVENT_CONFIG.history_starts_at)} until ${formatPromotionDate(EVENT_CONFIG.entry_closes_at)}.`;
+        lastScan.textContent = scannerAvailabilityMessage();
         console.log('QR Bingo scanning is outside the configured wedding-show window.');
         return;
       }
@@ -3226,10 +3706,13 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     // Ensure DOM is ready before initializing
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', initApp);
+      document.addEventListener('DOMContentLoaded', initializeWebsiteScannerPolling);
     } else {
       initApp();
+      initializeWebsiteScannerPolling();
     }
   </script>
+<?php if (!empty($qrContactProfile['available'])) ww_qr_bingo_emit_contact_script(); ?>
 </body>
 </html>
 
@@ -3244,6 +3727,9 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     }
 } else {
     // User is not logged in
+    if ($qrScannerSessionRequest) {
+        ww_qr_bingo_scanner_session_reply(401, array('status' => 'error', 'message' => 'Sign in again to use QR Bingo.'));
+    }
     echo "<div style='padding: 20px; text-align: center;'>";
     echo "<h2>Please Log In</h2>";
     echo "<p>Sign in to a free couple account to access the QR Bingo Scanner.</p>";

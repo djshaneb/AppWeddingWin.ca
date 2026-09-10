@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.58.0";
+import { qrBingoScannerOpensAt, qrBingoScanHistoryStartsAt } from "./qr_bingo_scan_schedule.ts";
 
 export const QR_BINGO_EMAIL_MODES = [
   "disabled",
@@ -18,6 +19,8 @@ export type QrBingoEventConfig = {
   history_starts_at: string;
   app_card_enabled: boolean;
   scan_enabled: boolean;
+  scan_open_early?: boolean;
+  scan_early_access_starts_at?: string | null;
   vendor_draws_enabled: boolean;
   email_delivery_mode: QrBingoEmailMode;
   send_vendor_email: boolean;
@@ -59,7 +62,12 @@ export type PublicQrBingoEventConfig = Pick<
   | "draw_opens_at"
   | "entry_closes_at"
   | "draw_at"
->;
+> & {
+  scan_open_early: boolean;
+  scan_early_access_starts_at: string | null;
+  scan_opens_at: string;
+  scan_history_starts_at: string;
+};
 
 function requiredText(row: Record<string, unknown>, key: string) {
   const value = String(row[key] ?? "").trim();
@@ -159,6 +167,10 @@ export function parseQrBingoEventConfig(value: unknown): QrBingoEventConfig {
     history_starts_at: requiredTimestamp(row, "history_starts_at"),
     app_card_enabled: requiredBoolean(row, "app_card_enabled"),
     scan_enabled: requiredBoolean(row, "scan_enabled"),
+    scan_open_early: row.scan_open_early === undefined
+      ? false : requiredBoolean(row, "scan_open_early"),
+    scan_early_access_starts_at: row.scan_early_access_starts_at == null
+      ? null : requiredTimestamp(row, "scan_early_access_starts_at"),
     vendor_draws_enabled: requiredBoolean(row, "vendor_draws_enabled"),
     email_delivery_mode: emailDeliveryMode as QrBingoEmailMode,
     send_vendor_email: requiredBoolean(row, "send_vendor_email"),
@@ -236,6 +248,10 @@ export function publicQrBingoEventConfig(
     history_starts_at: config.history_starts_at,
     app_card_enabled: config.app_card_enabled,
     scan_enabled: config.scan_enabled,
+    scan_open_early: config.scan_open_early === true,
+    scan_early_access_starts_at: config.scan_early_access_starts_at ?? null,
+    scan_opens_at: qrBingoScannerOpensAt(config.history_starts_at),
+    scan_history_starts_at: qrBingoScanHistoryStartsAt(config),
     vendor_draws_enabled: config.vendor_draws_enabled,
     email_delivery_mode: config.email_delivery_mode,
     send_vendor_email: config.send_vendor_email,

@@ -78,6 +78,11 @@ import {
   validateDecodedChatImageDataUri,
 } from "../_shared/chat_moderation.ts";
 import { recipientCanReceiveChat } from "../_shared/chat_membership.ts";
+import {
+  EMAIL_CONFIRMATION_NOTICE,
+  loadMemberEmailVerification,
+  MemberEmailVerificationUnavailableError,
+} from "../_shared/member_email_verification.ts";
 
 const CHAT_REPORTED_NOTICE = CHAT_MEMBER_BLOCKED_NOTICE;
 const CHAT_PERMISSION_ENDPOINTS = [
@@ -1048,6 +1053,11 @@ Deno.serve(async (request) => {
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
     }
     await assertActiveChatMember(user, "account");
+    const emailVerification = await loadMemberEmailVerification(user.user_id, user.email);
+    if (emailVerification.email_confirmation_required) {
+      return jsonResponse({ ok: false, code: "email_confirmation_required", error: EMAIL_CONFIRMATION_NOTICE,
+        ...emailVerification }, 428);
+    }
     if (action === "send" || action === "open_vendor_profile") {
       await assertCurrentUserCanSend(user);
     }
@@ -1294,6 +1304,9 @@ Deno.serve(async (request) => {
         }
       : payload);
   } catch (error) {
+    if (error instanceof MemberEmailVerificationUnavailableError) {
+      return jsonResponse({ ok: false, code: "email_verification_unavailable", error: error.message, retriable: true }, 503);
+    }
     if (error instanceof BdRateLimitError) {
       return busyResponse();
     }

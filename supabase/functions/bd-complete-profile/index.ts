@@ -16,6 +16,12 @@ import {
   preflightLinkedAuthEmail,
 } from "../_shared/auth_email_sync.ts";
 import { normalizeContactEmail } from "../_shared/contact_email.ts";
+import { BdWeddingDateSyncError, syncExistingBdWeddingDateMetadata } from "../_shared/bd_wedding_date.ts";
+import {
+  loadMemberEmailVerification,
+  MemberEmailVerificationUnavailableError,
+  requireConfirmedAuthEmailChange,
+} from "../_shared/member_email_verification.ts";
 const BD_API_BASE_URL = Deno.env.get("BD_API_BASE_URL") || "https://www.weddingwin.ca";
 const APP_EMAIL_CHANGE_SECRET = (Deno.env.get("APP_EMAIL_CHANGE_SECRET") || "").trim();
 
@@ -52,12 +58,40 @@ function isReservedQrContactName(value: unknown) {
 }
 
 function cleanWeddingDate(value: unknown) {
+  if (typeof value !== "string") {
+    throw new Error("Wedding date must use YYYY-MM-DD format.");
+  }
   const text = cleanPlainText(value, 20);
   if (!text) return "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
     throw new Error("Wedding date must use YYYY-MM-DD format.");
   }
+  const [year, month, day] = text.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    year < 1900 || date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day
+  ) {
+    throw new Error("Enter a real wedding date in YYYY-MM-DD format.");
+  }
   return text;
+}
+
+function requireSavedWeddingDate(
+  user: Record<string, unknown> | undefined,
+  expected: string | undefined,
+) {
+  if (expected === undefined) return;
+  const actual = String(user?.wedding_date ?? "").trim();
+  if (
+    !user || !Object.prototype.hasOwnProperty.call(user, "wedding_date") ||
+    (actual === "0000-00-00" ? "" : actual) !== expected
+  ) {
+    throw new Error("Wedding date could not be saved. Please try again.");
+  }
+  // BD may return null/a zero-date after a clear. Send an explicit empty value
+  // back so native clients never restore their previously cached date.
+  if (expected === "") user.wedding_date = "";
 }
 
 function cleanPhone(value: unknown) {
@@ -189,11 +223,14 @@ Deno.serve(async (req) => {
       if (!email) {
         return jsonResponse({ error: "Account refresh is temporarily unavailable." }, 503);
       }
+      const emailVerification = await loadMemberEmailVerification(session.user_id, email);
       const linkedEmailPlan = await preflightLinkedAuthEmail(session.user_id, email);
+      requireConfirmedAuthEmailChange(linkedEmailPlan, emailVerification);
       await applyLinkedAuthEmail(linkedEmailPlan);
       return jsonResponse({
         ok: true,
-        user: sanitizeBdUser(user, email),
+        ...emailVerification,
+        user: { ...sanitizeBdUser(user, email), ...emailVerification },
         native_session: buildBdNativeSession(user, email),
         dashboard_url: `${BD_API_BASE_URL}/account/home`,
       });
@@ -203,6 +240,9 @@ Deno.serve(async (req) => {
     const existingEmail = String(user?.email || session.email || "").trim().toLowerCase();
     const nextEmail = normalizeContactEmail(profile.email || existingEmail, { allowEmpty: true });
     const nextFirstName = cleanPlainText(profile.first_name, 80);
+    const nextWeddingDate = Object.prototype.hasOwnProperty.call(profile, "wedding_date")
+      ? cleanWeddingDate(profile.wedding_date)
+      : undefined;
 
     if (nextFirstName && isReservedQrContactName(nextFirstName)) {
       return jsonResponse(
@@ -221,11 +261,19 @@ Deno.serve(async (req) => {
       first_name: nextFirstName,
       email: nextEmail,
       phone_number: cleanPhone(profile.phone),
-      wedding_date: cleanWeddingDate(profile.wedding_date),
     });
 
     for (const [key, value] of [...updateBody.entries()]) {
       if (key !== "user_id" && !value) updateBody.delete(key);
+    }
+
+    if (nextWeddingDate !== undefined) {
+      updateBody.set("wedding_date", nextWeddingDate);
+      if (nextWeddingDate === "") {
+        // The BD update API drops empty values unless both the empty field and
+        // this explicit, server-owned clear directive are present on the wire.
+        updateBody.set("__clear_fields", "wedding_date");
+      }
     }
 
     if ([...updateBody.keys()].length <= 1) {
@@ -260,7 +308,11 @@ Deno.serve(async (req) => {
           });
           return jsonResponse({ error: profileUpdateMessage(detail), detail }, 502);
         }
+        if (nextWeddingDate !== undefined) {
+          await syncExistingBdWeddingDateMetadata(callBd, String(session.user_id), nextWeddingDate);
+        }
         user = await ensureBdSessionCookie(await fetchFullBdUserById(session.user_id));
+        requireSavedWeddingDate(user, nextWeddingDate);
       }
 
       const message = await sendEmailChangeConfirmation({
@@ -272,11 +324,15 @@ Deno.serve(async (req) => {
         phone: updateBody.get("phone_number") || "",
         weddingDate: updateBody.get("wedding_date") || "",
       });
+      const emailVerification = await loadMemberEmailVerification(session.user_id, existingEmail);
+      if (!emailVerification.email_confirmation_required || emailVerification.pending_email !== nextEmail) {
+        throw new MemberEmailVerificationUnavailableError();
+      }
 
       return jsonResponse({
         ok: true,
-        email_confirmation_required: true,
-        user: sanitizeBdUser(user, existingEmail),
+        ...emailVerification,
+        user: { ...sanitizeBdUser(user, existingEmail), ...emailVerification },
         native_session: buildBdNativeSession(user, existingEmail),
         message,
       });
@@ -301,28 +357,35 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: profileUpdateMessage(detail), detail }, 502);
     }
 
+    if (nextWeddingDate !== undefined) {
+      await syncExistingBdWeddingDateMetadata(callBd, String(session.user_id), nextWeddingDate);
+    }
     user = await fetchFullBdUserById(session.user_id);
     user = await ensureBdSessionCookie(user);
+    requireSavedWeddingDate(user, nextWeddingDate);
     const email = String(user?.email || "").trim().toLowerCase();
     if (!email) {
       return jsonResponse({ error: "Account refresh is temporarily unavailable." }, 503);
     }
+    const emailVerification = await loadMemberEmailVerification(session.user_id, email);
     // BD now holds this same email. A synchronization failure is returned to
     // the app instead of being logged and presented as a successful save.
     const confirmedEmailPlan = email === nextEmail
       ? linkedEmailPlan
       : await preflightLinkedAuthEmail(session.user_id, email);
+    requireConfirmedAuthEmailChange(confirmedEmailPlan, emailVerification);
     await applyLinkedAuthEmail(confirmedEmailPlan);
     return jsonResponse({
       ok: true,
-      user: sanitizeBdUser(user, email),
+      ...emailVerification,
+      user: { ...sanitizeBdUser(user, email), ...emailVerification },
       native_session: buildBdNativeSession(user, email),
       dashboard_url: `${BD_API_BASE_URL}/account/home`,
     });
   } catch (error) {
     const status = error instanceof AuthEmailConflictError
       ? 409
-      : error instanceof AuthEmailSyncError
+      : error instanceof AuthEmailSyncError || error instanceof MemberEmailVerificationUnavailableError || error instanceof BdWeddingDateSyncError
       ? 503
       : 400;
     const message = error instanceof Error ? error.message : "Profile update failed.";
