@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 function invitationFixture() {
@@ -93,7 +96,20 @@ const website = readFileSync(new URL('../brilliant-directories/widgets/258-julia
 const admin = readFileSync(new URL('../brilliant-directories/widgets/ww-qr-bingo-settings.php', import.meta.url), 'utf8');
 const section = (source, start, end) => { const from = source.indexOf(start), to = source.indexOf(end, from + start.length); assert(from >= 0 && to > from, start); return source.slice(from, to); };
 const b64 = text => Buffer.from(text).toString('base64');
-function php(code) { return JSON.parse(execFileSync('npm', ['exec', '--offline', '--package=@php-wasm/cli', '--', 'php-wasm-cli', '-r', code], { encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024 })); }
+function php(code) {
+  // Full widget sources exceed Linux's per-argument limit; execute a temporary
+  // PHP file with the same installed runtime used by the other PHP fixtures.
+  const directory = mkdtempSync(join(realpathSync(tmpdir()), 'ww-scanner-opening-'));
+  const file = join(directory, 'fixture.php');
+  try {
+    writeFileSync(file, '<?php\n' + code);
+    return JSON.parse(execFileSync(process.execPath, [
+      fileURLToPath(new URL('../node_modules/@php-wasm/cli/php-wasm.js', import.meta.url)), file,
+    ], { encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024 }));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 const phpHelpers = section(website, '    function ww_qr_bingo_is_rfc3339_timestamp(', '    /* WW_QR_SCANNER_WINDOW_HELPERS_START */') + section(website, '    /* WW_QR_SCANNER_WINDOW_HELPERS_START */', '    /* WW_QR_SCANNER_WINDOW_HELPERS_END */');
 const webHelpers = section(website, '    /* WW_QR_WEB_SCANNER_WINDOW_START */', '    /* WW_QR_WEB_SCANNER_WINDOW_END */');
 const canonical = () => ({ event_key: 'niagara-wedding-show-2026', event_name: 'Niagara Wedding Show', vendor_tag_id: 30, revision: 12, rules_version: 'current-rules', official_rules_url: 'https://www.weddingwin.ca/qr-bingo-vendor-draw-rules', history_starts_at: '2026-10-18T15:00:00Z', entry_closes_at: '2026-10-18T19:00:00Z', draw_opens_at: '2026-10-18T19:00:00Z', draw_at: '2026-10-18T20:00:00Z', scan_enabled: true, vendor_draws_enabled: true, scan_open_early: false, scan_opens_at: '2026-10-18T04:00:00Z', scan_history_starts_at: '2026-10-18T04:00:00Z' });
