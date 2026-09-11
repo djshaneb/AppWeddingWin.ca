@@ -4,11 +4,10 @@
 // No live service, account, scan or network request is used.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import test, { after } from 'node:test';
 
-const root = process.env.QR_PHP_WASM_ROOT;
-assert(root, 'Set QR_PHP_WASM_ROOT to the installed @php-wasm directory.');
+const root = process.env.QR_PHP_WASM_ROOT || fileURLToPath(new URL('../node_modules/@php-wasm', import.meta.url));
 assert.equal(JSON.parse(readFileSync(`${root}/node/package.json`, 'utf8')).version, '3.1.52');
 const { PHP } = await import(pathToFileURL(`${root}/universal/index.js`));
 const { loadNodeRuntime } = await import(pathToFileURL(`${root}/node/index.js`));
@@ -31,8 +30,8 @@ const b64 = value => Buffer.from(value).toString('base64');
 async function run({ payload = config, visits = [], members = baseMembers, tags = baseTags,
   operation = 'scoreboard', failureStage = 0, method = 'POST', revision = '15', authenticated = true,
   cookieState = 'valid', origin = 'https://www.weddingwin.ca', action = 'get_scoreboard_data', password = '', passwordHash = fixtureHash,
-  contactRows = [], contactFailure = false } = {}) {
-  const fixture = { config: payload, members, tags, visits, failureStage, contactRows, contactFailure, passwordHash };
+  contactRows = [], contactFailure = false, resetRows = [], resetFailure = false, resetReply = null } = {}) {
+  const fixture = { config: payload, members, tags, visits, failureStage, contactRows, contactFailure, passwordHash, resetRows, resetFailure, resetReply };
   // Sign any fixture cookie with a valid synthetic verifier, then apply the
   // requested server configuration before executing the real access gate.
   const configureHash = "$fixture['passwordHash']===null?putenv('WW_QR_RESULTS_PASSWORD_HASH'):putenv('WW_QR_RESULTS_PASSWORD_HASH='.$fixture['passwordHash']);";
@@ -59,8 +58,8 @@ async function run({ payload = config, visits = [], members = baseMembers, tags 
     foreach(array('CURLOPT_POST','CURLOPT_POSTFIELDS','CURLOPT_HTTPHEADER','CURLOPT_FOLLOWLOCATION','CURLOPT_CONNECTTIMEOUT','CURLOPT_TIMEOUT','CURLOPT_SSL_VERIFYPEER','CURLOPT_SSL_VERIFYHOST','CURLOPT_WRITEFUNCTION','CURLINFO_HTTP_CODE') as $index=>$key)if(!defined($key))define($key,$index+1);
     function ww_test_curl_init($url){return (object)array('options'=>array());}
     function ww_test_curl_setopt_array($curl,$options){$curl->options=$options;return true;}
-    function ww_test_curl_exec($curl){global $fixture;$payload=json_decode($curl->options[CURLOPT_POSTFIELDS],true);$body=json_encode(array('ok'=>true,'dataset'=>'contacts','event_key'=>$fixture['config']['event_key'],'rows'=>$fixture['contactRows'],'has_more'=>false));$write=$curl->options[CURLOPT_WRITEFUNCTION];$write($curl,$body);return true;}
-    function ww_test_curl_getinfo($curl,$key){global $fixture;return $fixture['contactFailure']?503:200;}
+    function ww_test_curl_exec($curl){global $fixture;$payload=json_decode($curl->options[CURLOPT_POSTFIELDS],true);$curl->reset=$payload['action']==='card_reset_cutoffs';$reply=$curl->reset?($fixture['resetReply']===null?array('ok'=>true,'action'=>'card_reset_cutoffs','event_key'=>$fixture['config']['event_key'],'rows'=>$fixture['resetRows'],'has_more'=>false):$fixture['resetReply']):array('ok'=>true,'dataset'=>'contacts','event_key'=>$fixture['config']['event_key'],'rows'=>$fixture['contactRows'],'has_more'=>false);$body=json_encode($reply);$write=$curl->options[CURLOPT_WRITEFUNCTION];$write($curl,$body);return true;}
+    function ww_test_curl_getinfo($curl,$key){global $fixture;return ($curl->reset?$fixture['resetFailure']:$fixture['contactFailure'])?503:200;}
     function ww_test_curl_close($curl){}
     eval('?>'.base64_decode('${b64(evaluatedSource.replaceAll('curl_', 'ww_test_curl_'))}'));
     ${operation !== 'http' ? access + configureHash : ''}
@@ -259,4 +258,26 @@ test('Bingo contact service errors do not silently substitute stale account deta
   const response=await run({operation:'http',visits:[[10001,40001,'2026-09-08 18:36:05']],contactFailure:true});
   assert.equal(response.httpStatusCode,503);
   assert(!response.text.includes('review@example.invalid'));
+});
+
+test('account reset removes old scans from totals and rows while retaining fresh scans and other couples', async () => {
+  const resetRows = [{couple_id:'10001', generation:1, scan_reset_after:'2026-09-11T20:00:00Z'}];
+  const visits = [[10001,40001,'2026-09-11 19:59:59'],[10001,40002,'2026-09-11 20:00:00'],[10002,40001,'2026-09-11 19:59:59'],[10002,40002,'2026-09-11 20:00:00']];
+  const before = (await run({visits,resetRows})).json.result;
+  assert.equal(before.active_participants,1);assert.equal(before.completed_participants,1);
+  assert.deepEqual(before.participants.map(row=>row.member_id),['10002']);
+  const after = (await run({visits:[...visits,[10001,40001,'2026-09-11 20:00:01']],resetRows})).json.result;
+  assert.equal(after.active_participants,2);assert.equal(after.completed_participants,1);
+  assert.equal(after.participants.find(row=>row.member_id==='10001').scanned_count,1);
+});
+
+test('unavailable or malformed reset state fails closed instead of displaying cleared cards', async () => {
+  const valid={ok:true,action:'card_reset_cutoffs',event_key:config.event_key,rows:[],has_more:false};
+  const row={couple_id:'10001',generation:1,scan_reset_after:'2026-09-11T20:00:00Z'};
+  const patches=[{resetFailure:true},...[
+    {...valid,event_key:'wrong'}, {...valid,action:'data_list'}, {...valid,has_more:true}, {...valid,rows:null},
+    {...valid,rows:[{...row,couple_id:"10001' OR 1=1"}]}, {...valid,rows:[{...row,generation:0}]},
+    {...valid,rows:[{...row,scan_reset_after:'2026-09-31T20:00:00Z'}]}, {...valid,rows:[row,row]},
+  ].map(resetReply=>({resetReply}))];
+  for(const patch of patches){const result=await run({operation:'http',...patch});assert.equal(result.httpStatusCode,503,result.text);assert(!result.text.includes('participants'));}
 });

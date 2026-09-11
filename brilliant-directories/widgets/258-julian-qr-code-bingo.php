@@ -468,10 +468,40 @@ if (!function_exists('ww_qr_bingo_contact_profile')) {
             'missing_fields' => $missing,
             'profile_edit_url' => '/qr#qrContactGate',
             'event_key' => isset($body['event_key']) && is_string($body['event_key']) ? $body['event_key'] : '',
-            'contact_profile' => $fields
+            'contact_profile' => $fields,
+            'card_state' => isset($body['card_state']) && is_array($body['card_state']) ? $body['card_state'] : null
         );
     }
 }
+
+/* WW_QR_COUPLE_CARD_STATE_START */
+if (!function_exists('ww_qr_bingo_card_state')) {
+    function ww_qr_bingo_card_state($value, $event, $couple) {
+        if (!is_array($value) || !isset($value['event_key'], $value['couple_id'], $value['generation'])
+            || $value['event_key'] !== (string)$event || $value['couple_id'] !== (string)$couple
+            || !is_int($value['generation']) || $value['generation'] < 0 || $value['generation'] > 9007199254740991
+            || !array_key_exists('scan_reset_after', $value)) return null;
+        if ($value['generation'] === 0 && $value['scan_reset_after'] !== null) return null;
+        if ($value['generation'] > 0 && !ww_qr_bingo_is_rfc3339_timestamp($value['scan_reset_after'])) return null;
+        return array('event_key' => $value['event_key'], 'couple_id' => $value['couple_id'],
+            'generation' => $value['generation'], 'scan_reset_after' => $value['scan_reset_after']);
+    }
+    function ww_qr_bingo_card_floor($floor, $state) {
+        return $state['scan_reset_after'] === null ? (int)$floor : max((int)$floor, strtotime($state['scan_reset_after']) + 1);
+    }
+    function ww_qr_bingo_lock_card_scan($database, $event, $couple) {
+        $name = 'ww_qr_card:' . substr(hash('sha256', (string)$event . '|' . (string)$couple), 0, 48);
+        $safe = mysql_real_escape_string($name);
+        $result = mysql($database, "SELECT GET_LOCK('$safe', 10) AS acquired");
+        $row = $result ? mysql_fetch_assoc($result) : false;
+        if (!$row || !isset($row['acquired']) || (string)$row['acquired'] !== '1') return false;
+        register_shutdown_function(function() use ($database, $safe) {
+            mysql($database, "SELECT RELEASE_LOCK('$safe')");
+        });
+        return true;
+    }
+}
+/* WW_QR_COUPLE_CARD_STATE_END */
 
 /* WW_QR_CONTACT_SCRIPT_DELIVERY_START */
 if (!function_exists('ww_qr_bingo_emit_contact_script')) {
@@ -526,6 +556,12 @@ if (!function_exists('ww_qr_bingo_fixture_context')) {
         if (!isset($body['ok']) || $body['ok'] !== true || $appReviewFixture === $emailTestFixture) {
             return null;
         }
+        $cardValue = isset($body['card_state']) && is_array($body['card_state']) ? $body['card_state'] : null;
+        if (!$cardValue || !isset($cardValue['event_key'], $cardValue['couple_id'])
+            || !ww_qr_bingo_is_event_key($cardValue['event_key']) || !is_string($cardValue['couple_id'])
+            || preg_match('/^[1-9][0-9]{0,19}$/D', $cardValue['couple_id']) !== 1) return null;
+        $cardState = ww_qr_bingo_card_state($cardValue, $cardValue['event_key'], $cardValue['couple_id']);
+        if (!$cardState) return null;
         if (!isset($body['vendors']) || !is_array($body['vendors']) || count($body['vendors']) !== 1) {
             return null;
         }
@@ -578,6 +614,7 @@ if (!function_exists('ww_qr_bingo_fixture_context')) {
                 'name' => $vendorName
             ),
             'scanned' => $scanned,
+            'card_state' => $cardState,
             'completed' => $body['completed']
         );
     }
@@ -711,7 +748,53 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         '38519' => '066'
     ];
     $isCoupleScannerMember = ($loggedInUser['subscription_id'] == 4 || $loggedInUser['subscription_id'] == 18);
+    $fixtureProbeResponse = $isCoupleScannerMember
+        ? ww_qr_bingo_vendor_draw_request('fixture_context', array()) : null;
+    $fixtureContext = ww_qr_bingo_fixture_context($fixtureProbeResponse);
+    $fixtureProbeBody = is_array($fixtureProbeResponse) && isset($fixtureProbeResponse['body']) && is_array($fixtureProbeResponse['body'])
+        ? $fixtureProbeResponse['body'] : array();
+    if ($isCoupleScannerMember && ((!empty($fixtureProbeBody['app_review_fixture']) || !empty($fixtureProbeBody['email_test_fixture'])) && !$fixtureContext
+        || $fixtureContext && $fixtureContext['card_state']['couple_id'] !== (string)$userId)) {
+        ww_qr_bingo_prepare_json_response(); http_response_code(503);
+        echo json_encode(array('status' => 'error', 'message' => 'Your test Bingo card could not be checked. Please try again.')); exit();
+    }
+    $qrCardEventKey = $fixtureContext ? $fixtureContext['card_state']['event_key'] : $eventConfig['event_key'];
+    // Hold the same account lock as the admin reset before reading reset state
+    // and until this scan request finishes. Old scans cannot commit after reset.
+    if ($isCoupleScannerMember && $_SERVER['REQUEST_METHOD'] === 'POST'
+        && isset($_POST['action']) && $_POST['action'] === 'scan_vendor'
+        && !ww_qr_bingo_lock_card_scan($w['database'], $qrCardEventKey, (string)$userId)) {
+        ww_qr_bingo_prepare_json_response(); http_response_code(503);
+        echo json_encode(array('status' => 'error', 'message' => 'Your Bingo card is being updated. Please scan again.')); exit();
+    }
     $qrContactProfile = ww_qr_bingo_contact_profile($loggedInUser);
+    $qrCardState = ww_qr_bingo_card_state($qrContactProfile['card_state'], $qrCardEventKey, (string)$userId);
+    if ($isCoupleScannerMember && !$qrCardState) {
+        ww_qr_bingo_prepare_json_response(); http_response_code(503);
+        echo json_encode(array('status' => 'error', 'message' => 'Your Bingo card could not be checked. Please try again.')); exit();
+    }
+    if ($fixtureContext && ($fixtureContext['card_state']['generation'] !== $qrCardState['generation']
+        || $fixtureContext['card_state']['scan_reset_after'] !== $qrCardState['scan_reset_after'])) {
+        ww_qr_bingo_prepare_json_response(); http_response_code(409);
+        echo json_encode(array('status' => 'error', 'code' => 'stale_card_generation',
+            'message' => 'Your Bingo card changed. Please try again.', 'card_state' => $qrCardState)); exit();
+    }
+    if ($isCoupleScannerMember && $_SERVER['REQUEST_METHOD'] === 'POST'
+        && isset($_POST['action']) && $_POST['action'] === 'scan_vendor'
+        && array_key_exists('expected_card_generation', $_POST)) {
+        $expectedCardGeneration = $_POST['expected_card_generation'];
+        if (!is_string($expectedCardGeneration) || preg_match('/^(0|[1-9][0-9]{0,15})$/D', $expectedCardGeneration) !== 1
+            || (int)$expectedCardGeneration > 9007199254740991) {
+            ww_qr_bingo_prepare_json_response(); http_response_code(400);
+            echo json_encode(array('status' => 'error', 'code' => 'invalid_card_generation', 'message' => 'Reload your Bingo card before scanning.')); exit();
+        }
+        if ((int)$expectedCardGeneration !== $qrCardState['generation']) {
+            ww_qr_bingo_prepare_json_response(); http_response_code(409);
+            echo json_encode(array('status' => 'error', 'code' => 'stale_card_generation',
+                'message' => 'Your Bingo card changed. Please scan again.', 'card_state' => $qrCardState)); exit();
+        }
+    }
+    if ($qrCardState) $eventHistoryStartsAt = date('Y-m-d H:i:s', ww_qr_bingo_card_floor($eventConfig['scan_history_starts_at_unix'], $qrCardState));
     $qrContactComplete = !empty($qrContactProfile['complete']);
     $qrContactMissingLabel = implode(', ', $qrContactProfile['missing_fields']);
     $qrContactFields = $qrContactProfile['contact_profile'];
@@ -722,11 +805,6 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         // Fixture couples are detected only through the authenticated shared
         // Edge contract. A normal account receives both fixture flags as false
         // and therefore stays on the existing active-tag production path.
-        $fixtureProbeResponse = ww_qr_bingo_vendor_draw_request(
-            'fixture_context',
-            array()
-        );
-        $fixtureContext = ww_qr_bingo_fixture_context($fixtureProbeResponse);
         $productionScanWindowOpensAt = intval($eventConfig['scan_opens_at_unix']);
         $productionScanWindowClosesAt = intval($eventConfig['entry_closes_at_unix']);
         $showScanWindowOpen = ww_qr_bingo_scan_window_open($eventConfig, time(), !empty($fixtureContext));
@@ -891,6 +969,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
                 $drawPayload = array(
                     'vendor_id' => $drawVendorId,
+                    'expected_card_generation' => $qrCardState['generation'],
                     'participation_notice_version' => $submittedNoticeVersion
                 );
                 if ($_POST['action'] === 'raffle_opt_in') {
@@ -976,11 +1055,13 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                         'scan',
                         array(
                             'vendor_id' => $fixtureVendorId,
+                            'expected_card_generation' => $qrCardState['generation'],
                             'participation_notice_version' => $submittedNoticeVersion
                         )
                     );
                     $freshFixtureContext = ww_qr_bingo_fixture_context($fixtureScanResponse);
                     if (!$freshFixtureContext
+                        || $freshFixtureContext['card_state'] !== $qrCardState
                         || !hash_equals($fixtureVendorId, (string)$freshFixtureContext['vendor']['id'])
                         || !in_array($fixtureVendorId, $freshFixtureContext['scanned'], true)) {
                         http_response_code(
@@ -1001,6 +1082,10 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                     }
                     echo json_encode(array(
                         'status' => 'success',
+                        'card_state' => $freshFixtureContext['card_state'],
+                        'card_generation' => $freshFixtureContext['card_state']['generation'],
+                        'vendor_draw_scan' => true,
+                        'in_show_scan' => true,
                         'scanned_count' => count($freshFixtureContext['scanned']),
                         'completed' => $freshFixtureContext['completed']
                     ));
@@ -1041,7 +1126,10 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
                 if ($vendorUserRow) {
                     $actualVendorUserId = $vendorUserRow['user_id'];
-                    $duplicateFloor = mysql_real_escape_string(date('Y-m-d H:i:s', ww_qr_bingo_duplicate_scan_floor($eventConfig, $scanRequestTime)));
+                    if ($qrCardState['scan_reset_after'] !== null && $scanRequestTime <= strtotime($qrCardState['scan_reset_after'])) {
+                        http_response_code(409); echo json_encode(array('status' => 'error', 'code' => 'card_reset_in_progress', 'message' => 'Your Bingo card was just reset. Please scan again.')); exit();
+                    }
+                    $duplicateFloor = mysql_real_escape_string(date('Y-m-d H:i:s', ww_qr_bingo_card_floor(ww_qr_bingo_duplicate_scan_floor($eventConfig, $scanRequestTime), $qrCardState)));
                     $existingVisit = mysql($w['database'], "SELECT scan_date FROM vendor_visits WHERE user_id='$userId' AND vendor_id='$actualVendorUserId' AND scan_date >= '$duplicateFloor' AND scan_date < '$eventScanClosesAt' LIMIT 1");
                     if ($existingVisit === false) {
                         http_response_code(503); echo json_encode(array('status' => 'error', 'message' => 'Your scan could not be checked. Please try again.')); exit();
@@ -1099,6 +1187,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                 echo json_encode([
                     'status' => 'success',
                     'vendor_draw_scan' => ww_qr_bingo_scan_window_open($eventConfig, $scanRequestTime),
+                    'card_state' => $qrCardState,
+                    'card_generation' => $qrCardState['generation'],
                     'in_show_scan' => $scanRequestTime >= (int)$eventConfig['history_starts_at_unix'] && $scanRequestTime < (int)$eventConfig['entry_closes_at_unix'],
                     'scanned_count' => $scannedCount,
                     'completed' => ($scannedCount >= $totalVendors)
@@ -1112,7 +1202,9 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                         'status' => 'success',
                         'scanned' => $fixtureContext['scanned'],
                         'in_show_scanned' => $fixtureContext['scanned'],
-                        'vendor_draw_scanned' => $fixtureContext['scanned']
+                        'vendor_draw_scanned' => $fixtureContext['scanned'],
+                        'card_state' => $fixtureContext['card_state'],
+                        'card_generation' => $fixtureContext['card_state']['generation']
                     ));
                     exit();
                 }
@@ -1142,6 +1234,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                     'scanned' => $scanned,
                     'in_show_scanned' => $inShowScanned,
                     'vendor_draw_scanned' => $scanned
+                    , 'card_state' => $qrCardState, 'card_generation' => $qrCardState['generation']
                 ]);
                 exit();
             }
@@ -2014,6 +2107,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     let vendorDrawScanned = new Set(typeof VENDOR_DRAW_SCANNED === 'undefined' ? (typeof IN_SHOW_SCANNED === 'undefined' ? [] : IN_SHOW_SCANNED) : VENDOR_DRAW_SCANNED);
     let inShowScanned = new Set(typeof IN_SHOW_SCANNED === 'undefined' ? [] : IN_SHOW_SCANNED);
     const vendorScanRequests = new Map();
+    let scanProgressRevision = 0;
+    let scanProgressRequestInFlight = false;
     let rafId = null;
     let stream = null;
     let decoding = false;
@@ -2117,6 +2212,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     // --- Server Communication ---
     async function saveVendorScan(vendorId) {
       if (!hasCurrentParticipationNotice()) return false;
+      scanProgressRevision += 1;
       try {
         const response = await fetch('', {
           method: 'POST',
@@ -2148,6 +2244,11 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     }
 
     async function loadScannedVendors() {
+      if (!CONTACT_PROFILE_COMPLETE || document.hidden || scanProgressRequestInFlight || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
+      scanProgressRequestInFlight = true;
+      const revision = scanProgressRevision;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
       try {
         const response = await fetch('', {
           method: 'POST',
@@ -2156,20 +2257,35 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
           },
           body: `qr_csrf=${encodeURIComponent(QR_WEBSITE_CSRF)}&action=get_scanned&expected_event_key=${encodeURIComponent(EVENT_CONFIG.event_key)}&expected_config_revision=${encodeURIComponent(EVENT_CONFIG.revision)}`,
           credentials: 'same-origin',
-          cache: 'no-store'
+          cache: 'no-store',
+          signal: controller.signal
         });
 
         const data = await response.json();
         if (refreshPageAfterStaleEventConfig(response, data)) return;
-        if (data.status === 'success') {
-          scanned = new Set(data.scanned);
+        if (revision !== scanProgressRevision || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
+        if (response.ok && data.status === 'success' && Array.isArray(data.scanned)) {
+          const currentVendorIds = new Set(VENDORS.map(vendor => vendor.id));
+          const nextScanned = new Set(data.scanned.filter(id => typeof id === 'string' && currentVendorIds.has(id)));
+          const progressWasCleared = Array.from(scanned).some(id => !nextScanned.has(id));
+          scanned = nextScanned;
           inShowScanned = new Set(Array.isArray(data.in_show_scanned) ? data.in_show_scanned : []);
           vendorDrawScanned = new Set((Array.isArray(data.vendor_draw_scanned) ? data.vendor_draw_scanned : Array.from(inShowScanned)).filter(id => typeof id === 'string' && scanned.has(id)));
+          if (progressWasCleared) {
+            lastDecoded = '';
+            lastScanEl.textContent = '';
+          }
+          if (currentVendorDrawVendor && !vendorDrawScanned.has(currentVendorDrawVendor.id)) closeVendorDraw();
           hydrateTiles();
+          updateVendorDrawEntryButton();
+          updateFixtureScanButton();
         }
       } catch (error) {
         if (eventConfigRefreshStarted) return;
         console.error('Error loading scanned vendors:', error);
+      } finally {
+        clearTimeout(timeout);
+        scanProgressRequestInFlight = false;
       }
     }
 
@@ -2612,11 +2728,10 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     async function markScanned(id) {
       if (!hasCurrentParticipationNotice()) return false;
       if (!VENDORS.find(v => v.id === id)) return false;
-      const alreadyRecorded = isWebsiteDrawWindowOpen() ? vendorDrawScanned.has(id) : scanned.has(id);
-      if (alreadyRecorded) return true;
       if (vendorScanRequests.has(id)) return vendorScanRequests.get(id);
 
-      // Never show a successful scan until the server confirms persistence.
+      // A cached checkmark may have been reset by an admin. Confirm every
+      // physical scan; the server keeps repeated visits idempotent.
       const pending = saveVendorScan(id);
       vendorScanRequests.set(id, pending);
       let saved;
@@ -2661,9 +2776,12 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         if (scanned.has(v.id)) {
           tile?.classList.remove('locked');
           tile?.classList.add('scanned');
-          const drawButton = document.getElementById(`vendor-draw-review-${v.id}`);
-          if (drawButton) drawButton.hidden = !canReviewVendorDraw(v.id);
+        } else {
+          tile?.classList.add('locked');
+          tile?.classList.remove('scanned');
         }
+        const drawButton = document.getElementById(`vendor-draw-review-${v.id}`);
+        if (drawButton) drawButton.hidden = !canReviewVendorDraw(v.id);
       });
       updateProgress();
     }
@@ -2687,7 +2805,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const cameraLoading = document.getElementById('cameraLoading');
     /* WW_QR_WEB_SCANNER_WINDOW_START */
     let scannerConfigUnavailable = false, scannerSettingsRequireRefresh = false;
-    let scannerPublicPollInFlight = false, scannerLastPollAt = Date.now(), scannerAvailabilityState = '';
+    let scannerPublicPollInFlight = false, scannerAvailabilityState = '';
     function isWebsiteScannerWindowOpen(now = Date.now()) {
       if (scannerConfigUnavailable || scannerSettingsRequireRefresh || EVENT_CONFIG.scan_enabled !== true) return false;
       if (typeof QR_SCANNER_FIXTURE !== 'undefined' && QR_SCANNER_FIXTURE === true) return true;
@@ -2745,7 +2863,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     }
     async function refreshWebsiteScannerConfig() {
       if (scannerPublicPollInFlight || document.hidden || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
-      scannerPublicPollInFlight = true; scannerLastPollAt = Date.now();
+      scannerPublicPollInFlight = true;
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
       try {
         const response = await fetch('https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-admin?action=public_config', { method: 'GET', cache: 'no-store', credentials: 'omit', headers: { Accept: 'application/json' }, signal: controller.signal });
@@ -2755,17 +2873,18 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         if (vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
         scannerConfigUnavailable = false;
         if (!next) { scannerSettingsRequireRefresh = true; syncWebsiteScannerAvailability(); return; }
-        const historyChanged = next.scan_history_starts_at !== EVENT_CONFIG.scan_history_starts_at;
         Object.keys(next).forEach(key => { EVENT_CONFIG[key] = next[key]; });
         scannerSettingsRequireRefresh = false; syncWebsiteScannerAvailability();
-        if (historyChanged && CONTACT_PROFILE_COMPLETE) void loadScannedVendors();
+        if (CONTACT_PROFILE_COMPLETE) await loadScannedVendors();
       } catch (error) { scannerConfigUnavailable = true; syncWebsiteScannerAvailability(); }
       finally { clearTimeout(timeout); scannerPublicPollInFlight = false; }
     }
     function initializeWebsiteScannerPolling() {
       syncWebsiteScannerAvailability();
       setInterval(() => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(); } }, 30000);
-      document.addEventListener('visibilitychange', () => { if (!document.hidden) { syncWebsiteScannerAvailability(); if (Date.now() - scannerLastPollAt >= 30000) void refreshWebsiteScannerConfig(); } });
+      const refreshOnReturn = () => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(); } };
+      document.addEventListener('visibilitychange', refreshOnReturn);
+      window.addEventListener('focus', refreshOnReturn);
     }
     /* WW_QR_WEB_SCANNER_WINDOW_END */
 

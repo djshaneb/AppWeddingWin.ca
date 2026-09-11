@@ -356,7 +356,9 @@ Deno.test("multi-couple App Review fixture scans use the authenticated couple id
       readScans.includes(
         'eq("couple_bd_user_id", authenticatedCoupleBdUserId)',
       ) &&
-        saveScan.includes("couple_bd_user_id: authenticatedCoupleBdUserId"),
+        saveScan.includes("p_couple_id: authenticatedCoupleBdUserId") &&
+        saveScan.includes("p_expected_generation: generation") &&
+        readScans.includes('.eq("card_generation", generation)'),
       `${endpointUrl.pathname} fixture scans must use the authenticated couple, not the legacy fixture owner`,
     );
   }
@@ -374,7 +376,9 @@ Deno.test("fixture context is authenticated, exact-couple, and never fetches the
         "vendors: []",
         "scanned: []",
         "total_count: 0",
-        "isolatedFixtureScannedIds(fixture, authenticatedBdUserId)",
+        "isolatedFixtureScannedIds(fixture, authenticatedBdUserId, cardState.generation)",
+        "loadQrBingoCardState(requireAdmin(), fixture.event_key, authenticatedBdUserId)",
+        "card_state: cardState, card_generation: cardState.generation",
         "vendors: [vendor]",
         "total_count: 1",
         "completed: scanned.includes(vendor.id)",

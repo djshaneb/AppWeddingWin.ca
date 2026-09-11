@@ -246,12 +246,52 @@ if (!function_exists('ww_qrr_json')) {
         throw new Exception('The contact list is too large to load.');
     }
 
+    /* WW_QRR_CARD_RESET_FILTER_START */
+    function ww_qrr_card_reset_filter($config) {
+        if (!ww_qrr_authorized()) throw new Exception('Password required.');
+        $secret = ww_qrr_secret();
+        if ($secret === '' || !function_exists('curl_init')) throw new Exception('Bingo card resets are unavailable.');
+        $payload = json_encode(array('action' => 'card_reset_cutoffs', 'event_key' => $config['event_key']));
+        $timestamp = (string)time(); $nonce = bin2hex(random_bytes(16));
+        $signature = hash_hmac('sha256', $timestamp . '.' . $nonce . '.' . $payload, $secret);
+        $body = '';
+        $curl = curl_init('https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-admin');
+        curl_setopt_array($curl, array(
+            CURLOPT_POST => true, CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_HTTPHEADER => array('Content-Type: application/json', 'Accept: application/json', 'x-ww-timestamp: ' . $timestamp, 'x-ww-nonce: ' . $nonce, 'x-ww-signature: ' . $signature),
+            CURLOPT_FOLLOWLOCATION => false, CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => 8,
+            CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_WRITEFUNCTION => function($handle, $chunk) use (&$body) { if (strlen($body) + strlen($chunk) > 2097152) return 0; $body .= $chunk; return strlen($chunk); }
+        ));
+        $executed = curl_exec($curl); $http = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE); curl_close($curl);
+        $data = json_decode($body, true);
+        if ($executed === false || $http !== 200 || !is_array($data)
+            || !isset($data['ok'], $data['action'], $data['event_key'], $data['rows'], $data['has_more'])
+            || $data['ok'] !== true || $data['action'] !== 'card_reset_cutoffs'
+            || $data['event_key'] !== $config['event_key'] || $data['has_more'] !== false
+            || !is_array($data['rows']) || count($data['rows']) > 10000) throw new Exception('Bingo card resets could not be checked.');
+        $conditions = array(); $seen = array();
+        foreach ($data['rows'] as $row) {
+            if (!is_array($row) || !isset($row['couple_id'], $row['generation'], $row['scan_reset_after'])
+                || !is_string($row['couple_id']) || preg_match('/^[1-9][0-9]{0,17}$/D', $row['couple_id']) !== 1
+                || isset($seen[$row['couple_id']]) || !is_int($row['generation']) || $row['generation'] < 1
+                || $row['generation'] > 9007199254740991 || !ww_qrr_is_rfc3339_timestamp($row['scan_reset_after'])) throw new Exception('Bingo card resets could not be verified.');
+            $seen[$row['couple_id']] = true;
+            $id = mysql_real_escape_string($row['couple_id']);
+            $cutoff = mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($row['scan_reset_after'])));
+            $conditions[] = "NOT (vv.user_id='$id' AND vv.scan_date <= '$cutoff')";
+        }
+        return $conditions ? ' AND ' . implode(' AND ', $conditions) : '';
+    }
+    /* WW_QRR_CARD_RESET_FILTER_END */
+
     function ww_qrr_scoreboard($config) {
         global $w;
         if (!ww_qrr_authorized()) throw new Exception('Password required.');
         $tagId = (int)$config['vendor_tag_id'];
         $historyStartsAt = mysql_real_escape_string((string)$config['scan_history_starts_at_sql']);
         $entryClosesAt = mysql_real_escape_string((string)$config['entry_closes_at_sql']);
+        $cardResetFilter = ww_qrr_card_reset_filter($config);
         $totalVendors = ww_qrr_total_vendors($config);
         // One anonymous histogram gives complete totals without loading any
         // participant identities or truncating aggregate counts at 500.
@@ -269,6 +309,7 @@ if (!function_exists('ww_qrr_json')) {
                 AND participant.subscription_id IN (4, 18)
                 AND vv.scan_date >= '$historyStartsAt'
                 AND vv.scan_date < '$entryClosesAt'
+                $cardResetFilter
                 GROUP BY vv.user_id
             ) progress
             GROUP BY progress.scanned_count
@@ -302,6 +343,7 @@ if (!function_exists('ww_qrr_json')) {
             WHERE rt.tag_id = '$tagId' AND rt.tag_type_id = 1 AND vendor.active = 2
             AND participant.subscription_id IN (4, 18)
             AND vv.scan_date >= '$historyStartsAt' AND vv.scan_date < '$entryClosesAt'
+            $cardResetFilter
             GROUP BY participant.user_id, participant.first_name, participant.last_name, participant.email, participant.phone_number
             ORDER BY scanned_count DESC, participant.user_id ASC LIMIT 500
         ");

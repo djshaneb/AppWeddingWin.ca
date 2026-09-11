@@ -13,12 +13,15 @@ function slice(start, end) {
   assert.ok(from >= 0 && to > from, `Actual PHP section missing: ${start}`);
   return widget.slice(from, to);
 }
-const validator = slice("if (!function_exists('ww_qr_bingo_fixture_context'))", '// Check if user is logged in');
+const validator = slice('    function ww_qr_bingo_is_positive_json_integer(', '    /* WW_QR_SCANNER_WINDOW_HELPERS_START */') +
+  slice('/* WW_QR_COUPLE_CARD_STATE_START */', '/* WW_QR_COUPLE_CARD_STATE_END */') +
+  slice("if (!function_exists('ww_qr_bingo_fixture_context'))", '// Check if user is logged in');
 const markup = slice("    <?php if ($fixtureContext && $qrContactComplete", '\t    <section class="controls"');
 const valid = {
   ok: true, app_review_fixture: false, email_test_fixture: true,
   vendors: [{ id: '707', user_id: '707', name: 'Fictional & "quoted" test booth' }],
   scanned: [], total_count: 1, scanned_count: 0, completed: false,
+  card_state: { event_key: 'offline-private-fixture', couple_id: '90001', generation: 0, scan_reset_after: null },
 };
 const cases = [];
 function check(name, body, show, options = {}) {
@@ -33,6 +36,8 @@ check('string truthiness is not a fixture', { ...valid, email_test_fixture: 'tru
 check('unsuccessful response', { ...valid, ok: false }, false);
 check('expired or unauthenticated response', valid, false, { response: { status_code: 401, body: valid } });
 check('failed transport', valid, false, { response: null });
+check('missing card generation fails closed', { ...valid, card_state: null }, false);
+check('malformed reset cutoff fails closed', { ...valid, card_state: { ...valid.card_state, generation: 1 } }, false);
 check('no fixture booth', { ...valid, vendors: [] }, false);
 check('multiple booths', { ...valid, vendors: [valid.vendors[0], { ...valid.vendors[0], id: '708', user_id: '708' }] }, false);
 check('different vendor identity', { ...valid, vendors: [{ ...valid.vendors[0], user_id: '708' }] }, false);
@@ -116,10 +121,10 @@ test('actual PHP renders a short unchecked agreement with working terms, officia
   assert.match(html, /href="https:\/\/www[.]weddingwin[.]ca\/qr-bingo-vendor-draw-rules" target="_blank" rel="noopener">Draw Rules/);
   assert.match(html, /href="\/about\/privacy"[^>]*>Privacy Policy/);
   const text = html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-  assert.equal(text, 'Before you scan I have read and agree to the QR Bingo Terms and Draw Rules. Privacy Policy');
+  assert.equal(text, 'Before you scan While QR scanning is open, including early access, scanning a vendor with its draw turned on offers an optional entry. Choose Yes to enter or No to keep only your scan. The displayed entry deadline and draw date still apply. I have read and agree to the QR Bingo Terms and Draw Rules. Privacy Policy');
 });
 
-test('actual PHP renders no placeholder rules destination or visible empty terms panel before a valid offer', () => {
+test('actual PHP renders only the simple draw choice with Yes disabled before a valid offer', () => {
   const template = slice('  <div class="vendor-draw-modal"', '  <!-- Vendor Data -->');
   const code = `
     ob_start(); eval('?>' . base64_decode('${b64(template)}'));
@@ -128,10 +133,8 @@ test('actual PHP renders no placeholder rules destination or visible empty terms
   const html = JSON.parse(execFileSync('npm', ['exec', '--offline', '--package=@php-wasm/cli', '--', 'php-wasm-cli', '-r', code], {
     encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 60000,
   }));
-  assert.match(html, /<div class="vendor-draw-terms" id="vendorDrawTerms" hidden>/);
-  const rulesTag = html.match(/<a\b[^>]*id="vendorDrawRules"[^>]*>/)?.[0];
-  assert.ok(rulesTag);
-  assert.match(rulesTag, /\bhidden\b/);
-  assert.match(rulesTag, /target="_blank" rel="noopener"/);
-  assert.doesNotMatch(rulesTag, /\bhref\s*=/, 'Only a validated offer may provide a rules destination');
+  assert.match(html, /<h2 id="vendorDrawTitle">Enter this vendor’s draw\?<\/h2>/);
+  assert.match(html, /id="vendorDrawDecline"[^>]*>No<\/button>/);
+  assert.match(html, /id="vendorDrawEnter"[^>]*disabled>Yes<\/button>/);
+  assert.doesNotMatch(html, /vendorDrawTerms|vendorDrawRules|vendorDrawDisclosure|<input/);
 });

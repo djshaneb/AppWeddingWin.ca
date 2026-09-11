@@ -37,28 +37,50 @@ Deno.test("controlled QR scan replay preserves the original scan row", async () 
       import.meta.url,
     ),
   );
+  const resetMigration = await Deno.readTextFile(
+    new URL(
+      "../../migrations/20260911232445_add_admin_couple_bingo_card_reset.sql",
+      import.meta.url,
+    ),
+  );
   for (const source of [sync, vendorSync]) {
     const saveFixtureScan = functionBody(source, "saveIsolatedFixtureScan");
 
     assert(
-      saveFixtureScan.includes("ignoreDuplicates: true") &&
-        saveFixtureScan.includes("qr_bingo_email_test_fixture_scans") &&
-        saveFixtureScan.includes("app_review_raffle_fixture_scans") &&
-        saveFixtureScan.includes(
-          'onConflict: "fixture_id,couple_bd_user_id,vendor_bingo_id"',
-        ),
-      "fixture scan writes must ignore the existing unique row instead of updating it",
+      saveFixtureScan.includes('rpc("save_qr_bingo_fixture_card_scan"') &&
+        saveFixtureScan.includes("p_fixture_id: fixture.id") &&
+        saveFixtureScan.includes("p_couple_id: authenticatedCoupleBdUserId") &&
+        saveFixtureScan.includes("p_vendor_id: fixture.vendor_bingo_id") &&
+        saveFixtureScan.includes("p_expected_generation: generation") &&
+        saveFixtureScan.includes("p_email_test: isEmailTestFixture(fixture)"),
+      "both isolated scan channels must use the exact authenticated, generation-fenced RPC",
     );
     assert(
       !saveFixtureScan.includes("scanned_at:") &&
-        saveFixtureScan.includes("vendor_bingo_id: fixture.vendor_bingo_id"),
-      "a replay must preserve the database-default timestamp from the first scan",
+        saveFixtureScan.includes("data.card_generation !== generation"),
+      "replays must not overwrite timestamps and must verify the committed generation",
+    );
+  }
+  const fixtureRpc = resetMigration.slice(
+    resetMigration.indexOf("create function public.save_qr_bingo_fixture_card_scan("),
+    resetMigration.indexOf("create function public.capture_qr_bingo_draw_entry_generation("),
+  );
+  for (const table of ["app_review_raffle_fixture_scans", "qr_bingo_email_test_fixture_scans"]) {
+    assert(
+      includesIgnoringWhitespace(fixtureRpc, `insert into public.${table}(fixture_id,couple_bd_user_id,vendor_bingo_id,card_generation) values(p_fixture_id,p_couple_id,p_vendor_id,p_expected_generation) on conflict(fixture_id,couple_bd_user_id,vendor_bingo_id) do update set card_generation=excluded.card_generation;`),
+      `${table} replay must retain its original row and scan timestamp while refreshing only the card generation`,
     );
   }
   assert(
+    !fixtureRpc.includes("scanned_at") &&
+      fixtureRpc.indexOf("pg_advisory_xact_lock") < fixtureRpc.indexOf("insert into") &&
+      fixtureRpc.indexOf("p_expected_generation<>") < fixtureRpc.indexOf("insert into"),
+    "fixture replays must preserve the original timestamp and reject stale generations under the account lock before writing",
+  );
+  assert(
     /constraint app_review_raffle_fixture_scans_unique[\s\S]*unique \(fixture_id, couple_bd_user_id, vendor_bingo_id\)/i
       .test(migration),
-    "the insert-or-ignore conflict target must be protected by a unique constraint",
+    "the replay conflict target must remain protected by its original unique constraint",
   );
 });
 

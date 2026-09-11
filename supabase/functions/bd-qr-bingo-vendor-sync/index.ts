@@ -1,3 +1,4 @@
+import { loadQrBingoCardState, assertQrBingoCardGeneration, QrBingoCardStateError, type QrBingoCardState } from "../_shared/qr_bingo_card_state.ts";
 import { QR_ENTRY_ACCESS_POLICY_VERSION, QR_ENTRY_ACCESS_POLICY_DISCLOSURE, qrBingoEffectiveEntryDisclosure, qrBingoVendorDrawScannedIds, qrBingoEntryReadiness, qrBingoEntryOpensAt } from "../_shared/qr_bingo_entry_access.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { qrBingoScannerWindowOpen, qrBingoInShowScannedIds } from "../_shared/qr_bingo_scan_schedule.ts";
@@ -310,6 +311,8 @@ type VendorOfferSnapshot = {
   exclude_previous_winners: boolean;
 };
 type RaffleEntry = {
+  card_generation?: number;
+  card_reset_at?: string | null;
   id: string;
   event_key: string;
   vendor_bingo_id: string;
@@ -594,7 +597,9 @@ function isolatedFixtureVendor(fixture: IsolatedRaffleFixture): QrVendor {
 async function isolatedFixtureScannedIds(
   fixture: IsolatedRaffleFixture,
   authenticatedCoupleBdUserId: string,
+  cardGeneration?: number,
 ) {
+  const generation = cardGeneration ?? (await loadQrBingoCardState(requireAdmin(), fixture.event_key, authenticatedCoupleBdUserId)).generation;
   const table = isEmailTestFixture(fixture)
     ? "qr_bingo_email_test_fixture_scans"
     : "app_review_raffle_fixture_scans";
@@ -602,7 +607,8 @@ async function isolatedFixtureScannedIds(
     .from(table)
     .select("vendor_bingo_id")
     .eq("fixture_id", fixture.id)
-    .eq("couple_bd_user_id", authenticatedCoupleBdUserId);
+    .eq("couple_bd_user_id", authenticatedCoupleBdUserId)
+    .eq("card_generation", generation);
   if (error) throw error;
   return (data || []).map((row) => String(row.vendor_bingo_id || "")).filter(
     Boolean,
@@ -612,21 +618,18 @@ async function isolatedFixtureScannedIds(
 async function saveIsolatedFixtureScan(
   fixture: IsolatedRaffleFixture,
   authenticatedCoupleBdUserId: string,
+  cardGeneration?: number,
 ) {
-  const table = isEmailTestFixture(fixture)
-    ? "qr_bingo_email_test_fixture_scans"
-    : "app_review_raffle_fixture_scans";
-  const { error } = await requireAdmin()
-    .from(table)
-    .upsert({
-      fixture_id: fixture.id,
-      couple_bd_user_id: authenticatedCoupleBdUserId,
-      vendor_bingo_id: fixture.vendor_bingo_id,
-    }, {
-      onConflict: "fixture_id,couple_bd_user_id,vendor_bingo_id",
-      ignoreDuplicates: true,
-    });
+  const generation = cardGeneration ?? (await loadQrBingoCardState(requireAdmin(), fixture.event_key, authenticatedCoupleBdUserId)).generation;
+  const { data, error } = await requireAdmin().rpc("save_qr_bingo_fixture_card_scan", {
+    p_event_key: fixture.event_key, p_couple_id: authenticatedCoupleBdUserId,
+    p_fixture_id: fixture.id, p_vendor_id: fixture.vendor_bingo_id,
+    p_expected_generation: generation, p_email_test: isEmailTestFixture(fixture),
+  });
   if (error) throw error;
+  if (data?.ok !== true || data.card_generation !== generation) {
+    throw new QrBingoCardStateError("This Bingo card changed. Refresh and scan again.", 409, "stale_card_generation");
+  }
 }
 
 async function isolatedFixtureContext(
@@ -650,10 +653,11 @@ async function isolatedFixtureContext(
       completed: false,
     };
   }
+  const cardState = await loadQrBingoCardState(requireAdmin(), fixture.event_key, authenticatedBdUserId);
   const vendor = isolatedFixtureVendor(fixture);
   const scanned = [
     ...new Set(
-      await isolatedFixtureScannedIds(fixture, authenticatedBdUserId),
+      await isolatedFixtureScannedIds(fixture, authenticatedBdUserId, cardState.generation),
     ),
   ];
   return {
@@ -661,6 +665,7 @@ async function isolatedFixtureContext(
     app_review_fixture: !isEmailTestFixture(fixture),
     email_test_fixture: isEmailTestFixture(fixture),
     vendors: [vendor],
+    card_state: cardState, card_generation: cardState.generation,
     scanned,
     scanned_count: scanned.length,
     total_count: 1,
@@ -1435,11 +1440,13 @@ async function activeVendorEntryCount(eventKey: string, vendorId: string) {
       () =>
         db.from("qr_bingo_raffle_entries")
           .select("id", { count: "exact", head: true })
+        .is("card_reset_at", null)
           .eq("event_key", eventKey)
           .eq("vendor_bingo_id", vendorId),
       (from, to) =>
         db.from("qr_bingo_raffle_entries")
           .select("id")
+        .is("card_reset_at", null)
           .eq("event_key", eventKey)
           .eq("vendor_bingo_id", vendorId)
           .order("id", { ascending: true })
@@ -1714,7 +1721,7 @@ function entryHasNamedVendorContactConsent(
 function entryHasCurrentConsent(
   entry: Partial<RaffleEntry> | null | undefined,
 ) {
-  return entryHasNamedVendorContactConsent(entry) &&
+  return entry?.card_reset_at == null && entryHasNamedVendorContactConsent(entry) &&
     entry?.consent_version === qrBingoConfig().rules_version &&
     entry.consent_version === CONTACT_SHARING_RULES_VERSION;
 }
@@ -1869,6 +1876,7 @@ async function loadVendorEntryPool(
     () =>
       db.from("qr_bingo_raffle_entries")
         .select("id", { count: "exact", head: true })
+        .is("card_reset_at", null)
         .eq("event_key", eventKey)
         .eq("vendor_bingo_id", vendor.id)
         .eq("vendor_bd_user_id", vendorBdUserId)
@@ -1884,6 +1892,7 @@ async function loadVendorEntryPool(
     (from, to) =>
       db.from("qr_bingo_raffle_entries")
         .select("*")
+        .is("card_reset_at", null)
         .eq("event_key", eventKey)
         .eq("vendor_bingo_id", vendor.id)
         .eq("vendor_bd_user_id", vendorBdUserId)
@@ -2409,6 +2418,7 @@ async function optInToRaffle(
   eventKey = qrBingoConfig().event_key,
   isolatedFixture?: IsolatedRaffleFixture | null,
   hasInShowScanProof = false,
+  cardGeneration = 0,
 ) {
   const contactProfile = qrContactProfile(user);
   if (!contactProfile.complete) {
@@ -2444,7 +2454,7 @@ async function optInToRaffle(
       };
     }
   }
-  if (entryHasCurrentConsent(existing as RaffleEntry | null)) {
+  if (entryHasCurrentConsent(existing as RaffleEntry | null) && (existing.card_generation ?? 0) === cardGeneration) {
     return {
       entered: false,
       already_entered: true,
@@ -2539,6 +2549,8 @@ async function optInToRaffle(
 
   const acceptedAt = new Date().toISOString();
   const entryPayload = {
+    card_generation: cardGeneration,
+    card_reset_at: null,
     event_key: eventKey,
     vendor_bingo_id: currentSnapshot!.vendor_bingo_id,
     vendor_bd_user_id: currentSnapshot!.vendor_bd_user_id,
@@ -2613,10 +2625,7 @@ async function optInToRaffle(
     // `created_at` and the stable entry id are intentionally omitted so the
     // original entry/audit anchor survives explicit re-consent. The database
     // trigger snapshots both acceptances in its append-only consent ledger.
-    const { error: updateError } = await db
-      .from("qr_bingo_raffle_entries")
-      .update(entryPayload)
-      .eq("id", existing.id);
+    const { error: updateError } = await db.rpc("save_qr_bingo_card_entry", {p_entry:entryPayload,p_entry_id:existing.id});
     if (updateError) {
       if (
         updateError.code === "23514" &&
@@ -2638,9 +2647,7 @@ async function optInToRaffle(
     };
   }
 
-  const { error } = await db
-    .from("qr_bingo_raffle_entries")
-    .insert(entryPayload);
+  const { error } = await db.rpc("save_qr_bingo_card_entry", {p_entry:entryPayload,p_entry_id:null});
 
   if (error && error.code === "23505") {
     const { data: concurrent, error: concurrentError } = await db
@@ -2651,7 +2658,7 @@ async function optInToRaffle(
       .eq("couple_bd_user_id", String(user?.user_id || ""))
       .maybeSingle();
     if (concurrentError) throw concurrentError;
-    if (entryHasCurrentConsent(concurrent as RaffleEntry | null)) {
+    if (entryHasCurrentConsent(concurrent as RaffleEntry | null) && (concurrent.card_generation ?? 0) === cardGeneration) {
       return {
         entered: false,
         already_entered: true,
@@ -2661,10 +2668,7 @@ async function optInToRaffle(
     if (concurrent?.id) {
       // The database trigger preserves the superseded acceptance before this
       // explicit re-consent updates the operational entry row.
-      const { error: updateError } = await db
-        .from("qr_bingo_raffle_entries")
-        .update(entryPayload)
-        .eq("id", concurrent.id);
+      const { error: updateError } = await db.rpc("save_qr_bingo_card_entry", {p_entry:entryPayload,p_entry_id:concurrent.id});
       if (updateError) {
         if (
           updateError.code === "23514" &&
@@ -4092,6 +4096,16 @@ Deno.serve(async (request) => {
         return jsonResponse({ok:false,error:"Sign in with a couple account to use QR Bingo."},403);
       }
       const contactEventKey = reviewFixture && isReviewCouple ? reviewFixture.event_key : qrBingoConfig().event_key;
+      // Read before any source scan proof. The database fences a reset that
+      // happens after this read, including on older installed native builds.
+      const cardState: QrBingoCardState | null = isCoupleContactAction && isCoupleAccount
+        ? await loadQrBingoCardState(requireAdmin(), contactEventKey, authenticatedMemberId) : null;
+      if (cardState && ["scan", "raffle_offer", "raffle_opt_in"].includes(action)) {
+        assertQrBingoCardGeneration(cardState, body.expected_card_generation);
+        if (websitePrincipal?.kind === "couple" && body.expected_card_generation === undefined && cardState.generation > 0) {
+          throw new QrBingoCardStateError("Refresh this Bingo card and scan again.", 409, "stale_card_generation");
+        }
+      }
       let bingoContactProfile: QrContactProfile | null = isCoupleContactAction && isCoupleAccount
         ? await loadQrContactProfile(requireAdmin(), contactEventKey, authenticatedMemberId, user) : null;
       if (isContactProfileAction) {
@@ -4124,6 +4138,7 @@ Deno.serve(async (request) => {
           }
         }
         return jsonResponse({ok:true,event_key:contactEventKey,contact_profile:bingoContactProfile,
+          card_state:cardState,card_generation:cardState?.generation,
           profile_complete:bingoContactProfile!.complete,missing_profile_fields:bingoContactProfile!.missing_fields,
           requires_non_relay_email:true,participation_notice_version:qrParticipationNoticeVersion(),
           date_sync_warning:dateSyncWarning,date_sync_diagnostic:dateSyncDiagnostic});
@@ -4211,6 +4226,7 @@ Deno.serve(async (request) => {
             await isolatedFixtureScannedIds(
               reviewFixture,
               String(user.user_id),
+              cardState!.generation,
             ),
           ),
         ];
@@ -4243,7 +4259,7 @@ Deno.serve(async (request) => {
             vendorId === reviewFixture.vendor_bingo_id,
         );
         if (isReviewScan && reviewFixture) {
-          await saveIsolatedFixtureScan(reviewFixture, String(user.user_id));
+          await saveIsolatedFixtureScan(reviewFixture, String(user.user_id), cardState!.generation);
           const freshScanned = [
             ...new Set([...scanned, reviewFixture.vendor_bingo_id]),
           ];
@@ -4260,7 +4276,8 @@ Deno.serve(async (request) => {
             app_review_fixture: !isEmailTestFixture(reviewFixture),
             email_test_fixture: isEmailTestFixture(reviewFixture),
             outbound_email_suppressed: !isEmailTestFixture(reviewFixture),
-            vendors: page.vendors,
+            card_state: cardState, card_generation: cardState?.generation,
+          vendors: page.vendors,
             scanned: freshScanned,
             in_show_scanned: freshScanned,
             vendor_draw_scanned: freshScanned,
@@ -4285,6 +4302,7 @@ Deno.serve(async (request) => {
           cookieJar,
           new URLSearchParams({
             action: "scan_vendor",
+            expected_card_generation: String(cardState!.generation),
             vendor_id: vendorId,
             participation_notice_version: cleanText(
               body?.participation_notice_version,
@@ -4339,6 +4357,7 @@ Deno.serve(async (request) => {
           freshScanned.length >= page.vendors.length;
         return jsonResponse({
           ok: true,
+          card_state: cardState, card_generation: cardState?.generation,
           vendors: page.vendors,
           scanned: freshScanned,
           in_show_scanned: progress.inShowScanned,
@@ -4392,6 +4411,7 @@ Deno.serve(async (request) => {
         return jsonResponse({
           ok: true,
           raffle_offer: raffleOffer,
+          card_state: cardState, card_generation: cardState?.generation,
           vendor_draw_scanned: vendorDrawScanned,
           in_show_scanned: inShowScanned,
           message: raffleOffer
@@ -4439,6 +4459,7 @@ Deno.serve(async (request) => {
             ? reviewFixture
             : null,
           inShowScanned.includes(vendor.id) && (Boolean(reviewFixture && isReviewCouple) || productionShowScanWindowOpen()),
+          cardState!.generation,
         );
         const alreadyEntered = "already_entered" in result &&
           result.already_entered === true;
@@ -4462,6 +4483,7 @@ Deno.serve(async (request) => {
         return jsonResponse(
           {
             ok: result.entered || alreadyEntered,
+            card_state: cardState, card_generation: cardState?.generation,
             ...result,
             ...(staleVendorOffer ? { raffle_offer: refreshedOffer } : {}),
           },
@@ -4789,6 +4811,7 @@ Deno.serve(async (request) => {
           await requireAdmin()
             .from("qr_bingo_raffle_entries")
             .select("id")
+            .is("card_reset_at", null)
             .eq("event_key", raffleEventKey)
             .eq("vendor_bingo_id", vendor.id);
         if (entryCountError) throw entryCountError;
@@ -5161,6 +5184,7 @@ Deno.serve(async (request) => {
           email_test_fixture: Boolean(
             reviewFixture && isEmailTestFixture(reviewFixture),
           ),
+          card_state: cardState, card_generation: cardState?.generation,
           vendors: page.vendors,
           scanned,
           in_show_scanned: inShowScanned,
@@ -5184,6 +5208,10 @@ Deno.serve(async (request) => {
       );
     });
   } catch (error) {
+    if (error instanceof QrBingoCardStateError) return jsonResponse({ok:false,code:error.code,error:error.message},error.status);
+    if (error && typeof error === "object" && "code" in error && error.code === "55000" && "message" in error && String(error.message).includes("stale_card_generation")) {
+      return jsonResponse({ok:false,code:"stale_card_generation",error:"An administrator reset this Bingo card. Refresh and scan the vendor again."},409);
+    }
     if (error instanceof QrContactError) {
       if (error.code === "contact_date_sync_pending") console.warn("QR_BINGO_DATE_SYNC_PENDING", error.diagnostic || "unknown_stage");
       return jsonResponse({ok:false,code:error.code,error:error.message,retriable:error.status===503,diagnostic:error.diagnostic},error.status);

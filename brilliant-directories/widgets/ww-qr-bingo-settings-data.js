@@ -15,9 +15,12 @@
     const contactStatus = byId('wwQrContactStatus'), matches = byId('wwQrContactMatches');
     const confirmPanel = byId('wwQrContactConfirm');
     const resetPanel = byId('wwQrDrawResetConfirm');
+    const cardPanel = byId('wwQrCardResetPanel');
+    const cardStatus = byId('wwQrCardResetStatus'), cardMatches = byId('wwQrCardResetMatches');
     let dataset = 'contacts', page = 1, hasMore = false, busy = false;
     let selectedMember = null, contactEvent = '', confirmation = null, pendingMutation = null;
     let resetConfirmation = null, pendingReset = null;
+    let cardEvent = '', cardSelection = null, cardPreview = null, pendingCardReset = null;
     const validId = value => typeof value === 'string' && /^[1-9][0-9]{0,17}$/.test(value);
     const validDrawId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
     const eventKey = () => byId('wwQrDataEvent').value.trim();
@@ -27,6 +30,11 @@
       root.querySelectorAll('button,input,select,textarea').forEach(control => { control.disabled = value; });
       previous.disabled = value || page <= 1;
       next.disabled = value || !hasMore;
+      if (cardPanel && !value) {
+        byId('wwQrCardResetAction').disabled = !cardPreview || cardPreview.can_reset !== true;
+        byId('wwQrCardResetReason').disabled = Boolean(pendingCardReset);
+        if (pendingCardReset && !cardPanel.hidden) byId('wwQrDataOperator').disabled = true;
+      }
     }
     function clearRows() { head.replaceChildren(); rows.replaceChildren(); hasMore = false; previous.disabled = true; next.disabled = true; }
     function cell(tag, value) { const node = document.createElement(tag); node.textContent = value == null || value === '' ? '—' : String(value); return node; }
@@ -52,6 +60,15 @@
     }
     function closeConfirmation() { confirmation = null; confirmPanel.hidden = true; }
     function closeReset() { resetConfirmation = null; if (resetPanel) resetPanel.hidden = true; }
+    function clearCardSelection() {
+      cardSelection = null; cardPreview = null; pendingCardReset = null;
+      if (cardPanel) { cardMatches.replaceChildren(); byId('wwQrCardResetConfirm').hidden = true; byId('wwQrCardResetAction').disabled = true; byId('wwQrCardResetReason').disabled = false; byId('wwQrDataOperator').disabled = busy; }
+    }
+    function closeCardReset() {
+      if (!cardPanel) return;
+      clearCardSelection(); cardPanel.hidden = true;
+      byId('wwQrCardResetOpen').setAttribute('aria-expanded', 'false');
+    }
     function closeAdd() { addPanel.hidden = true; byId('wwQrContactAddOpen').setAttribute('aria-expanded', 'false'); }
     function clearMember() { selectedMember = null; addForm.hidden = true; matches.replaceChildren(); }
     function errorText(error) { return error instanceof Error && error.name !== 'AbortError' ? error.message : 'The request could not be confirmed. Please try again.'; }
@@ -71,7 +88,7 @@
       button.setAttribute('aria-label', button.textContent + ' contact for ' + String(record.name || 'couple') + ' (member ' + record.couple_id + ')');
       button.addEventListener('click', () => {
         if (busy || dataset !== 'contacts' || selectedEvent !== eventKey()) return;
-        closeAdd(); closeReset();
+        closeAdd(); closeReset(); closeCardReset();
         confirmation = { action: record.removed ? 'contact_restore' : 'contact_remove', coupleId: record.couple_id, version: record.version, event: selectedEvent };
         byId('wwQrContactConfirmMessage').textContent = (record.removed ? 'Restore ' : 'Remove ') + String(record.name || 'this couple') + ' (member #' + record.couple_id + ') ' + (record.removed ? 'to' : 'from') + ' Bingo contacts for event “' + selectedEvent + '”?';
         byId('wwQrContactConfirmAction').textContent = record.removed ? 'Restore contact' : 'Remove contact';
@@ -94,7 +111,7 @@
       button.setAttribute('aria-label', 'Reset draw for ' + String(record.vendor_name || 'vendor') + ' (vendor ' + record.vendor_id + ')');
       button.addEventListener('click', () => {
         if (busy || dataset !== 'winners' || selectedEvent !== eventKey()) return;
-        closeAdd(); closeConfirmation();
+        closeAdd(); closeConfirmation(); closeCardReset();
         resetConfirmation = { event: selectedEvent, vendorId: record.vendor_id, drawId: record.id, generation: record.current_generation };
         byId('wwQrDrawResetMessage').textContent = 'Reset draw #' + String(record.draw_number || '') + ' for ' + String(record.vendor_name || 'this vendor') + ' (vendor #' + record.vendor_id + ') in event “' + selectedEvent + '”? Previous selection: ' + String(record.name || 'couple') + '.';
         byId('wwQrDrawResetReason').value = ''; resetPanel.hidden = false;
@@ -104,7 +121,7 @@
     }
     async function request(exporting, requestedPage) {
       if (busy || !form.reportValidity()) return;
-      if (!exporting) closeReset();
+      if (!exporting) { closeReset(); closeCardReset(); }
       const operator = exporting ? adminName('Enter your admin name for the download audit.', status) : byId('wwQrDataOperator').value.trim();
       if (exporting && !operator) return;
       const fields = fieldsFor(exporting ? 'data_export' : 'data_list');
@@ -182,6 +199,78 @@
       const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
       return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
     }
+    function validCardMember(member) {
+      return member && validId(member.couple_id) && typeof member.name === 'string' && member.name.length <= 500 && typeof member.email === 'string' && member.email.length <= 254;
+    }
+    function validCardTime(value) {
+      return typeof value === 'string' && /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})$/.test(value) && Number.isFinite(Date.parse(value));
+    }
+    async function lookupCard(event) {
+      event.preventDefault();
+      if (busy || !cardPanel || cardPanel.hidden || cardEvent !== eventKey() || !byId('wwQrCardResetLookupForm').reportValidity()) return;
+      const search = byId('wwQrCardResetLookup').value.trim();
+      if (search.length < 2 || search.length > 120) { cardStatus.textContent = 'Enter at least two characters to find a couple.'; return; }
+      clearCardSelection(); const fields = fieldsFor('card_reset_lookup'); fields.set('search', search);
+      setBusy(true); cardStatus.textContent = 'Finding couple accounts…';
+      try {
+        const result = await post(fields);
+        if (result.action !== 'card_reset_lookup' || !Array.isArray(result.members) || result.members.length > 20 || result.members.some(member => !validCardMember(member)) || cardPanel.hidden || cardEvent !== eventKey() || byId('wwQrCardResetLookup').value.trim() !== search) throw new Error('The account search changed. Please search again.');
+        result.members.forEach(member => {
+          const row = document.createElement('div'); row.className = 'ww-qrbs-contact-match';
+          row.appendChild(cell('span', member.name + ' · #' + member.couple_id + ' · ' + member.email));
+          const choose = document.createElement('button'); choose.type = 'button'; choose.className = 'ww-qrbs-button ww-qrbs-data-secondary'; choose.textContent = 'Choose';
+          choose.setAttribute('aria-label', 'Choose ' + member.name + ' (account ' + member.couple_id + ')');
+          choose.addEventListener('click', () => { if (!busy && !cardPanel.hidden && cardEvent === eventKey()) void previewCard(member); });
+          row.appendChild(choose); cardMatches.appendChild(row);
+        });
+        cardStatus.textContent = result.members.length ? 'Choose the couple account to reset.' : 'No matching couple accounts. Try another name, email, or account number.';
+      } catch (error) { cardMatches.replaceChildren(); cardStatus.textContent = errorText(error); }
+      finally { setBusy(false); }
+    }
+    async function previewCard(member) {
+      if (busy || !validCardMember(member) || cardPanel.hidden || cardEvent !== eventKey()) return;
+      cardSelection = { ...member }; cardPreview = null; pendingCardReset = null; byId('wwQrCardResetConfirm').hidden = true;
+      const targetEvent = cardEvent, targetId = member.couple_id;
+      const fields = fieldsFor('card_reset_preview'); fields.set('dataset', 'scans'); fields.set('event_key', targetEvent); fields.set('couple_id', targetId);
+      setBusy(true); cardStatus.textContent = 'Checking this Bingo card…';
+      try {
+        const result = await post(fields), state = result.card_state;
+        if (cardPanel.hidden || cardEvent !== targetEvent || eventKey() !== targetEvent || !cardSelection || cardSelection.couple_id !== targetId || result.action !== 'card_reset_preview' || result.dataset !== 'scans' || result.event_key !== targetEvent || result.couple_id !== targetId || !validCardMember(result.member) || result.member.couple_id !== targetId || !Number.isSafeInteger(result.expected_generation) || result.expected_generation < 0 || result.expected_generation >= 999999999999999 || !/^[a-f0-9]{64}$/.test(result.preview_token) || !/^[a-f0-9]{64}$/.test(result.scan_preview_token) || !Number.isInteger(result.entry_count) || result.entry_count < 0 || result.entry_count > 10000 || !Number.isInteger(result.scan_count) || result.scan_count < 0 || result.scan_count > 10000 || typeof result.can_reset !== 'boolean' || typeof result.reset_block_reason !== 'string' || result.reset_block_reason.length > 500 || (result.can_reset && result.reset_block_reason !== '') || !state || state.event_key !== targetEvent || state.couple_id !== targetId || state.generation !== result.expected_generation || (state.generation === 0 ? state.scan_reset_after !== null : !validCardTime(state.scan_reset_after))) throw new Error('The reset preview could not be verified. Choose the account again.');
+        cardSelection = { ...result.member }; cardPreview = { ...result }; cardMatches.replaceChildren();
+        byId('wwQrCardResetChosen').textContent = cardSelection.name + ' · Account #' + targetId + ' · ' + cardSelection.email;
+        byId('wwQrCardResetSummary').textContent = 'Clear ' + result.scan_count + ' QR scan' + (result.scan_count === 1 ? '' : 's') + ' and ' + result.entry_count + ' vendor draw entr' + (result.entry_count === 1 ? 'y' : 'ies') + ' for event “' + targetEvent + '”? Their account, membership, and saved contact details stay the same. Previous winner and email records stay in history.';
+        byId('wwQrCardResetReason').value = ''; byId('wwQrCardResetConfirm').hidden = false;
+        cardStatus.textContent = result.can_reset ? 'Review the account and counts, then confirm the reset.' : result.reset_block_reason || 'This Bingo card cannot be reset right now.';
+        byId('wwQrCardResetConfirmCancel').focus();
+      } catch (error) { cardPreview = null; byId('wwQrCardResetConfirm').hidden = true; cardStatus.textContent = errorText(error); }
+      finally { setBusy(false); }
+    }
+    async function resetCard() {
+      const target = cardPreview;
+      if (busy || !target || target.can_reset !== true || !cardSelection || cardPanel.hidden || byId('wwQrCardResetConfirm').hidden || cardEvent !== target.event_key || eventKey() !== target.event_key || cardSelection.couple_id !== target.couple_id || !form.reportValidity()) return;
+      const operator = adminName('Enter your admin name before resetting a Bingo card.', cardStatus); if (!operator) return;
+      const reason = byId('wwQrCardResetReason').value.trim();
+      if (reason.length < 3 || reason.length > 500 || /[<>]/.test(reason) || Array.from(reason).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) { cardStatus.textContent = 'Enter a reason of 3–500 characters on one line.'; byId('wwQrCardResetReason').focus(); return; }
+      const fields = fieldsFor('card_reset');
+      for (const key of ['event_key', 'couple_id', 'expected_generation', 'preview_token', 'scan_preview_token']) fields.set(key, String(target[key]));
+      fields.set('dataset', 'scans'); fields.set('operator_identity', operator); fields.set('reason', reason);
+      let message = '', succeeded = false;
+      try {
+        const fingerprint = fields.toString();
+        if (pendingCardReset && pendingCardReset.fingerprint !== fingerprint) throw new Error('Retry the original reset with the same details.');
+        if (!pendingCardReset) pendingCardReset = { fingerprint, id: requestId() };
+        fields.set('request_id', pendingCardReset.id); setBusy(true); cardStatus.textContent = 'Resetting this Bingo card…';
+        const result = await post(fields);
+        if (cardEvent !== target.event_key || eventKey() !== target.event_key || !cardSelection || cardSelection.couple_id !== target.couple_id || result.action !== 'card_reset' || result.dataset !== 'scans' || result.event_key !== target.event_key || result.couple_id !== target.couple_id || result.request_id !== pendingCardReset.id || result.from_generation !== target.expected_generation || !Number.isSafeInteger(result.to_generation) || result.to_generation !== target.expected_generation + 1 || !validCardTime(result.scan_reset_after) || result.entry_count !== target.entry_count || result.scan_count !== target.scan_count || typeof result.replayed !== 'boolean') throw new Error('The reset could not be confirmed. Retry this same request.');
+        message = (result.replayed ? 'This reset was already recorded for ' : 'Bingo card reset for ') + cardSelection.name + ' (account #' + target.couple_id + '). ' + result.scan_count + ' scans and ' + result.entry_count + ' draw entries cleared. Their account and membership were kept.';
+        pendingCardReset = null; succeeded = true; closeCardReset();
+      } catch (error) {
+        message = errorText(error);
+        if (error && error.httpStatus === 409) { clearCardSelection(); message += ' Search for the couple and review the current card before trying again.'; }
+      } finally { setBusy(false); }
+      if (succeeded && !await request(false, 1)) message += ' Select Show list to refresh the records.';
+      cardStatus.textContent = message; status.textContent = message;
+    }
     async function mutate(target) {
       const adding = target.action === 'contact_add', output = adding ? contactStatus : status;
       if (busy || dataset !== 'contacts' || target.event !== eventKey() || !form.reportValidity()) return;
@@ -246,7 +335,7 @@
     }
     tabs.forEach(tab => tab.addEventListener('click', function () {
       if (busy) return;
-      dataset = tab.dataset.dataset; page = 1; clearRows(); closeAdd(); closeConfirmation(); closeReset();
+      dataset = tab.dataset.dataset; page = 1; clearRows(); closeAdd(); closeConfirmation(); closeReset(); closeCardReset();
       tabs.forEach(item => item.setAttribute('aria-selected', item === tab ? 'true' : 'false'));
       document.getElementById('wwQrDataScanNote').hidden = dataset !== 'scans';
       byId('wwQrDataContactStatusGroup').hidden = dataset !== 'contacts'; byId('wwQrContactAddOpen').hidden = dataset !== 'contacts';
@@ -256,10 +345,10 @@
     document.getElementById('wwQrDataExport').addEventListener('click', () => { void request(true, 1); });
     previous.addEventListener('click', () => { if (page > 1) void request(false, page - 1); });
     next.addEventListener('click', () => { if (hasMore) void request(false, page + 1); });
-    ['wwQrDataEvent', 'wwQrDataVendor', 'wwQrDataSearch', 'wwQrDataContactStatus'].forEach(id => document.getElementById(id).addEventListener(id === 'wwQrDataContactStatus' ? 'change' : 'input', () => { if (!busy) { page = 1; clearRows(); closeConfirmation(); closeReset(); if (id === 'wwQrDataEvent') { closeAdd(); clearMember(); } status.textContent = 'Filters changed. Select Show list.'; } }));
+    ['wwQrDataEvent', 'wwQrDataVendor', 'wwQrDataSearch', 'wwQrDataContactStatus'].forEach(id => document.getElementById(id).addEventListener(id === 'wwQrDataContactStatus' ? 'change' : 'input', () => { if (!busy) { page = 1; clearRows(); closeConfirmation(); closeReset(); closeCardReset(); if (id === 'wwQrDataEvent') { closeAdd(); clearMember(); } status.textContent = 'Filters changed. Select Show list.'; } }));
     byId('wwQrContactAddOpen').addEventListener('click', () => {
       if (busy || dataset !== 'contacts' || !form.reportValidity()) return;
-      closeConfirmation(); closeReset(); clearMember(); contactEvent = eventKey(); addPanel.hidden = false;
+      closeConfirmation(); closeReset(); closeCardReset(); clearMember(); contactEvent = eventKey(); addPanel.hidden = false;
       byId('wwQrContactEvent').textContent = 'Event: ' + contactEvent; byId('wwQrContactAddOpen').setAttribute('aria-expanded', 'true');
       byId('wwQrContactLookup').value = ''; contactStatus.textContent = ''; byId('wwQrContactLookup').focus();
     });
@@ -273,6 +362,20 @@
     if (resetPanel) {
       byId('wwQrDrawResetAction').addEventListener('click', () => { void resetDraw(); });
       byId('wwQrDrawResetCancel').addEventListener('click', () => { if (!busy) closeReset(); });
+    }
+    if (cardPanel) {
+      byId('wwQrCardResetOpen').addEventListener('click', () => {
+        if (busy || !form.reportValidity()) return;
+        closeAdd(); closeConfirmation(); closeReset(); clearCardSelection(); cardEvent = eventKey();
+        cardPanel.hidden = false; byId('wwQrCardResetOpen').setAttribute('aria-expanded', 'true');
+        byId('wwQrCardResetEvent').textContent = 'Event: ' + cardEvent;
+        byId('wwQrCardResetLookup').value = ''; cardStatus.textContent = ''; byId('wwQrCardResetLookup').focus();
+      });
+      byId('wwQrCardResetLookupForm').addEventListener('submit', event => { void lookupCard(event); });
+      byId('wwQrCardResetLookup').addEventListener('input', () => { if (!busy) clearCardSelection(); });
+      byId('wwQrCardResetAction').addEventListener('click', () => { void resetCard(); });
+      byId('wwQrCardResetConfirmCancel').addEventListener('click', () => { if (!busy) { clearCardSelection(); cardStatus.textContent = 'Reset cancelled. Search for a couple to continue.'; byId('wwQrCardResetLookup').focus(); } });
+      byId('wwQrCardResetClose').addEventListener('click', () => { if (!busy) { closeCardReset(); byId('wwQrCardResetOpen').focus(); } });
     }
   }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initializeQrAdminData, { once: true });

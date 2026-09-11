@@ -50,11 +50,10 @@ Deno.test("isolated email tests use exact fixture identities and a couple-only c
     );
     assert(
       source.includes('? "qr_bingo_email_test_fixture_scans"') &&
-        source.includes("ignoreDuplicates: true") &&
-        source.includes(
-          'onConflict: "fixture_id,couple_bd_user_id,vendor_bingo_id"',
-        ),
-      "the isolated scan must use its own replay-safe scan table",
+        source.includes('.eq("card_generation", generation)') &&
+        source.includes('.rpc("save_qr_bingo_fixture_card_scan", {') &&
+        source.includes('p_expected_generation: generation, p_email_test: isEmailTestFixture(fixture)'),
+      "isolated scans must use their own table and the generation-fenced replay-safe transaction",
     );
     assert(
       source.includes('? "claim_verified_qr_bingo_test_draw_email_delivery"') &&

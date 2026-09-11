@@ -29,6 +29,7 @@ async function harness(url: URL) {
     consent_version: "test-rules", vendor_marketing_consent: true,
     draw_administration_contact_share_acknowledged: true,
     draw_administration_contact_share_version: "test-rules",
+    card_reset_at: null as string | null,
   }));
   const draws: Record<string, unknown>[] = ["verified", "potential", "disqualified", "replaced"].map((status, n) => ({
     id: `draw-${n}`, event_key: event, vendor_bingo_id: vendor.id,
@@ -42,6 +43,7 @@ async function harness(url: URL) {
     constructor(readonly table: string) {}
     select() { return this; }
     eq(key: string, value: unknown) { this.predicates.push([key, value]); return this; }
+    is(key: string, value: unknown) { this.predicates.push([key, value]); return this; }
     in() { return this; }
     order() { return this; }
     range() { return this; }
@@ -76,7 +78,7 @@ async function harness(url: URL) {
     ${selectedSource}
     return {loadVendorEntryPool,loadVendorDrawRows,currentDrawGeneration};}`,
   )}`);
-  return { ...module.default(dependencies), vendor, event, settings, draws, queryLog };
+  return { ...module.default(dependencies), vendor, event, settings, entries, draws, queryLog };
 }
 
 Deno.test("reset generation releases historical winners while preserving contacts and manual exclusions", async () => {
@@ -115,5 +117,22 @@ Deno.test("new generation selections still reserve the slot and malformed genera
       try { h.currentDrawGeneration(invalid); } catch { rejected = true; }
       assert(rejected, "Malformed database generation must never silently select history");
     }
+  }
+});
+
+Deno.test("a reset couple is excluded from both entry count and pool until reactivated, without altering draw audit", async () => {
+  for (const url of endpoints) {
+    const h = await harness(url); h.settings.draw_generation = 1;
+    h.entries[0].card_reset_at = "2026-09-11T12:00:00Z";
+    const priorDraws = JSON.stringify(h.draws);
+    const pool = await h.loadVendorEntryPool(h.vendor, h.event);
+    assert(pool.entry_count === 3 && pool.eligible_entry_count === 2, "Reset entries must not inflate counts or become eligible");
+    assert(!pool.rows.some((row: any) => row.participant_reference === "entry-1"), "Inactive entry must be absent from operational rows");
+    assert(JSON.stringify(h.draws) === priorDraws, "Reading the reset pool must preserve historical draw rows");
+    const entryQueries = h.queryLog.filter((query: { table: string }) => query.table === "qr_bingo_raffle_entries");
+    assert(entryQueries.length === 2 && entryQueries.every((query: { predicates: [string, unknown][] }) => query.predicates.some(([key, value]) => key === "card_reset_at" && value === null)), "Count and page reads must both exclude inactive entries");
+    h.entries[0].card_reset_at = null;
+    const restored = await h.loadVendorEntryPool(h.vendor, h.event);
+    assert(restored.entry_count === 4 && restored.eligible_entry_count === 3, "Fresh reactivation restores only that entrant");
   }
 });

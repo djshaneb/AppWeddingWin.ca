@@ -147,7 +147,14 @@ async function endpointHarness(endpoint: string) {
     qrBingoConfig: () => config,
     getSettings: async () => ({}),
     loadCurrentVendorOfferSnapshot: async () => snapshot,
-    requireAdmin: () => ({ from: query }),
+    requireAdmin: () => ({ from: query, rpc: async (name: string, args: any) => {
+      assert(name === "save_qr_bingo_card_entry", "Entry writes must use the generation-fenced RPC");
+      assert(args.p_entry.card_generation === 0 && args.p_entry.card_reset_at === null,
+        "The current card generation and active state must reach the transaction intact");
+      assert(args.p_entry_id === (existingEntry?.id ?? null), "Reconsent must retain the stable entry id");
+      entries.push(args.p_entry);
+      return { error: null };
+    } }),
     archivedLegacyEntryIds: async () => new Set(),
     entryHasCurrentConsent: (entry: any) => Boolean(entry?.current),
     isSettingsEnterable: () => true,

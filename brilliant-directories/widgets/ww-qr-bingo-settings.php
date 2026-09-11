@@ -981,6 +981,133 @@ if (!function_exists('ww_qrbs_escape')) {
     }
     /* WW_QR_ADMIN_DRAW_RESET_HELPERS_END */
 
+    /* WW_QR_ADMIN_CARD_RESET_HELPERS_START */
+    function ww_qrbs_card_reset_request($source) {
+        $action = isset($source['action']) && is_string($source['action']) ? $source['action'] : '';
+        $allowed = array('csrf_token', 'action');
+        if ($action === 'card_reset_lookup') $allowed[] = 'search';
+        elseif (in_array($action, array('card_reset_preview', 'card_reset'), true)) {
+            $allowed = array_merge($allowed, array('dataset', 'event_key', 'couple_id'));
+            if ($action === 'card_reset') $allowed = array_merge($allowed, array('expected_generation', 'preview_token', 'scan_preview_token', 'request_id', 'operator_identity', 'reason'));
+        } else throw new Exception('Choose a supported Bingo card action.');
+        if (!is_array($source)) throw new Exception('Review the Bingo card reset and try again.');
+        foreach ($source as $key => $value) if (!in_array($key, $allowed, true) || !is_string($value)) throw new Exception('Review the Bingo card reset and try again.');
+        foreach ($allowed as $key) if (!isset($source[$key])) throw new Exception('Review the Bingo card reset and try again.');
+        if ($action === 'card_reset_lookup') {
+            $search = trim($source['search']);
+            if (!ww_qrbs_is_plain_text($search, 2, 120, false)) throw new Exception('Enter at least two characters of a name, email or account number.');
+            return array('action' => $action, 'search' => $search);
+        }
+        $event = trim($source['event_key']); $couple = trim($source['couple_id']);
+        if ($source['dataset'] !== 'scans' || strlen($event) > 100 || !preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/D', $event)) throw new Exception('Choose a valid event.');
+        if (!preg_match('/^[1-9][0-9]{0,17}$/D', $couple)) throw new Exception('Choose an existing couple account.');
+        $payload = array('action' => $action, 'dataset' => 'scans', 'event_key' => $event, 'couple_id' => $couple);
+        if ($action === 'card_reset') {
+            if (!preg_match('/^(?:0|[1-9][0-9]{0,14})$/D', $source['expected_generation'])) throw new Exception('Review the current Bingo card before resetting it.');
+            foreach (array('preview_token', 'scan_preview_token') as $key) if (!preg_match('/^[a-f0-9]{64}$/D', $source[$key])) throw new Exception('Review the current Bingo card before resetting it.');
+            if (!preg_match('/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iD', $source['request_id'])) throw new Exception('Refresh the page and try again.');
+            $operator = trim($source['operator_identity']); $reason = trim($source['reason']);
+            if (!ww_qrbs_is_plain_text($operator, 3, 160, false)) throw new Exception('Enter your admin name for the reset history.');
+            if (!ww_qrbs_is_plain_text($reason, 3, 500, false)) throw new Exception('Enter a reason of 3 to 500 characters on one line.');
+            $payload = array_merge($payload, array('expected_generation' => (int)$source['expected_generation'], 'preview_token' => $source['preview_token'], 'scan_preview_token' => $source['scan_preview_token'], 'request_id' => strtolower($source['request_id']), 'operator_identity' => $operator, 'reason' => $reason));
+        }
+        return $payload;
+    }
+
+    function ww_qrbs_card_reset_member_rows($database, $search, $exactId) {
+        if (!$database || !function_exists('mysql_real_escape_string')) throw new Exception('Couple accounts could not be checked. Please try again.');
+        if ($exactId) {
+            if (!preg_match('/^[1-9][0-9]{0,17}$/D', $search)) throw new Exception('Choose an existing couple account.');
+            $where = "u.user_id='" . mysql_real_escape_string($search) . "'";
+        } else {
+            $literal = str_replace(array(chr(92), '%', '_'), array(chr(92) . chr(92), chr(92) . '%', chr(92) . '_'), $search);
+            $like = mysql_real_escape_string($literal);
+            $where = "(CAST(u.user_id AS CHAR)='" . mysql_real_escape_string($search) . "' OR CONCAT_WS(' ',u.first_name,u.last_name) LIKE '%" . $like . "%' OR u.email LIKE '%" . $like . "%')";
+        }
+        $result = mysql($database, "SELECT u.user_id,u.first_name,u.last_name,u.email,u.subscription_id,u.active FROM users_data u WHERE u.subscription_id IN ('4','18') AND u.active='2' AND " . $where . ' ORDER BY u.first_name,u.last_name,u.user_id LIMIT 20');
+        if (!$result) throw new Exception('Couple accounts could not be checked. Please try again.');
+        $members = array();
+        while ($row = mysql_fetch_assoc($result)) {
+            if (!is_array($row) || !isset($row['user_id'], $row['subscription_id'], $row['active']) || !in_array((string)$row['subscription_id'], array('4', '18'), true) || (string)$row['active'] !== '2' || !preg_match('/^[1-9][0-9]{0,17}$/D', (string)$row['user_id'])) continue;
+            $members[] = array('couple_id' => (string)$row['user_id'], 'name' => ww_qrbs_normalize_plain_text((isset($row['first_name']) ? $row['first_name'] : '') . ' ' . (isset($row['last_name']) ? $row['last_name'] : '')), 'email' => isset($row['email']) ? strtolower(trim((string)$row['email'])) : '', 'subscription_id' => (string)$row['subscription_id'], 'active' => '2');
+        }
+        return $members;
+    }
+
+    function ww_qrbs_card_state_valid($state, $event, $couple) {
+        return is_array($state) && isset($state['event_key'], $state['couple_id'], $state['generation']) && array_key_exists('scan_reset_after', $state)
+            && $state['event_key'] === $event && $state['couple_id'] === $couple && is_int($state['generation']) && $state['generation'] >= 0 && $state['generation'] <= 999999999999999
+            && ($state['generation'] === 0 ? $state['scan_reset_after'] === null : ww_qrbs_validate_datetime($state['scan_reset_after']) !== '');
+    }
+
+    function ww_qrbs_card_reset_preview_valid($reply, $payload) {
+        if (!is_array($reply)) return false;
+        foreach (array('ok', 'action', 'dataset', 'event_key', 'couple_id', 'expected_generation', 'preview_token', 'entry_count', 'can_reset', 'reset_block_reason', 'card_state') as $key) if (!isset($reply[$key])) return false;
+        foreach (array('action', 'dataset', 'event_key', 'couple_id') as $key) if ($reply[$key] !== $payload[$key]) return false;
+        return $reply['ok'] === true && is_int($reply['expected_generation']) && $reply['expected_generation'] >= 0 && $reply['expected_generation'] < 999999999999999
+            && is_string($reply['preview_token']) && preg_match('/^[a-f0-9]{64}$/D', $reply['preview_token']) && is_int($reply['entry_count']) && $reply['entry_count'] >= 0 && $reply['entry_count'] <= 10000
+            && is_bool($reply['can_reset']) && ww_qrbs_is_plain_text($reply['reset_block_reason'], 0, 500, false) && (!$reply['can_reset'] || $reply['reset_block_reason'] === '')
+            && ww_qrbs_card_state_valid($reply['card_state'], $payload['event_key'], $payload['couple_id']) && $reply['card_state']['generation'] === $reply['expected_generation'];
+    }
+
+    function ww_qrbs_card_reset_success_valid($reply, $payload) {
+        if (!is_array($reply)) return false;
+        foreach (array('ok', 'action', 'dataset', 'event_key', 'couple_id', 'request_id', 'from_generation', 'to_generation', 'scan_reset_after', 'entry_count', 'replayed') as $key) if (!isset($reply[$key])) return false;
+        foreach (array('action', 'dataset', 'event_key', 'couple_id', 'request_id') as $key) if ($reply[$key] !== $payload[$key]) return false;
+        return $reply['ok'] === true && is_bool($reply['replayed']) && is_int($reply['from_generation']) && $reply['from_generation'] === $payload['expected_generation']
+            && is_int($reply['to_generation']) && $reply['to_generation'] === $payload['expected_generation'] + 1
+            && ww_qrbs_validate_datetime($reply['scan_reset_after']) !== '' && ww_qrbs_validate_datetime($reply['scan_reset_after']) === $payload['website_scan_reset_at']
+            && is_int($reply['entry_count']) && $reply['entry_count'] >= 0 && $reply['entry_count'] <= 10000;
+    }
+
+    function ww_qrbs_card_lock($database, $event, $couple) {
+        $key = 'ww_qr_card:' . substr(hash('sha256', $event . '|' . $couple), 0, 48);
+        $result = mysql($database, "SELECT GET_LOCK('" . mysql_real_escape_string($key) . "',5) AS acquired");
+        $row = $result ? mysql_fetch_assoc($result) : false;
+        if (!$row || !isset($row['acquired']) || (string)$row['acquired'] !== '1') throw new Exception('This Bingo card is busy. Please try again.');
+        return $key;
+    }
+
+    function ww_qrbs_card_scan_snapshot($database, $event, $couple, $state) {
+        if (!ww_qrbs_card_state_valid($state, $event, $couple)) throw new Exception('The Bingo card could not be verified.');
+        $result = ww_qrbs_edge_call($database, array('action' => 'admin_get'));
+        if (!ww_qrbs_response_succeeded($result) || !isset($result['payload']['event_config'])) throw new Exception('Current event settings could not be checked.');
+        $config = $result['payload']['event_config'];
+        if (!is_array($config) || !isset($config['event_key'], $config['revision'], $config['vendor_tag_id'], $config['history_starts_at'], $config['entry_closes_at']) || $config['event_key'] !== $event || !is_int($config['revision']) || $config['revision'] < 1 || !is_int($config['vendor_tag_id']) || $config['vendor_tag_id'] < 1) throw new Exception('Choose the current published event.');
+        $start = ww_qrbs_validate_datetime(isset($config['scan_history_starts_at']) ? $config['scan_history_starts_at'] : $config['history_starts_at']);
+        $end = ww_qrbs_validate_datetime($config['entry_closes_at']);
+        if ($start === '' || $end === '' || strtotime($start) >= strtotime($end)) throw new Exception('The event scan window could not be checked.');
+        $where = "vv.user_id='" . mysql_real_escape_string($couple) . "' AND vv.scan_date >= '" . mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($start))) . "' AND vv.scan_date < '" . mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($end))) . "' AND EXISTS (SELECT 1 FROM rel_tags rt WHERE rt.object_id=vv.vendor_id AND rt.tag_id='" . (int)$config['vendor_tag_id'] . "' AND rt.tag_type_id=1)";
+        if ($state['scan_reset_after'] !== null) $where .= " AND vv.scan_date > '" . mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($state['scan_reset_after']))) . "'";
+        $query = mysql($database, 'SELECT vv.vendor_id,vv.scan_date FROM vendor_visits vv WHERE ' . $where . ' ORDER BY vv.vendor_id ASC,vv.scan_date ASC LIMIT 10001');
+        if (!$query) throw new Exception('The couple scans could not be checked.');
+        $rows = array();
+        while ($row = mysql_fetch_assoc($query)) {
+            if (!isset($row['vendor_id'], $row['scan_date']) || !preg_match('/^[1-9][0-9]{0,17}$/D', (string)$row['vendor_id']) || !is_string($row['scan_date']) || strlen($row['scan_date']) > 40) throw new Exception('The couple scans could not be verified.');
+            $rows[] = array((string)$row['vendor_id'], $row['scan_date']);
+            if (count($rows) > 10000) throw new Exception('This Bingo card has too many scan records to reset here.');
+        }
+        return array('scan_count' => count($rows), 'scan_digest' => hash('sha256', json_encode(array($event, $couple, $config['revision'], $config['vendor_tag_id'], $start, $end, $state, $rows))), 'scan_where' => $where, 'vendor_tag_id' => $config['vendor_tag_id']);
+    }
+    function ww_qrbs_card_refresh_completion($database, $previewRequest) {
+        // Replays may arrive after a new card has already been completed. Read
+        // its current generation under the scan lock rather than clearing blindly.
+        $result = ww_qrbs_edge_call($database, $previewRequest);
+        if (!ww_qrbs_response_succeeded($result) || !ww_qrbs_card_reset_preview_valid($result['payload'], $previewRequest)) throw new Exception('The reset was recorded, but the card status could not be refreshed. Retry this same request.');
+        $snapshot = ww_qrbs_card_scan_snapshot($database, $previewRequest['event_key'], $previewRequest['couple_id'], $result['payload']['card_state']);
+        $tag = (int)$snapshot['vendor_tag_id'];
+        $totalResult = mysql($database, "SELECT COUNT(DISTINCT u.user_id) AS total_vendors FROM users_data u INNER JOIN rel_tags rt ON rt.object_id=u.user_id WHERE rt.tag_id='" . $tag . "' AND rt.tag_type_id=1 AND u.active=2");
+        $total = $totalResult ? mysql_fetch_assoc($totalResult) : false;
+        $countResult = mysql($database, 'SELECT COUNT(DISTINCT vv.vendor_id) AS scanned_count,MAX(vv.scan_date) AS completed_at FROM vendor_visits vv INNER JOIN users_data v ON v.user_id=vv.vendor_id AND v.active=2 WHERE ' . $snapshot['scan_where']);
+        $count = $countResult ? mysql_fetch_assoc($countResult) : false;
+        if (!$total || !$count || !isset($total['total_vendors'], $count['scanned_count']) || !ctype_digit((string)$total['total_vendors']) || !ctype_digit((string)$count['scanned_count'])) throw new Exception('The reset was recorded, but the card status could not be refreshed. Retry this same request.');
+        $complete = (int)$total['total_vendors'] > 0 && (int)$count['scanned_count'] >= (int)$total['total_vendors'];
+        if ($complete && (!isset($count['completed_at']) || !is_string($count['completed_at']) || !preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$/D', $count['completed_at']))) throw new Exception('The card completion time could not be checked. Retry this same request.');
+        $completedAt = $complete ? "'" . mysql_real_escape_string($count['completed_at']) . "'" : 'NULL';
+        if (!mysql($database, 'UPDATE users_data SET bingo_completed=' . ($complete ? '1' : '0') . ',bingo_completion_date=' . $completedAt . " WHERE user_id='" . mysql_real_escape_string($previewRequest['couple_id']) . "'")) throw new Exception('The reset was recorded, but the card status could not be saved. Retry this same request.');
+    }
+    /* WW_QR_ADMIN_CARD_RESET_HELPERS_END */
+
     /* WW_QR_ADMIN_DATA_HELPERS_START */
     function ww_qrbs_data_filters($source) {
         $allowed = array('csrf_token', 'action', 'dataset', 'event_key', 'vendor_id', 'search', 'page', 'page_size', 'operator_identity', 'contact_status');
@@ -1016,6 +1143,22 @@ if (!function_exists('ww_qrbs_escape')) {
         return '"' . str_replace('"', '""', $text) . '"';
     }
 
+    function ww_qrbs_scan_reset_filter($database, $event) {
+        $result = ww_qrbs_edge_call($database, array('action' => 'card_reset_cutoffs', 'event_key' => $event));
+        if (!ww_qrbs_response_succeeded($result)) throw new Exception('Bingo card reset history could not be checked. Try again.');
+        $reply = $result['payload'];
+        if (!isset($reply['action'], $reply['event_key'], $reply['rows'], $reply['has_more']) || $reply['action'] !== 'card_reset_cutoffs' || $reply['event_key'] !== $event || !is_array($reply['rows']) || count($reply['rows']) > 10000 || $reply['has_more'] !== false) throw new Exception('Bingo card reset history could not be verified. Try again.');
+        $seen = array(); $conditions = array();
+        foreach ($reply['rows'] as $row) {
+            if (!is_array($row) || !isset($row['couple_id'], $row['generation'], $row['scan_reset_after']) || !is_string($row['couple_id']) || !preg_match('/^[1-9][0-9]{0,17}$/D', $row['couple_id']) || isset($seen[$row['couple_id']]) || !is_int($row['generation']) || $row['generation'] < 1 || $row['generation'] > 999999999999999) throw new Exception('Bingo card reset history could not be verified. Try again.');
+            $cutoff = ww_qrbs_validate_datetime($row['scan_reset_after']);
+            if ($cutoff === '') throw new Exception('Bingo card reset history could not be verified. Try again.');
+            $seen[$row['couple_id']] = true;
+            $conditions[] = "(vv.user_id='" . mysql_real_escape_string($row['couple_id']) . "' AND vv.scan_date <= '" . mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($cutoff))) . "')";
+        }
+        return count($conditions) ? ' AND NOT (' . implode(' OR ', $conditions) . ')' : '';
+    }
+
     function ww_qrbs_scans_data($database, $filters, $config, $export) {
         if (!is_array($config) || !isset($config['event_key'], $config['vendor_tag_id'], $config['history_starts_at'], $config['entry_closes_at'])
             || $filters['event_key'] !== (string)$config['event_key']) throw new Exception('Website scan history is available for the current published event only.');
@@ -1026,6 +1169,7 @@ if (!function_exists('ww_qrbs_escape')) {
         $sqlStart = mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($start)));
         $sqlEnd = mysql_real_escape_string(date('Y-m-d H:i:s', strtotime($end)));
         $where = "vv.scan_date >= '" . $sqlStart . "' AND vv.scan_date < '" . $sqlEnd . "' AND EXISTS (SELECT 1 FROM rel_tags rt WHERE rt.object_id=vv.vendor_id AND rt.tag_id='" . $tag . "' AND rt.tag_type_id=1)";
+        $where .= ww_qrbs_scan_reset_filter($database, $filters['event_key']);
         if ($filters['vendor_id'] !== '') $where .= " AND vv.vendor_id='" . mysql_real_escape_string($filters['vendor_id']) . "'";
         if ($filters['search'] !== '') {
             $search = mysql_real_escape_string(str_replace(array(chr(92), '%', '_'), array(chr(92) . chr(92), chr(92) . '%', chr(92) . '_'), $filters['search']));
@@ -1090,6 +1234,7 @@ if (!function_exists('ww_qrbs_escape')) {
 
         $responseBody = '';
         $responseLimit = isset($payload['action']) && $payload['action'] === 'data_export' ? 8388608 : 262144;
+        if (isset($payload['action']) && $payload['action'] === 'card_reset_cutoffs') $responseLimit = 2097152;
         $responseTooLarge = false;
         $handle = curl_init('https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-admin');
         if ($handle === false) { return $failure; }
@@ -1294,6 +1439,99 @@ if ($ww_qrbs_method === 'POST') {
         }
     }
     /* WW_QR_ADMIN_CONTACT_REQUEST_END */
+
+    /* WW_QR_ADMIN_CARD_RESET_REQUEST_START */
+    if (in_array($ww_qrbs_post_action, array('card_reset_lookup', 'card_reset_preview', 'card_reset'), true)) {
+        $cardStatus = 200; $cardReply = array(); $cardLock = ''; $cardValidated = false;
+        try {
+            $origin = isset($_SERVER['HTTP_ORIGIN']) ? strtolower((string)$_SERVER['HTTP_ORIGIN']) : '';
+            $host = isset($_SERVER['HTTP_HOST']) ? strtolower((string)$_SERVER['HTTP_HOST']) : '';
+            if (!in_array($host, array('www.weddingwin.ca', 'weddingwin.ca', 'ww2.managemydirectory.com'), true) || $origin !== 'https://' . $host) throw new Exception('Open this tool in the signed-in WeddingWin admin.');
+            $payload = ww_qrbs_card_reset_request($_POST);
+            if ($payload['action'] === 'card_reset_lookup') {
+                $members = ww_qrbs_card_reset_member_rows($ww_qrbs_database, $payload['search'], false);
+                foreach ($members as &$member) { unset($member['subscription_id'], $member['active']); } unset($member);
+                $cardReply = array('ok' => true, 'action' => 'card_reset_lookup', 'members' => $members);
+            } else {
+                $members = ww_qrbs_card_reset_member_rows($ww_qrbs_database, $payload['couple_id'], true);
+                if (count($members) !== 1 || $members[0]['couple_id'] !== $payload['couple_id']) throw new Exception('Choose an active couple account.');
+                $member = $members[0];
+                $payload['verified_couple'] = array('id' => $member['couple_id'], 'subscription_id' => $member['subscription_id'], 'active' => $member['active']);
+                unset($member['subscription_id'], $member['active']);
+                $cardValidated = true;
+                $cardLock = ww_qrbs_card_lock($ww_qrbs_database, $payload['event_key'], $payload['couple_id']);
+                $previewRequest = array('action' => 'card_reset_preview', 'dataset' => 'scans', 'event_key' => $payload['event_key'], 'couple_id' => $payload['couple_id'], 'verified_couple' => $payload['verified_couple']);
+                $previewResult = ww_qrbs_edge_call($ww_qrbs_database, $previewRequest);
+                if (!ww_qrbs_response_succeeded($previewResult)) {
+                    $cardStatus = isset($previewResult['http_status']) && in_array((int)$previewResult['http_status'], array(400, 401, 403, 404, 409, 422, 429, 503), true) ? (int)$previewResult['http_status'] : 503;
+                    $error = isset($previewResult['payload']['error']) ? $previewResult['payload']['error'] : '';
+                    throw new Exception(ww_qrbs_is_plain_text($error, 1, 400, false) ? $error : 'The Bingo card could not be checked. Please try again.');
+                }
+                $preview = $previewResult['payload'];
+                if (!ww_qrbs_card_reset_preview_valid($preview, $previewRequest)) throw new Exception('The Bingo card preview could not be verified. Please try again.');
+                if (!isset($_SESSION['ww_qr_card_reset_previews']) || !is_array($_SESSION['ww_qr_card_reset_previews'])) $_SESSION['ww_qr_card_reset_previews'] = array();
+                if ($payload['action'] === 'card_reset_preview') {
+                    $snapshot = ww_qrbs_card_scan_snapshot($ww_qrbs_database, $payload['event_key'], $payload['couple_id'], $preview['card_state']);
+                    foreach ($_SESSION['ww_qr_card_reset_previews'] as $token => $saved) {
+                        if (!isset($saved['created_at']) || (!isset($saved['request_id']) && $saved['created_at'] < time() - 900) || (isset($saved['result']) && $saved['created_at'] < time() - 86400)) unset($_SESSION['ww_qr_card_reset_previews'][$token]);
+                    }
+                    foreach ($_SESSION['ww_qr_card_reset_previews'] as $token => $saved) {
+                        if (count($_SESSION['ww_qr_card_reset_previews']) < 20) break;
+                        if (!isset($saved['request_id']) || isset($saved['result'])) unset($_SESSION['ww_qr_card_reset_previews'][$token]);
+                    }
+                    if (count($_SESSION['ww_qr_card_reset_previews']) >= 20) throw new Exception('Finish an earlier reset before starting another.');
+                    $scanToken = ww_qrbs_secure_random_hex(32);
+                    if (!preg_match('/^[a-f0-9]{64}$/D', $scanToken)) throw new Exception('A secure reset preview could not be created.');
+                    $_SESSION['ww_qr_card_reset_previews'][$scanToken] = array('event_key' => $payload['event_key'], 'couple_id' => $payload['couple_id'], 'expected_generation' => $preview['expected_generation'], 'preview_token' => $preview['preview_token'], 'entry_count' => $preview['entry_count'], 'scan_count' => $snapshot['scan_count'], 'scan_digest' => $snapshot['scan_digest'], 'created_at' => time());
+                    $cardReply = array_merge($preview, array('member' => $member, 'scan_count' => $snapshot['scan_count'], 'scan_preview_token' => $scanToken));
+                } else {
+                    $scanToken = $payload['scan_preview_token']; unset($payload['scan_preview_token']);
+                    if (!isset($_SESSION['ww_qr_card_reset_previews'][$scanToken])) { $cardStatus = 409; throw new Exception('Review this Bingo card again before resetting it.'); }
+                    $saved = $_SESSION['ww_qr_card_reset_previews'][$scanToken];
+                    foreach (array('event_key', 'couple_id', 'expected_generation', 'preview_token') as $key) if ($payload[$key] !== $saved[$key]) { $cardStatus = 409; throw new Exception('This reset does not match the card you reviewed. Review it again.'); }
+                    $fingerprint = hash('sha256', json_encode($payload));
+                    if (isset($saved['request_id']) && ($saved['request_id'] !== $payload['request_id'] || $saved['fingerprint'] !== $fingerprint)) { $cardStatus = 409; throw new Exception('Retry the original reset before starting another change.'); }
+                    if (!isset($saved['request_id']) && $saved['created_at'] < time() - 900) { $cardStatus = 409; throw new Exception('This preview expired. Review the Bingo card again.'); }
+                    if (isset($saved['result'])) {
+                        $cardReply = $saved['result']; $cardReply['replayed'] = true;
+                    } else {
+                        if ($preview['expected_generation'] === $saved['expected_generation']) {
+                            $snapshot = ww_qrbs_card_scan_snapshot($ww_qrbs_database, $payload['event_key'], $payload['couple_id'], $preview['card_state']);
+                            if ($preview['preview_token'] !== $saved['preview_token'] || !$preview['can_reset'] || !hash_equals($saved['scan_digest'], $snapshot['scan_digest'])) { $cardStatus = 409; throw new Exception('This Bingo card changed. Review the current scans and draw entries before resetting it.'); }
+                        } elseif (!isset($saved['request_id']) || $preview['expected_generation'] < $saved['expected_generation']) {
+                            $cardStatus = 409; throw new Exception('This Bingo card was already changed. Review it again.');
+                        }
+                        if (!isset($saved['request_id'])) {
+                            $saved['request_id'] = $payload['request_id']; $saved['fingerprint'] = $fingerprint;
+                            $firstAttemptTime = time();
+                            $saved['website_scan_reset_at'] = gmdate('Y-m-d', $firstAttemptTime) . 'T' . gmdate('H:i:s', $firstAttemptTime) . 'Z';
+                            $_SESSION['ww_qr_card_reset_previews'][$scanToken] = $saved;
+                        }
+                        $payload['website_scan_lock_held'] = true;
+                        $payload['website_scan_reset_at'] = $saved['website_scan_reset_at'];
+                        $result = ww_qrbs_edge_call($ww_qrbs_database, $payload);
+                        if (!ww_qrbs_response_succeeded($result)) {
+                            $cardStatus = isset($result['http_status']) && in_array((int)$result['http_status'], array(400, 401, 403, 404, 409, 422, 429, 503), true) ? (int)$result['http_status'] : 503;
+                            $error = isset($result['payload']['error']) ? $result['payload']['error'] : '';
+                            throw new Exception(ww_qrbs_is_plain_text($error, 1, 400, false) ? $error : 'The reset could not be confirmed. Retry this same request.');
+                        }
+                        if (!ww_qrbs_card_reset_success_valid($result['payload'], $payload) || $result['payload']['entry_count'] !== $saved['entry_count']) throw new Exception('The reset response could not be verified. Retry this same request.');
+                        $cardReply = array_merge($result['payload'], array('scan_count' => $saved['scan_count'], 'member' => $member));
+                        $_SESSION['ww_qr_card_reset_previews'][$scanToken]['result'] = $cardReply;
+                    }
+                    ww_qrbs_card_refresh_completion($ww_qrbs_database, $previewRequest);
+                }
+            }
+        } catch (Exception $error) {
+            if ($cardStatus === 200) $cardStatus = $cardValidated ? 503 : 400;
+            $cardReply = array('ok' => false, 'error' => $error->getMessage());
+        } finally {
+            // Send JSON only after release: exit() does not run PHP finally.
+            if ($cardLock !== '') mysql($ww_qrbs_database, "SELECT RELEASE_LOCK('" . mysql_real_escape_string($cardLock) . "') AS released");
+        }
+        ww_qrbs_data_json($cardReply, $cardStatus);
+    }
+    /* WW_QR_ADMIN_CARD_RESET_REQUEST_END */
 
     /* WW_QR_ADMIN_DRAW_RESET_REQUEST_START */
     if ($ww_qrbs_post_action === 'draw_reset') {
@@ -1849,8 +2087,27 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
         <div><label for="wwQrDataOperator">Your admin name (for changes &amp; downloads)</label><input id="wwQrDataOperator" name="operator_identity" maxlength="160" autocomplete="name" placeholder="Name or work email"></div>
         <div id="wwQrDataContactStatusGroup"><label for="wwQrDataContactStatus">Contact list</label><select id="wwQrDataContactStatus" name="contact_status"><option value="active">Active contacts</option><option value="removed">Removed contacts</option><option value="all">All contacts</option></select></div>
       </div>
-      <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button" type="submit">Show list</button><button class="ww-qrbs-button" id="wwQrDataExport" type="button">Download CSV</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrContactAddOpen" type="button" aria-expanded="false" aria-controls="wwQrContactPanel">Add contact</button></div>
+      <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button" type="submit">Show list</button><button class="ww-qrbs-button" id="wwQrDataExport" type="button">Download CSV</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrContactAddOpen" type="button" aria-expanded="false" aria-controls="wwQrContactPanel">Add contact</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrCardResetOpen" type="button" aria-expanded="false" aria-controls="wwQrCardResetPanel">Reset Bingo card</button></div>
     </form>
+    <section class="ww-qrbs-contact-panel" id="wwQrCardResetPanel" aria-labelledby="wwQrCardResetHeading" hidden>
+      <h3 id="wwQrCardResetHeading">Reset a couple’s Bingo card</h3>
+      <p class="ww-qrbs-data-note" id="wwQrCardResetEvent"></p>
+      <p class="ww-qrbs-data-note">Find the couple account, then review the reset. This clears their QR scans and vendor draw entries for this event. Their account and membership stay the same.</p>
+      <form id="wwQrCardResetLookupForm" autocomplete="off">
+        <label for="wwQrCardResetLookup">Find a couple</label>
+        <div class="ww-qrbs-contact-search"><input id="wwQrCardResetLookup" minlength="2" maxlength="120" required placeholder="Name, email, or account number"><button class="ww-qrbs-button" type="submit">Search couples</button></div>
+      </form>
+      <div class="ww-qrbs-contact-matches" id="wwQrCardResetMatches" aria-label="Matching couple accounts"></div>
+      <section id="wwQrCardResetConfirm" aria-labelledby="wwQrCardResetConfirmHeading" hidden>
+        <h3 id="wwQrCardResetConfirmHeading">Reset this Bingo card?</h3>
+        <p class="ww-qrbs-contact-chosen" id="wwQrCardResetChosen"></p>
+        <p id="wwQrCardResetSummary"></p>
+        <div class="ww-qrbs-data-fields"><div><label for="wwQrCardResetReason">Reason for reset</label><input id="wwQrCardResetReason" type="text" minlength="3" maxlength="500" required></div></div>
+        <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button ww-qrbs-data-danger" id="wwQrCardResetAction" type="button">Reset Bingo card</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrCardResetConfirmCancel" type="button">Cancel</button></div>
+      </section>
+      <p class="ww-qrbs-data-status" id="wwQrCardResetStatus" role="status" aria-live="polite"></p>
+      <button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrCardResetClose" type="button">Close</button>
+    </section>
     <section class="ww-qrbs-contact-panel" id="wwQrContactPanel" aria-labelledby="wwQrContactHeading" hidden>
       <h3 id="wwQrContactHeading">Add a Bingo contact</h3>
       <p class="ww-qrbs-data-note" id="wwQrContactEvent"></p>
@@ -2008,7 +2265,7 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
       <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'scan_enabled'); ?>
       <div class="ww-qrbs-check">
         <input id="ww-qrbs-scan-open-early" name="scan_open_early" type="checkbox" value="1"<?php echo ww_qrbs_truthy($ww_qrbs_form_config['scan_open_early']) ? ' checked' : ''; ?>>
-        <label for="ww-qrbs-scan-open-early"><strong>Open scanner early</strong><br><span class="ww-qrbs-help">Allow Bingo scanning before the show day. Otherwise, it opens automatically at midnight on the wedding show date, Toronto time. Pausing scanning still overrides this. Vendor draws still open during show hours and need a fresh booth scan.</span></label>
+        <label for="ww-qrbs-scan-open-early"><strong>Open scanner early</strong><br><span class="ww-qrbs-help">Allow Bingo scanning before the show day. Otherwise, it opens automatically at midnight on the wedding show date, Toronto time. Pausing scanning still overrides this. Enabled vendor draws accept entries while scanning is open.</span></label>
       </div>
       <?php echo ww_qrbs_field_error($ww_qrbs_errors, 'scan_open_early'); ?>
       <?php $ww_qrbs_auto_scan_date = substr(ww_qrbs_toronto_datetime_input_value($ww_qrbs_form_config['history_starts_at']), 0, 10); ?>

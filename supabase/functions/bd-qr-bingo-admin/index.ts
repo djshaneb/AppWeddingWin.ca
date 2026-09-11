@@ -4,6 +4,11 @@ import {
   QrAdminDrawResetError,
 } from "../_shared/qr_bingo_admin_draw_reset.ts";
 import {
+  handleQrAdminCardReset,
+  handleQrAdminCardResetCutoffs,
+  QrAdminCardResetError,
+} from "../_shared/qr_bingo_admin_card_reset.ts";
+import {
   handleQrAdminData,
   QrAdminDataError,
 } from "../_shared/qr_bingo_admin_data.ts";
@@ -434,6 +439,29 @@ Deno.serve(async (request) => {
     await requireSignedAdminRequest(request, rawBody);
     const body = JSON.parse(rawBody || "{}") as Record<string, unknown>;
     const action = String(body.action || "");
+
+    if (
+      ["card_reset_preview", "card_reset", "card_reset_cutoffs"].includes(
+        action,
+      )
+    ) {
+      try {
+        return jsonResponse(
+          await (action === "card_reset_cutoffs"
+            ? handleQrAdminCardResetCutoffs(requireAdmin(), body)
+            : handleQrAdminCardReset(requireAdmin(), body)),
+        );
+      } catch (error) {
+        if (error instanceof QrAdminCardResetError) {
+          return jsonResponse({
+            ok: false,
+            code: error.code,
+            error: error.message,
+          }, error.status);
+        }
+        throw error;
+      }
+    }
 
     if (action === "draw_reset") {
       try {

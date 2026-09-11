@@ -161,7 +161,14 @@ async function harness(endpoint: string) {
     qrBingoEntryOpensAt,
     QR_ENTRY_ACCESS_POLICY_VERSION,
     QR_ENTRY_ACCESS_POLICY_DISCLOSURE,
-    requireAdmin: () => ({ from: () => query }),
+    requireAdmin: () => ({ from: () => query, rpc: async (name: string, args: any) => {
+      assertEquals(name, "save_qr_bingo_card_entry");
+      assertEquals(args.p_entry.card_generation, 0);
+      assertEquals(args.p_entry.card_reset_at, null);
+      assertEquals(args.p_entry_id, existing?.id ?? null);
+      writes.push(args.p_entry); existing = { id: "entry-id", current: true, ...args.p_entry };
+      return { error: null };
+    } }),
     archivedLegacyEntryIds: async () => new Set(),
     entryHasCurrentConsent: (row: any) => row?.current === true,
     cleanText: (value: any) => String(value || ""),
@@ -213,7 +220,7 @@ async function harness(endpoint: string) {
         "async function getVendorRaffleDashboard(",
       )
     }
-    async function scan(body:any,user:any,vendor:any,scanned:any){const action='scan',page={vendors:[vendor],scanned},reviewFixture=null,isReviewCouple=false,cookieJar=new Map();
+    async function scan(body:any,user:any,vendor:any,scanned:any){const action='scan',page={vendors:[vendor],scanned},reviewFixture=null,isReviewCouple=false,cookieJar=new Map(),cardState={event_key:qrBingoConfig().event_key,couple_id:String(user.user_id),generation:0,scan_reset_after:null};
       ${
       section(
         source,

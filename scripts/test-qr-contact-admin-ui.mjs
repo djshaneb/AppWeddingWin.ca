@@ -643,6 +643,8 @@ test('actual PHP scan queries are read-only, paginated, event-scoped and fail cl
   const result = php(`${helpers}
     date_default_timezone_set('America/Toronto');
     $queries=array();$total=51;$records=array(array('couple_id'=>'456','name'=>'Test Couple','vendor_id'=>'123','vendor_name'=>'Test Vendor','scanned_at'=>'2026-10-18 12:00:00'));
+    function ww_qrbs_edge_call($database,$payload){return array('http_status'=>200,'payload'=>array('ok'=>true,'action'=>'card_reset_cutoffs','event_key'=>$payload['event_key'],'rows'=>array(),'has_more'=>false));}
+    function ww_qrbs_response_succeeded($result){return $result['http_status']===200 && $result['payload']['ok']===true;}
     function mysql_real_escape_string($text){return str_replace("'",chr(92)."'",$text);}
     function mysql($database,$sql){global $queries,$total,$records;$queries[]=$sql;return (object)array('rows'=>strpos($sql,'SELECT COUNT(*)')===0?array(array('total'=>$total)):$records);}
     function mysql_fetch_assoc($result){return count($result->rows)?array_shift($result->rows):false;}

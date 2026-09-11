@@ -173,6 +173,7 @@ function browser({ config = canonical(), now = '2026-10-18T03:59:59Z', fixture =
     ...controls, EVENT_CONFIG: { ...config }, QR_SCANNER_FIXTURE: fixture, CONTACT_PROFILE_COMPLETE: complete, inShowScanned: new Set(), vendorDrawScanned: new Set(), VENDORS: [{ id: '707' }], stream: null, vendorScanRequests: new Map(), vendorDrawOfferInFlight: false, vendorDrawEntryInFlight: false, qrFixtureScanInFlight: false,
     Date: TestDate, AbortController, hasCurrentParticipationNotice: () => notice,
     document: { hidden: false, getElementById: id => nodes[id] || null, addEventListener: (type, fn) => { listeners[type] = fn; } },
+    window: { addEventListener: (type, fn) => { listeners[type] = fn; } },
     stopScanner: () => { stops++; context.stream = null; }, updateVendorDrawEntryButton() {}, updateFixtureScanButton() {},
     formatPromotionDate: value => value, trustedVendorOfferVersion: value => typeof value === 'string' && value.includes('T') && Number.isFinite(Date.parse(value)) ? value : '',
     setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; }, clearTimeout() {}, setInterval: (fn, delay) => { intervals.push({ fn, delay }); return intervals.length; },
@@ -235,19 +236,92 @@ test('bad/missing config pauses scanning without clearing entries; changed event
   }
 });
 
-test('actual markScanned retries missing draw proof and deduplicates confirmed scans', async () => {
+test('actual markScanned reconfirms cached scans and deduplicates only overlapping requests', async () => {
   const f = browser({ config: { ...canonical(), scan_open_early: true } }); let saves = 0;
   f.context.scanned = new Set(['707']); f.context.document.getElementById = () => null;
   f.context.saveVendorScan = async id => { saves++; f.context.vendorDrawScanned.add(id); return true; }; f.context.updateProgress = () => {};
   vm.runInContext(section(website, '    async function markScanned(id)', '    function updateProgress()'), f.context);
   assert.equal(await f.run("markScanned('707')"), true); assert.equal(saves, 1);
   f.setTime('2026-10-18T15:00:00Z'); await Promise.all([f.run("markScanned('707')"), f.run("markScanned('707')")]);
-  assert.equal(saves, 1); assert.equal(f.context.vendorDrawScanned.has('707'), true); assert.equal(f.context.inShowScanned.has('707'), false);
-  await f.run("markScanned('707')"); assert.equal(saves, 1);
+  assert.equal(saves, 2); assert.equal(f.context.vendorDrawScanned.has('707'), true); assert.equal(f.context.inShowScanned.has('707'), false);
+  await f.run("markScanned('707')"); assert.equal(saves, 3);
   const save = section(website, '    async function saveVendorScan(', '    async function loadScannedVendors()');
   assert.match(save, /data[.]vendor_draw_scan === true/);
   const render = section(website, '    function renderGrid()', '    async function markScanned(id)');
   assert.match(render, /drawButton.hidden = !canReviewVendorDraw\(v.id\)/);
+});
+
+test('polling and returning to an unchanged event refresh account progress after an admin reset', async () => {
+  const f = browser(); f.run('initializeWebsiteScannerPolling()');
+  f.intervals[0].fn(); await flush(); assert.equal(f.loads(), 1);
+  f.listeners.visibilitychange(); await flush(); assert.equal(f.loads(), 2);
+  f.listeners.focus(); await flush(); assert.equal(f.loads(), 3);
+  f.context.document.hidden = true;
+  f.intervals[0].fn(); f.listeners.visibilitychange(); f.listeners.focus();
+  await flush(); assert.equal(f.loads(), 3);
+});
+
+function progressBrowser(respond) {
+  const f = browser({ config: { ...canonical(), scan_open_early: true } });
+  const nodes = Object.fromEntries(['tile-707', 'tile-808', 'vendor-draw-review-707', 'vendor-draw-review-808'].map(id => [id, node()]));
+  let closes = 0, requests = 0, updates = 0;
+  Object.assign(f.context, {
+    VENDORS: [{ id: '707' }, { id: '808' }], scanned: new Set(['707', '808']),
+    vendorDrawScanned: new Set(['707', '808']), inShowScanned: new Set(['707', '808']),
+    scanProgressRevision: 0, scanProgressRequestInFlight: false, lastDecoded: 'https://www.weddingwin.ca/qr?vendor_id=707',
+    lastScanEl: { textContent: 'Bingo complete' }, currentVendorDrawVendor: { id: '707' },
+    QR_WEBSITE_CSRF: 'offline-test-csrf', PARTICIPATION_NOTICE_VERSION: 'offline-current-notice',
+    eventConfigRefreshStarted: false, refreshPageAfterStaleEventConfig: () => false,
+    console: { error() {}, log() {} },
+    closeVendorDraw: () => { closes++; f.context.currentVendorDrawVendor = null; },
+    updateProgress: () => { updates++; },
+    fetch: async (...args) => { requests++; return respond(...args); },
+  });
+  f.context.document.getElementById = id => nodes[id] || null;
+  nodes['tile-707'].classList.add('scanned'); nodes['tile-808'].classList.add('scanned');
+  vm.runInContext(section(website, '    async function saveVendorScan(', '    // --- UI Build ---'), f.context);
+  vm.runInContext(section(website, '    function hydrateTiles()', '    // --- Camera / Scanning ---'), f.context);
+  return { ...f, nodes, closes: () => closes, requestCount: () => requests, updates: () => updates };
+}
+
+test('authoritative progress shrink removes old marks, invalidates the choice and permits the same QR again', async () => {
+  const f = progressBrowser(async () => ({ ok: true, json: async () => ({ status: 'success', scanned: ['808', '999'], in_show_scanned: ['808'], vendor_draw_scanned: ['707', '808', '999'] }) }));
+  await f.run('loadScannedVendors()');
+  assert.deepEqual(Array.from(f.context.scanned), ['808']);
+  assert.deepEqual(Array.from(f.context.vendorDrawScanned), ['808']);
+  assert.equal(f.nodes['tile-707'].classList.contains('scanned'), false);
+  assert.equal(f.nodes['tile-707'].classList.contains('locked'), true);
+  assert.equal(f.nodes['vendor-draw-review-707'].hidden, true);
+  assert.equal(f.nodes['tile-808'].classList.contains('scanned'), true);
+  assert.equal(f.nodes['tile-808'].classList.contains('locked'), false);
+  assert.equal(f.nodes['vendor-draw-review-808'].hidden, false);
+  assert.equal(f.context.lastDecoded, ''); assert.equal(f.context.lastScanEl.textContent, '');
+  assert.equal(f.closes(), 1); assert.equal(f.updates(), 1);
+});
+
+test('a delayed progress read cannot erase a newly confirmed scan and overlapping reads are coalesced', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const f = progressBrowser(async (_url, request) => {
+    if (request.body.includes('action=scan_vendor')) return { ok: true, json: async () => ({ status: 'success', vendor_draw_scan: true }) };
+    await pending; return { ok: true, json: async () => ({ status: 'success', scanned: [], vendor_draw_scanned: [] }) };
+  });
+  const read = f.run('loadScannedVendors()'); await f.run('loadScannedVendors()');
+  assert.equal(f.requestCount(), 1);
+  assert.equal(await f.run("saveVendorScan('707')"), true);
+  release(); await read;
+  assert.equal(f.context.scanned.has('707'), true); assert.equal(f.context.vendorDrawScanned.has('707'), true);
+  assert.equal(f.closes(), 0); assert.equal(f.updates(), 0);
+});
+
+test('failed progress responses preserve saved cards and reads do not overlap an entry or scan', async () => {
+  const f = progressBrowser(async () => ({ ok: false, json: async () => ({ status: 'success', scanned: [] }) }));
+  await f.run('loadScannedVendors()'); assert.equal(f.context.scanned.size, 2); assert.equal(f.closes(), 0);
+  for (const flag of ['vendorDrawEntryInFlight', 'vendorDrawOfferInFlight', 'qrFixtureScanInFlight']) {
+    f.context[flag] = true; await f.run('loadScannedVendors()'); f.context[flag] = false;
+  }
+  f.context.vendorScanRequests.set('707', Promise.resolve(true)); await f.run('loadScannedVendors()');
+  assert.equal(f.requestCount(), 1);
 });
 
 test('new scanner helpers contain no stripping-sensitive backslashes and complete PHP and scanner JavaScript parse', () => {
