@@ -324,6 +324,10 @@ if ($ww_qrvd_is_bridge) {
         <p class="ww-qrvd-step">Step 3 of 4</p>
         <h3 id="ww-qrvd-entry-heading" tabindex="-1">Your couples</h3>
         <p class="ww-qrvd-intro">See who entered and download their contact details.</p>
+        <div class="ww-qrvd-readiness" data-role="draw-readiness" role="status" aria-live="polite" aria-atomic="true">
+          <strong data-role="draw-readiness-label">Checking your saved draw status…</strong>
+          <p data-role="draw-readiness-message"></p>
+        </div>
         <div class="ww-qrvd-stats" aria-label="Entrant summary">
           <div class="ww-qrvd-stat">
             <strong data-role="entry-count">0</strong>

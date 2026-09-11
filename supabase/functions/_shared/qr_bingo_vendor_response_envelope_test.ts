@@ -19,9 +19,12 @@ const user = { user_id: vendor.id };
 const event = "app-review-offline-response-test";
 const config = {
   event_key: event, revision: 1, rules_version: "rules-test", official_rules_url: "https://www.weddingwin.ca/vendor-draw-rules",
+  entry_closes_at: "2026-10-18T19:00:00Z",
   send_vendor_email: false, send_couple_email: true,
 };
 const settings = {
+  entry_closes_at: config.entry_closes_at,
+  updated_at: "2026-09-05T00:00:00Z",
   draw_generation: 0,
   max_winners: 2, enabled: true, legal_terms_accepted: true,
   legal_terms_version: config.rules_version, legal_terms_accepted_at: "2026-09-05T00:00:00Z",
@@ -30,6 +33,14 @@ const settings = {
   vendor_responsibility_acknowledged_at: "2026-09-05T00:00:00Z",
   vendor_responsibility_disclosure_text: "Vendor responsibilities",
   participant_responsibility_disclosure_text: "Participant responsibilities",
+};
+const savedEntryReadiness = {
+  entry_setup_ready: true,
+  entry_open: true,
+  entry_status: "open",
+  entry_opens_at: "2026-09-08T12:00:00.000Z",
+  entry_closes_at: "2026-10-18T19:00:00Z",
+  entry_status_message: "Your draw is ready. Eligible couples who scan your QR code can choose Yes to enter.",
 };
 const selected = { id, draw_generation: 0, selection_status: "potential", couple_bd_user_id: "90902" };
 const verified = { ...selected, selection_status: "verified", winner_rules_confirmed_at: "2026-09-05T00:00:00Z", verification_notes: "TEST ONLY evidence" };
@@ -60,6 +71,9 @@ async function harness(url: URL, mode: typeof modes[number]) {
     single: () => Promise.resolve({ data: rows[0], error: null }),
   };
   const dependencies = {
+    loadCurrentVendorOfferSnapshot: async () => ({}), offerSnapshotHasAcceptedTerms: () => true,
+    qrBingoEffectiveEntryDisclosure: () => "Effective disclosure", isolatedFixtureMatchesSettings: () => true,
+    qrBingoEntryReadiness: () => ({ ...savedEntryReadiness }),
     ensureSettings: async () => currentSettings,
     getSettings: async () => currentSettings,
     loadVendorEntryPool: async () => ({ entry_count: 2, eligible_entry_count: 1, selection_in_progress: currentRows().some(row => row.selection_status === "potential") }),
@@ -146,6 +160,9 @@ for (const mode of modes) {
       const data = result.body;
       assert(data.vendor?.id === vendor.id && data.vendor?.user_id === vendor.id, `${mode}: missing authorized vendor`);
       assert(data.settings && data.event_key === event && data.rules_version === config.rules_version, `${mode}: incomplete native dashboard`);
+      for (const [field, value] of Object.entries(savedEntryReadiness)) {
+        assert(data[field] === value, `${mode}: dashboard must retain authoritative ${field}`);
+      }
       assert(Array.isArray(data.draws) && Number.isInteger(data.remaining_winner_slots), `${mode}: missing current draw state`);
       const expectedSends = mode === "confirm-duplicate" ? 2 : ["send", "confirm-send", "confirm-send-failure", "reset-after-finalization"].includes(mode) ? 1 : 0;
       assert(sendCalls === expectedSends, `${mode}: unexpected email transport`);

@@ -4,6 +4,91 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
+function invitationFixture() {
+  const nodes = Object.fromEntries(['vendorDrawEnter', 'vendorDrawDecline', 'vendorDrawModal', 'vendorDrawDisclosure', 'vendorDrawPrivacy', 'vendorDrawTerms', 'vendorDrawRules', 'vendorDrawTitle', 'vendorDrawVendor', 'vendorDrawDescription', 'vendorDrawStatus'].map(key => [key, { ...node(), focus() {} }]));
+  nodes.vendorDrawModal.hidden = true;
+  const calls = [], timers = [];
+  const context = vm.createContext({
+    ...nodes, currentVendorDrawOffer: null, currentVendorDrawVendor: null, vendorDrawReturnFocus: null,
+    vendorDrawEntryInFlight: false, vendorDrawEntryRecorded: false,
+    EVENT_CONFIG: canonical(), hasCurrentParticipationNotice: () => true, canReviewVendorDraw: () => true,
+    cleanPromotionText: value => String(value || '').trim(),
+    trustedWeddingWinPromotionUrl: value => value === canonical().official_rules_url ? value : '',
+    formatPromotionDate: value => value,
+    requestVendorDraw: async (action, body) => { calls.push({ action, body }); return { ok: true, message: 'Your entry is confirmed.' }; },
+    window: { setTimeout: fn => timers.push(fn) },
+  });
+  vm.runInContext(section(website, '    function trustedVendorOfferVersion(', '    async function requestVendorDraw('), context);
+  vm.runInContext(section(website, '    function resetVendorDrawChoice()', '    function showVendorDrawStatus('), context);
+  vm.runInContext(section(website, '    async function enterVendorDraw()', "    vendorDrawDecline.addEventListener"), context);
+  const offer = { vendor_business_name: 'Sound of Harmony', prize_title: 'Test prize',
+    consent_version: canonical().rules_version, vendor_offer_version: '2026-09-11T12:00:00Z',
+    terms_url: canonical().official_rules_url, prize_count: 1, exclude_previous_winners: true,
+    participant_responsibility_disclosure: 'I scanned this vendor QR code during authorized scanning.',
+  };
+  return { context, calls, nodes, timers, offer,
+    show: () => context.showVendorDrawOffer({ id: '23608', name: 'Sound of Harmony' }, offer) };
+}
+
+test('website shows named Yes/No invitation and No preserves scan without submitting entry', () => {
+  const f = invitationFixture();
+  assert.equal(f.show(), true);
+  assert.equal(f.nodes.vendorDrawTitle.textContent, 'Enter Sound of Harmony’s draw?');
+  assert.equal(f.nodes.vendorDrawEnter.disabled, false);
+  assert.equal(f.nodes.vendorDrawDecline.textContent, 'No');
+  const modal = section(website, '  <div class="vendor-draw-modal"', '  <!-- Vendor Data -->');
+  assert.doesNotMatch(modal, /vendorDrawPrivacy|vendorDrawRules|vendorDrawDisclosure|vendorDrawDescription/);
+  assert.match(modal, />Yes<\/button>/);
+  assert.match(modal, />No<\/button>/);
+  assert.deepEqual(f.calls, []);
+  f.context.closeVendorDraw();
+  assert.equal(f.nodes.vendorDrawModal.hidden, true);
+  assert.equal(f.context.currentVendorDrawOffer, null);
+  assert.deepEqual(f.calls, []);
+});
+
+test('website explicit Yes uses the prior agreement and current offer once without fabricating new consent', async () => {
+  const f = invitationFixture(); f.show();
+  await Promise.all([f.context.enterVendorDraw(), f.context.enterVendorDraw()]);
+  assert.equal(f.calls.length, 1);
+  const { action, body } = f.calls[0];
+  assert.equal(action, 'raffle_opt_in');
+  assert.equal(body.vendor_id, '23608');
+  for (const key of ['participant_responsibility_disclosure', 'vendor_offer_version']) assert.equal(body[key], f.offer[key]);
+  assert.equal(body.rules_viewed, true);
+  assert.equal(body.vendor_marketing_consent_acknowledged, true);
+  assert.equal('entry_access_acknowledged' in body, false);
+  assert.equal('entry_access_disclosure' in body, false);
+  assert.equal('in_show_scan_verified' in body, false);
+  assert.equal(f.nodes.vendorDrawStatus.textContent, 'Your entry is confirmed.');
+  assert.equal(f.nodes.vendorDrawEnter.disabled, true);
+  await f.context.enterVendorDraw();
+  assert.equal(f.calls.length, 1);
+});
+
+test('website refuses incomplete offers and stops entry after proof or prior agreement is lost', async () => {
+  for (const patch of [{ consent_version: 'old' }, { prize_count: 0 }, { participant_responsibility_disclosure: '' }]) {
+    const f = invitationFixture(); Object.assign(f.offer, patch); assert.equal(f.show(), false);
+    await f.context.enterVendorDraw(); assert.deepEqual(f.calls, []);
+  }
+  for (const gate of ['canReviewVendorDraw', 'hasCurrentParticipationNotice']) {
+    const f = invitationFixture(); f.show(); f.context[gate] = () => false;
+    await f.context.enterVendorDraw(); assert.deepEqual(f.calls, []);
+  }
+});
+
+test('website failed opt-in preserves invitation and permits an explicit retry', async () => {
+  const f = invitationFixture(); f.show();
+  f.context.requestVendorDraw = async () => { throw new Error('Entry could not be saved.'); };
+  await f.context.enterVendorDraw();
+  assert.equal(f.context.vendorDrawEntryRecorded, false);
+  assert.equal(f.nodes.vendorDrawModal.hidden, false);
+  assert.equal(f.nodes.vendorDrawEnter.disabled, false);
+  assert.equal(f.nodes.vendorDrawDecline.disabled, false);
+  assert.match(f.nodes.vendorDrawStatus.textContent, /could not be/);
+});
+
+
 const website = readFileSync(new URL('../brilliant-directories/widgets/258-julian-qr-code-bingo.php', import.meta.url), 'utf8');
 const admin = readFileSync(new URL('../brilliant-directories/widgets/ww-qr-bingo-settings.php', import.meta.url), 'utf8');
 const section = (source, start, end) => { const from = source.indexOf(start), to = source.indexOf(end, from + start.length); assert(from >= 0 && to > from, start); return source.slice(from, to); };
@@ -45,7 +130,7 @@ test('actual PHP progress retains the first early floor but duplicate scan floor
   assert.match(website, /ww_qr_bingo_duplicate_scan_floor\(\$eventConfig, \$scanRequestTime\)/);
   assert.match(website, /scan_date >= '\$duplicateFloor'/);
   const draw = section(website, "if ($_POST['action'] === 'raffle_offer' ||", "if ($_POST['action'] === 'scan_vendor')");
-  assert.match(draw, /time\(\) < \(int\)\$eventConfig\['history_starts_at_unix'\]/); assert.match(draw, /show_draw_window_closed/);
+  assert.match(draw, /ww_qr_bingo_scan_window_open\(\$eventConfig, time\(\)/); assert.match(draw, /vendor_draw_window_closed/);
 });
 
 test('admin posts only early-open boolean, preserves show/draw times, and rejects computed schedule injection', () => {
@@ -69,7 +154,7 @@ function browser({ config = canonical(), now = '2026-10-18T03:59:59Z', fixture =
   const ready = held ? new Promise(resolve => { release = resolve; }) : Promise.resolve();
   class TestDate extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } }
   const context = vm.createContext({
-    ...controls, EVENT_CONFIG: { ...config }, QR_SCANNER_FIXTURE: fixture, CONTACT_PROFILE_COMPLETE: complete, inShowScanned: new Set(), VENDORS: [{ id: '707' }], stream: null, vendorScanRequests: new Map(), vendorDrawOfferInFlight: false, vendorDrawEntryInFlight: false, qrFixtureScanInFlight: false,
+    ...controls, EVENT_CONFIG: { ...config }, QR_SCANNER_FIXTURE: fixture, CONTACT_PROFILE_COMPLETE: complete, inShowScanned: new Set(), vendorDrawScanned: new Set(), VENDORS: [{ id: '707' }], stream: null, vendorScanRequests: new Map(), vendorDrawOfferInFlight: false, vendorDrawEntryInFlight: false, qrFixtureScanInFlight: false,
     Date: TestDate, AbortController, hasCurrentParticipationNotice: () => notice,
     document: { hidden: false, getElementById: id => nodes[id] || null, addEventListener: (type, fn) => { listeners[type] = fn; } },
     stopScanner: () => { stops++; context.stream = null; }, updateVendorDrawEntryButton() {}, updateFixtureScanButton() {},
@@ -92,13 +177,15 @@ test('midnight makes an already-open website scanner manually available without 
   const noAgreement = browser({ notice: false, now: '2026-10-18T04:00:00Z' }); noAgreement.run('syncWebsiteScannerAvailability()'); assert.equal(noAgreement.controls.startBtn.disabled, true);
 });
 
-test('early enable never opens draw entry; at 11AM an early scan still needs fresh in-show proof', () => {
+test('enabled vendor draws can be reviewed during early scanner access only with authoritative QR proof', () => {
   const f = browser({ config: { ...canonical(), scan_open_early: true } }); f.run('syncWebsiteScannerAvailability()');
-  assert.equal(f.run('isWebsiteScannerWindowOpen()'), true); assert.equal(f.run('isWebsiteDrawWindowOpen()'), false);
-  f.context.inShowScanned.add('707'); assert.equal(f.run("canReviewVendorDraw('707')"), false);
-  f.context.inShowScanned.clear(); f.setTime('2026-10-18T15:00:00Z'); assert.equal(f.run('isWebsiteDrawWindowOpen()'), true); assert.equal(f.run("canReviewVendorDraw('707')"), false);
-  f.context.inShowScanned.add('707'); f.run('syncWebsiteScannerAvailability()'); assert.equal(f.run("canReviewVendorDraw('707')"), true); assert.equal(f.nodes['vendor-draw-review-707'].hidden, false);
-  f.setTime('2026-10-18T19:00:00Z'); f.run('syncWebsiteScannerAvailability()'); assert.equal(f.run("canReviewVendorDraw('707')"), false); assert.equal(f.controls.startBtn.disabled, true);
+  assert.equal(f.run('isWebsiteScannerWindowOpen()'), true); assert.equal(f.run('isWebsiteDrawWindowOpen()'), true);
+  assert.equal(f.run("canReviewVendorDraw('707')"), false);
+  f.context.vendorDrawScanned.add('707'); f.run('syncWebsiteScannerAvailability()');
+  assert.equal(f.run("canReviewVendorDraw('707')"), true); assert.equal(f.nodes['vendor-draw-review-707'].hidden, false);
+  f.context.EVENT_CONFIG.vendor_draws_enabled = false; assert.equal(f.run("canReviewVendorDraw('707')"), false);
+  f.context.EVENT_CONFIG.vendor_draws_enabled = true; f.context.EVENT_CONFIG.scan_enabled = false; assert.equal(f.run("canReviewVendorDraw('707')"), false);
+  f.context.EVENT_CONFIG.scan_enabled = true; f.setTime('2026-10-18T19:00:00Z'); f.run('syncWebsiteScannerAvailability()'); assert.equal(f.run("canReviewVendorDraw('707')"), false); assert.equal(f.controls.startBtn.disabled, true);
 });
 
 test('master pause stops an active camera and overrides early access and private fixtures', () => {
@@ -132,17 +219,17 @@ test('bad/missing config pauses scanning without clearing entries; changed event
   }
 });
 
-test('actual markScanned deduplicates early scans, permits one fresh show scan, and waits for server proof', async () => {
+test('actual markScanned retries missing draw proof and deduplicates confirmed scans', async () => {
   const f = browser({ config: { ...canonical(), scan_open_early: true } }); let saves = 0;
   f.context.scanned = new Set(['707']); f.context.document.getElementById = () => null;
-  f.context.saveVendorScan = async id => { saves++; f.context.inShowScanned.add(id); return true; }; f.context.updateProgress = () => {};
+  f.context.saveVendorScan = async id => { saves++; f.context.vendorDrawScanned.add(id); return true; }; f.context.updateProgress = () => {};
   vm.runInContext(section(website, '    async function markScanned(id)', '    function updateProgress()'), f.context);
-  assert.equal(await f.run("markScanned('707')"), true); assert.equal(saves, 0);
+  assert.equal(await f.run("markScanned('707')"), true); assert.equal(saves, 1);
   f.setTime('2026-10-18T15:00:00Z'); await Promise.all([f.run("markScanned('707')"), f.run("markScanned('707')")]);
-  assert.equal(saves, 1); assert.equal(f.context.inShowScanned.has('707'), true);
+  assert.equal(saves, 1); assert.equal(f.context.vendorDrawScanned.has('707'), true); assert.equal(f.context.inShowScanned.has('707'), false);
   await f.run("markScanned('707')"); assert.equal(saves, 1);
   const save = section(website, '    async function saveVendorScan(', '    async function loadScannedVendors()');
-  assert.match(save, /data[.]in_show_scan === true/);
+  assert.match(save, /data[.]vendor_draw_scan === true/);
   const render = section(website, '    function renderGrid()', '    async function markScanned(id)');
   assert.match(render, /drawButton.hidden = !canReviewVendorDraw\(v.id\)/);
 });

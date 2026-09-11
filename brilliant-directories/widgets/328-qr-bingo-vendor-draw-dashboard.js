@@ -63,6 +63,45 @@
     }
   }
 
+  function savedDrawReadiness(data) {
+    const settings = data && data.settings ? data.settings : {};
+    const drawName = data && (data.app_review_fixture || data.email_test_fixture) ? 'Your test draw' : 'Your draw';
+    if (!text(settings.updated_at) || typeof settings.enabled !== 'boolean') {
+      return { label: 'Draw status not confirmed', summary: 'Refresh required', message: 'Reload your draw to check its saved entry status.', kind: 'waiting', open: false };
+    }
+    if (!settings.enabled) {
+      return { label: `${drawName} is off`, summary: 'Draw off', message: 'Couples can scan your booth, but cannot enter your draw. Turn it on and select Save and continue when you are ready.', kind: 'waiting', open: false };
+    }
+    const setupReady = data.entry_setup_ready === true && data.rules_current === true &&
+      settings.legal_terms_accepted === true && settings.vendor_responsibility_acknowledged === true;
+    if (setupReady && data.entry_open === true && data.entry_status === 'open') {
+      const count = Math.max(0, Math.floor(number(data.entry_count != null ? data.entry_count : data.entrant_count)));
+      return {
+        label: `${drawName} is on`, summary: 'Entries open', kind: 'success', open: true,
+        message: `${count === 0 ? 'Ready and waiting for couples to scan' : 'Couples can scan'} your booth QR code and choose Yes to enter. Entrants will appear here after they confirm.`,
+      };
+    }
+    if (setupReady && data.entry_open === false && data.entry_status === 'scheduled') {
+      const opensAt = text(data.entry_opens_at);
+      return {
+        label: `${drawName} is on — entries scheduled`, summary: 'Entries scheduled', kind: 'waiting', open: false,
+        message: opensAt && Number.isFinite(Date.parse(opensAt))
+          ? `Your setup is saved. Entries open ${formatDate(opensAt)}. Couples can enter after scanning during the entry window.`
+          : 'Your setup is saved. Entries have not opened yet. Check the current Official Rules for the entry schedule.',
+      };
+    }
+    if (data.entry_open === false && data.entry_status === 'closed') {
+      return { label: `${drawName} is on — entries closed`, summary: 'Entries closed', message: 'The entry window has closed. New couples cannot enter. Your existing entrants remain below.', kind: 'waiting', open: false };
+    }
+    if (data.entry_open === false && data.entry_status === 'paused') {
+      return { label: `${drawName} is on — entries paused`, summary: 'Entries paused', message: 'Your setup is saved, but entries are paused by the organizer. Couples cannot enter until entries resume.', kind: 'waiting', open: false };
+    }
+    if (data.entry_status === 'incomplete' || data.rules_current === false || !settings.legal_terms_accepted || !settings.vendor_responsibility_acknowledged) {
+      return { label: 'Draw setup needs attention', summary: 'Review setup', message: 'Review the current rules and prize details, then save again before couples can enter.', kind: 'waiting', open: false };
+    }
+    return { label: `${drawName} is on — entry availability unconfirmed`, summary: 'Check entry status', message: 'Your on/off setting is saved. Reload to check when couples can enter; the entry window has not been confirmed.', kind: 'waiting', open: false };
+  }
+
   function makeElement(tag, className, content) {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -159,6 +198,9 @@
     const materialLock = find('[data-role="material-lock"]');
     const entryCount = find('[data-role="entry-count"]');
     const entryCountLabel = find('[data-role="entry-count-label"]');
+    const drawReadiness = find('[data-role="draw-readiness"]');
+    const drawReadinessLabel = find('[data-role="draw-readiness-label"]');
+    const drawReadinessMessage = find('[data-role="draw-readiness-message"]');
     const selectionPoolCount = find('[data-role="selection-pool-count"]');
     const excludedCount = find('[data-role="excluded-count"]');
     const participationReportButton = find('[data-action="participation-report"]');
@@ -260,17 +302,17 @@
         state.rulesViewedVersion === rulesVersion &&
         state.responsibilityViewedVersion === rulesVersion
       );
-      const entriesOpen = Boolean(settings.enabled && settings.legal_terms_accepted && data.rules_current !== false);
+      const readiness = savedDrawReadiness(data);
+      const entriesOpen = readiness.open;
+      const toggleUnsaved = typeof settings.enabled === 'boolean' && enabled.checked !== settings.enabled;
       const count = Math.max(0, Math.floor(number(data.entry_count != null ? data.entry_count : data.entrant_count)));
 
       wizardState1.textContent = prizeReady ? 'Prize ready' : 'Add details';
-      wizardState2.textContent = entriesOpen && !enabled.checked
+      wizardState2.textContent = settings.enabled && !enabled.checked
         ? 'Ready to close'
-        : entriesOpen
-          ? 'Entries open'
-        : acceptanceReady && enabled.checked
+        : toggleUnsaved && acceptanceReady && enabled.checked
           ? 'Ready to save'
-          : 'Not open yet';
+          : readiness.summary;
       wizardState3.textContent = `${count} ${count === 1 ? 'entry' : 'entries'}`;
       wizardState4.textContent = text(drawStatusLabel.textContent) || 'Choose a winner';
 
@@ -283,13 +325,22 @@
       });
 
       saveButton.textContent = 'Save and continue';
+      drawReadinessLabel.textContent = readiness.label;
+      drawReadinessMessage.textContent = readiness.message + (toggleUnsaved
+        ? ' Your on/off change is not saved yet. Select Save and continue to apply it.' : '');
+      drawReadiness.classList.toggle('is-success', readiness.kind === 'success');
+      drawReadiness.classList.toggle('is-waiting', readiness.kind !== 'success');
       const enabledHelp = enabled.closest('.ww-qrvd-switch').querySelector('small');
       if (enabledHelp) {
         enabledHelp.textContent = enabled.checked
-          ? entriesOpen
+          ? toggleUnsaved
+            ? 'Select Save and continue to turn your draw on. Couples can enter while the scanner is open.'
+            : entriesOpen
             ? 'Couples can now choose to enter your draw.'
-            : 'Save and continue to let couples enter your draw.'
-          : 'Off: couples can scan your booth, but cannot enter your draw.';
+            : readiness.message
+          : toggleUnsaved
+            ? 'Select Save and continue to turn your draw off. Your saved setting is still on.'
+            : 'Off: couples can scan your booth, but cannot enter your draw.';
       }
     }
 
@@ -1087,11 +1138,14 @@
       const combinedAcceptance = Boolean(requestLegalAccepted && rulesReviewed);
       const submittedDraftSignature = currentDraftSignature();
       const submittedPrizeValue = prizeValue.value;
+      const submittedEnabled = Boolean(enabled.checked);
+      const submittedEvent = text(state.data.event_key);
+      const submittedVendor = text(state.data.vendor && state.data.vendor.id);
       setBusy(true);
       setStatus('Saving your draw…');
       try {
         const data = await request(root, 'vendor_raffle_update', {
-          enabled: Boolean(enabled.checked),
+          enabled: submittedEnabled,
           prize_title: requestPrizeTitle,
           prize_description: requestDescription,
           prize_approx_value_cad: requestPrizeValue,
@@ -1106,7 +1160,9 @@
           client_platform: 'website',
           settings_updated_at: text(state.data.settings && state.data.settings.updated_at),
         });
-        if (!data || !data.settings || !text(data.settings.updated_at)) {
+        if (!data || data.ok !== true || !data.settings || !text(data.settings.updated_at) ||
+          data.settings.enabled !== submittedEnabled || text(data.event_key) !== submittedEvent ||
+          text(data.vendor && data.vendor.id) !== submittedVendor) {
           throw new Error('The save could not be confirmed. Please try again.');
         }
         const hasNewerEdits = currentDraftSignature() !== submittedDraftSignature;
@@ -1119,9 +1175,7 @@
         setStatus(
           hasNewerEdits
             ? 'Saved your earlier changes. Save again to keep your latest edits.'
-            : data.settings.enabled
-              ? 'Saved. Your draw is open.'
-              : 'Saved. Your draw is closed for now.',
+            : `Saved. ${savedDrawReadiness(data).label}. ${savedDrawReadiness(data).message}`,
           'success'
         );
       } catch (error) {

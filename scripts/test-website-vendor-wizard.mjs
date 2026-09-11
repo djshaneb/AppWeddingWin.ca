@@ -67,6 +67,8 @@ function dashboard(patch = {}) {
   return {
     ok: true, vendor: { id: 'fictional-vendor', name: 'Test Vendor' },
     rules_version: rulesVersion, rules_current: true,
+    entry_setup_ready: false, entry_open: false, entry_status: 'disabled',
+    entry_opens_at: '2026-09-20T04:00:00Z', entry_closes_at: '2026-09-20T19:00:00Z',
     terms_url: 'https://www.weddingwin.ca/qr-bingo-vendor-draw-rules',
     vendor_responsibility_disclosure: 'Fictional unit-test responsibility text.',
     material_terms_locked: false, prize_details_locked: false, event_key: 'unit-test-event', draws: [], entry_count: 0,
@@ -81,7 +83,10 @@ function dashboard(patch = {}) {
   };
 }
 function responseFor(body, settingsPatch = {}, patch = {}) {
-  return dashboard({ ...patch, settings: {
+  return dashboard({
+    entry_setup_ready: body.enabled && body.legal_terms_accepted && body.vendor_responsibility_acknowledged,
+    entry_open: body.enabled && body.legal_terms_accepted && body.vendor_responsibility_acknowledged,
+    entry_status: body.enabled ? 'open' : 'disabled', ...patch, settings: {
     ...dashboard().settings, enabled: body.enabled,
     prize_title: body.prize_title, prize_description: normalized(body.prize_description),
     prize_approx_value_cad: body.prize_approx_value_cad, max_winners: body.max_winners,
@@ -98,7 +103,7 @@ function deferred() {
 }
 const commonFunctions = [
   'text', 'number', 'prizeDetailsLocked', 'firstLine', 'formatPrizeDraftDescription',
-  'samePrizeWording', 'formatDate', 'trustedWeddingWinUrl', 'makeElement',
+  'samePrizeWording', 'formatDate', 'trustedWeddingWinUrl', 'savedDrawReadiness', 'makeElement',
   'currentDraftSignature', 'activeDraws', 'verifiedDraws', 'configuredWinnerCount',
   'updateRulesReviewProgress', 'updateWizardSummary', 'setStatus', 'setBusy',
   'validateDraft', 'renderDashboard', 'save',
@@ -125,6 +130,7 @@ function harness(options = {}) {
     'legalAccepted', 'vendorResponsibilityDisclosure', 'vendorResponsibilityDetails',
     'rulesLink', 'acceptanceState', 'eligibility', 'entryClose', 'drawAt', 'odds',
     'saveButton', 'reloadButton', 'materialLock', 'entryCount', 'entryCountLabel',
+    'drawReadiness', 'drawReadinessLabel', 'drawReadinessMessage',
     'selectionPoolCount', 'excludedCount', 'participationReportButton', 'entriesReloadButton',
     'reviewConfirmButton', 'reviewReplaceButton', 'drawStatusLabel', 'drawStatus',
     'drawButton', 'emailNotice', 'wizardState1', 'wizardState2', 'wizardState3', 'wizardState4',
@@ -205,7 +211,8 @@ test('closed Save and continue preserves multiline/currency and advances once to
   assert.equal(c.state.data.settings.updated_at, after);
   assert.equal(c.state.currentStep, 3);
   assert.equal(navigations.length, 1);
-  assert.equal(c.status.textContent, 'Saved. Your draw is closed for now.');
+  assert.match(c.status.textContent, /^Saved\. Your draw is off\./);
+  assert.equal(c.drawReadinessLabel.textContent, 'Your draw is off');
 });
 
 test('one checkbox accepts all required current rules; opening still needs the checkbox and valid prize', async () => {
@@ -217,7 +224,7 @@ test('one checkbox accepts all required current rules; opening still needs the c
   c.legalAccepted.checked = true;
   c.changeAgreement();
   assert.equal(c.acceptanceState.textContent, 'Ready to save');
-  assert.equal(c.enabled.helpNode.textContent, 'Save and continue to let couples enter your draw.');
+  assert.match(c.enabled.helpNode.textContent, /^Select Save and continue to turn your draw on/);
   c.prizeValue.value = '0';
   assert.equal(c.validateDraft().step, 1);
   c.prizeValue.value = '500.00';
@@ -230,7 +237,114 @@ test('one checkbox accepts all required current rules; opening still needs the c
   assert.equal(calls[0].body.vendor_responsibility_disclosure, c.state.data.vendor_responsibility_disclosure);
   assert.equal(c.acceptanceState.textContent, 'Agreed');
   assert.equal(c.enabled.helpNode.textContent, 'Couples can now choose to enter your draw.');
+  assert.match(c.status.textContent, /^Saved\. Your draw is on\. Ready and waiting for couples to scan/);
+  assert.equal(c.drawReadinessLabel.textContent, 'Your draw is on');
+  assert.match(c.drawReadinessMessage.textContent, /choose Yes to enter/);
   assert.equal(c.state.currentStep, 3);
+});
+
+test('turning the draft on waits for a confirmed save before showing ready for entrants', async () => {
+  const waiting = deferred();
+  const { context: c, calls } = harness({ request: () => waiting.promise });
+  c.renderDashboard(dashboard());
+  c.enabled.checked = true;
+  c.legalAccepted.checked = true;
+  c.changeAgreement();
+  assert.equal(calls.length, 0);
+  assert.equal(c.drawReadinessLabel.textContent, 'Your draw is off');
+  assert.match(c.drawReadinessMessage.textContent, /on\/off change is not saved/);
+  const saving = c.save();
+  assert.equal(c.status.textContent, 'Saving your draw…');
+  assert.equal(c.drawReadinessLabel.textContent, 'Your draw is off');
+  assert.doesNotMatch(c.drawReadinessMessage.textContent, /Ready and waiting/);
+  waiting.resolve(responseFor(calls[0].body));
+  await saving;
+  assert.equal(c.drawReadinessLabel.textContent, 'Your draw is on');
+  assert.match(c.drawReadinessMessage.textContent, /Ready and waiting for couples to scan/);
+  assert.equal(c.drawReadiness.classList.contains('is-success'), true);
+  assert.equal(c.wizardState2.textContent, 'Entries open');
+});
+
+test('saved scheduled, closed and paused draws never promise immediate entry', async () => {
+  for (const [entryStatus, wording] of [
+    ['scheduled', /Entries open .*September 20, 2026/],
+    ['closed', /entry window has closed/],
+    ['paused', /paused by the organizer/],
+  ]) {
+    const { context: c } = harness({ request: (_, body) => responseFor(body, {}, {
+      entry_setup_ready: entryStatus !== 'paused', entry_open: false, entry_status: entryStatus,
+      rules_current: entryStatus !== 'paused',
+    }) });
+    c.enabled.checked = true;
+    c.legalAccepted.checked = true;
+    c.changeAgreement();
+    await c.save();
+    assert.match(c.status.textContent, /^Saved\. Your draw is on/);
+    assert.match(c.drawReadinessMessage.textContent, wording);
+    assert.match(c.wizardState2.textContent, new RegExp(entryStatus, 'i'));
+    assert.doesNotMatch(c.status.textContent + c.enabled.helpNode.textContent + c.drawReadinessMessage.textContent, /Ready and waiting|can now choose/);
+    assert.equal(c.drawReadiness.classList.contains('is-success'), false);
+  }
+});
+
+test('missing or contradictory readiness cannot turn a saved setting into a ready claim', () => {
+  const on = responseFor({ enabled: true, legal_terms_accepted: true, vendor_responsibility_acknowledged: true });
+  for (const patch of [
+    { entry_open: undefined }, { entry_open: 'true' }, { entry_status: undefined },
+    { entry_setup_ready: undefined }, { entry_setup_ready: false },
+    { entry_status: 'scheduled' }, { entry_status: 'closed' }, { entry_status: 'disabled' },
+    { rules_current: undefined }, { rules_current: false },
+    { settings: { ...on.settings, vendor_responsibility_acknowledged: false } },
+  ]) {
+    const { context: c } = harness();
+    c.renderDashboard({ ...on, ...patch });
+    assert.equal(c.savedDrawReadiness(c.state.data).open, false, JSON.stringify(patch));
+    assert.doesNotMatch(c.drawReadinessMessage.textContent, /Ready and waiting|Couples can scan/);
+    assert.notEqual(c.wizardState2.textContent, 'Entries open');
+  }
+});
+
+test('newer unsaved toggle survives the earlier response and remains clearly unsaved', async () => {
+  const waiting = deferred();
+  const { context: c, calls, navigations } = harness({ request: () => waiting.promise });
+  c.enabled.checked = true; c.legalAccepted.checked = true; c.changeAgreement();
+  const saving = c.save();
+  c.enabled.checked = false; c.updateWizardSummary();
+  waiting.resolve(responseFor(calls[0].body));
+  await saving;
+  assert.equal(c.enabled.checked, false);
+  assert.equal(c.state.data.settings.enabled, true);
+  assert.match(c.status.textContent, /earlier changes.*latest edits/);
+  assert.match(c.drawReadinessMessage.textContent, /on\/off change is not saved/);
+  assert.match(c.enabled.helpNode.textContent, /saved setting is still on/);
+  assert.equal(navigations.length, 0);
+});
+
+test('foreign, unsuccessful or mismatched save acknowledgements cannot show activation success', async () => {
+  for (const patch of [
+    { ok: undefined }, { ok: false }, { event_key: 'different-event' },
+    { vendor: { id: 'different-vendor' } }, { vendor: undefined },
+    { settings: { ...dashboard().settings, enabled: true, updated_at: after } },
+  ]) {
+    const { context: c, navigations } = harness({ request: (_, body) => ({ ...responseFor(body), ...patch }) });
+    await c.save();
+    assert.equal(c.status.classList.contains('is-error'), true, JSON.stringify(patch));
+    assert.equal(c.state.data.settings.updated_at, before);
+    assert.equal(navigations.length, 0);
+  }
+});
+
+test('confirmed reload keeps the readiness notice and stops saying waiting once entrants exist', () => {
+  const { context: c } = harness();
+  const on = responseFor({ enabled: true, legal_terms_accepted: true, vendor_responsibility_acknowledged: true });
+  c.renderDashboard(on);
+  assert.match(c.drawReadinessMessage.textContent, /Ready and waiting/);
+  c.renderDashboard({ ...on, entry_count: 3 });
+  assert.match(c.drawReadinessMessage.textContent, /^Couples can scan/);
+  assert.doesNotMatch(c.drawReadinessMessage.textContent, /waiting/);
+  c.renderDashboard({ ...on, app_review_fixture: true });
+  assert.equal(c.drawReadinessLabel.textContent, 'Your test draw is on');
+  assert.match(template, /data-role="draw-readiness" role="status" aria-live="polite" aria-atomic="true"/);
 });
 
 test('unavailable disclosures, untrusted links and a changed rules version cannot open a draw', () => {

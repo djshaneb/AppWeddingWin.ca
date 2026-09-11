@@ -116,7 +116,7 @@ Deno.test(
     assert(
       includesIgnoringWhitespace(
         source,
-        'const canReviewVendorDraw = isScanned && (isolatedFixtureActive || inShowScannedVendorIds.has(vendor.id)) && vendorDrawsEnabled && participationNoticeAccepted;',
+        'const canReviewVendorDraw = isScanned && (isolatedFixtureActive || vendorDrawScannedVendorIds.has(vendor.id)) && vendorDrawsEnabled && participationNoticeAccepted;',
       ) &&
         source.includes('disabled={!canReviewVendorDraw || savingBingo}') &&
         includesIgnoringWhitespace(

@@ -1,3 +1,4 @@
+import { qrBingoEffectiveEntryDisclosure, QR_ENTRY_ACCESS_POLICY_VERSION, QR_ENTRY_ACCESS_POLICY_DISCLOSURE, QR_PRIOR_BOOTH_SENTENCE } from "./qr_bingo_entry_access.ts";
 import { normalizeContactEmail } from "./contact_email.ts";
 
 function assert(value: unknown, message: string): asserts value {
@@ -66,7 +67,7 @@ async function endpointHarness(endpoint: string) {
     type MemberEmailVerification = any; type RaffleEntry = any;
     type DrawEmailClaim = any; type DrawEmailChannel = any;
     export default function(deps: any) {
-      const { normalizeContactEmail, isEmailTestFixture, cleanText,
+      const { qrBingoEffectiveEntryDisclosure, QR_ENTRY_ACCESS_POLICY_VERSION, QR_ENTRY_ACCESS_POLICY_DISCLOSURE, normalizeContactEmail, isEmailTestFixture, cleanText,
         isApplePrivateRelayEmail, BD_API_BASE_URL, qrBingoConfig,
         getSettings, loadCurrentVendorOfferSnapshot, requireAdmin,
         archivedLegacyEntryIds, entryHasCurrentConsent, isSettingsEnterable,
@@ -105,7 +106,7 @@ async function endpointHarness(endpoint: string) {
     vendor_offer_version: "current",
     max_winners: 1,
     entry_closes_at: "2999-01-01T00:00:00.000Z",
-    participant_responsibility_disclosure_text: "Current disclosure",
+    participant_responsibility_disclosure_text: QR_PRIOR_BOOTH_SENTENCE,
     rules_version: "current",
     eligibility_region: "Canada",
   };
@@ -134,6 +135,7 @@ async function endpointHarness(endpoint: string) {
     }),
   });
   const api = module.default({
+    qrBingoEffectiveEntryDisclosure, QR_ENTRY_ACCESS_POLICY_VERSION, QR_ENTRY_ACCESS_POLICY_DISCLOSURE,
     normalizeContactEmail,
     isEmailTestFixture: (fixture: any) =>
       Boolean(fixture?.event_key?.startsWith("email-test-")),
@@ -196,7 +198,7 @@ async function endpointHarness(endpoint: string) {
     promotion_responsibility_acknowledged: true,
     draw_administration_contact_share_acknowledged: true,
     vendor_marketing_consent_acknowledged: true,
-    participant_responsibility_disclosure: "Current disclosure",
+    participant_responsibility_disclosure: qrBingoEffectiveEntryDisclosure(QR_PRIOR_BOOTH_SENTENCE),
   };
   const draw = (email: string) => ({
     id: "offline-draw",

@@ -22,11 +22,11 @@ Deno.test("early Bingo progress is never upgraded into draw proof", () => {
   }, scanned)), '["show"]');
 });
 
-Deno.test("both Edge endpoints require fresh in-show evidence for draw offers and entries", async () => {
+Deno.test("both Edge endpoints require trusted qualifying scan evidence for draw offers and entries", async () => {
   for (const name of ["bd-qr-bingo-sync", "bd-qr-bingo-vendor-sync"]) {
     const source = await Deno.readTextFile(new URL("../" + name + "/index.ts", import.meta.url));
-    equal((source.match(/if \(!inShowScanned.includes\(vendor.id\)\)/g) || []).length, 2);
-    equal(source.includes("progress.inShowScanned.includes(matchedVendor.id)"), true);
+    equal((source.match(/if \(!vendorDrawScanned.includes\(vendor.id\)\)/g) || []).length, 2);
+    equal(source.includes("progress.vendorDrawScanned.includes(matchedVendor.id)"), true);
     equal(source.includes("in_show_scanned: inShowScanned"), true);
     equal(source.includes("if (!qrBingoScannerWindowOpen(qrBingoConfig()))"), true);
   }

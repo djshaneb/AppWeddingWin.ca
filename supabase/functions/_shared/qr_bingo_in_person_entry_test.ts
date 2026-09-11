@@ -167,7 +167,7 @@ Deno.test("website refreshes its full event snapshot once after an exact stale-c
   );
 });
 
-Deno.test("Edge uses the operational scanner gate without opening draw entry before show hours", async () => {
+Deno.test("Edge entry follows authorized scanner access while preserving separate historical show proof", async () => {
   const sources = await Promise.all(syncUrls.map((url) => Deno.readTextFile(url)));
   for (const source of sources) {
     const scan = section(
@@ -207,25 +207,25 @@ Deno.test("Edge uses the operational scanner gate without opening draw entry bef
         scan.includes('code: "show_scan_window_closed"') &&
         scan.indexOf("if (!qrBingoScannerWindowOpen(qrBingoConfig()))") <
           scan.indexOf("const scanResult = await postQrAction(") &&
-        scan.includes("const raffleOffer = productionShowScanWindowOpen()"),
+        scan.includes("const raffleOffer = qrBingoScannerWindowOpen(qrBingoConfig())"),
       "production scan must fail before the website write while the exact isolated fixture bypass remains available",
     );
     for (const [label, actionBranch] of [["offer", offer], ["opt-in", optIn]]) {
       assert(
         actionBranch.includes(
-          "!(reviewFixture && isReviewCouple) && !productionShowScanWindowOpen()",
+          "!(reviewFixture && isReviewCouple) && !qrBingoScannerWindowOpen(qrBingoConfig())",
         ) &&
           actionBranch.includes('code: "show_entry_window_closed"') &&
           actionBranch.includes("}, 403);") &&
-          actionBranch.indexOf("!productionShowScanWindowOpen()") <
+          actionBranch.indexOf("!qrBingoScannerWindowOpen(qrBingoConfig())") <
             actionBranch.indexOf("const vendorId = String(body?.vendor_id"),
-        `production ${label} must fail before vendor entry processing outside show hours`,
+        `production ${label} must fail before vendor entry processing outside authorized scanner access`,
       );
     }
   }
 });
 
-Deno.test("native scanner separates operational opening from unchanged show and draw boundaries", async () => {
+Deno.test("native entry follows authorized scanning while preserving show and winner-selection boundaries", async () => {
   const app = await Deno.readTextFile(appUrl);
   const configType = section(
     app,
@@ -256,19 +256,19 @@ Deno.test("native scanner separates operational opening from unchanged show and 
       normalizer.includes("typeof scanOpenEarly !== 'boolean'"),
     "native event configuration must retain show boundaries and validate the separate scanner controls",
   );
-  const scannerGate = section(app, "function isQrBingoScanWindowOpen(", "function isQrBingoInShowWindow(");
-  const drawGate = section(app, "function isQrBingoInShowWindow(", "function normalizeQrBingoEventConfig(");
+  const scannerGate = section(app, "function isQrBingoScanWindowOpen(", "function normalizeQrBingoEventConfig(");
   assert(
     scannerGate.includes("config.scan_enabled !== true") &&
       scannerGate.includes("Date.parse(config.scan_opens_at)") &&
       scannerGate.includes("Date.parse(config.entry_closes_at)") &&
       scannerGate.includes("nowMs < closesAt") &&
       scannerGate.includes("config.scan_open_early === true || nowMs >= opensAt") &&
-      drawGate.includes("Date.parse(config.history_starts_at)") &&
-      drawGate.includes("nowMs >= startsAt && nowMs < closesAt") &&
-      !drawGate.includes("scan_open_early") &&
+      app.includes("isQrBingoScanWindowOpen(nextEventConfig, Date.now())") &&
+      app.includes("nextVendorDrawScannedIds.has(vendor.id)") &&
+      app.includes("vendorDrawScannedVendorIds.has(raffleOffer.vendor_id)") &&
+      !app.includes("isQrBingoInShowWindow(") &&
       !app.includes("scanClosesAt - (4 * 60 * 60 * 1000)"),
-    "native early scanning must respect pause/close while the vendor draw keeps its original in-show opening",
+    "native vendor entry must follow authorized scanning with server proof and preserve pause/close boundaries",
   );
 });
 
@@ -380,7 +380,7 @@ Deno.test("vendor contact history stays visible while only current proven QR ent
       "'reacceptance_required' | 'in_person_scan_required'",
     ) &&
       app.includes("? 'Needs to enter again'") &&
-      app.includes("? 'Needs a show scan'") &&
+      app.includes("? 'Needs a QR scan'") &&
       app.includes("const canRestoreToPool = poolStatus === 'excluded';") &&
       dashboard.includes(
         "const reacceptanceRequired = poolStatus === 'reacceptance_required';",

@@ -220,7 +220,7 @@ Deno.test("stale vendor settings return before the atomic compare RPC", async ()
   }
 });
 
-Deno.test("a repeat camera scan obtains in-show proof while fixture replay reopens the optional draw", async () => {
+Deno.test("a repeat camera scan obtains current entry proof while fixture replay reopens the optional draw", async () => {
   const app = await Deno.readTextFile(
     new URL("../../../app/(tabs)/index.tsx", import.meta.url),
   );
@@ -247,11 +247,11 @@ Deno.test("a repeat camera scan obtains in-show proof while fixture replay reope
     match >= 0 && duplicate > match && proofSave > duplicate &&
       reopen > proofSave && branchEnd > reopen && save > branchEnd &&
       includesIgnoringWhitespace(branch,
-        "if (!isolatedFixtureActive && isQrBingoInShowWindow(eventConfig, Date.now()))") &&
+        "if (!isolatedFixtureActive && isQrBingoScanWindowOpen(eventConfig, Date.now()))") &&
       includesIgnoringWhitespace(branch,
         "else if (eventVendorDrawsEnabled && isolatedFixtureActive)") &&
       branch.trimEnd().endsWith("return;"),
-    "production repeat scans must obtain paired in-show proof, isolated repeats must reopen the draw, and both must return before the new-visit branch",
+    "production repeat scans must obtain current entry proof, isolated repeats must reopen the draw, and both must return before the new-visit branch",
   );
 });
 
@@ -269,7 +269,7 @@ Deno.test("a QR check-in can offer a separate optional vendor draw entry", async
   assert(
     includesIgnoringWhitespace(
       app,
-      "if (nextEventConfig?.vendor_draws_enabled && (isolatedFixtureActive || (isQrBingoInShowWindow(nextEventConfig, Date.now()) && nextInShowScannedIds.has(vendor.id))) && data.raffle_offer)",
+      "if (nextEventConfig?.vendor_draws_enabled && (isolatedFixtureActive || (isQrBingoScanWindowOpen(nextEventConfig, Date.now()) && nextVendorDrawScannedIds.has(vendor.id))) && data.raffle_offer)",
     ) &&
       app.includes("setRaffleOffer(data.raffle_offer)") &&
       includesIgnoringWhitespace(

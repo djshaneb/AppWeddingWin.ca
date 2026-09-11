@@ -444,13 +444,13 @@ Deno.test("authenticated offers are minimized snapshots, public discovery is ret
       assert(optIn.includes(required), `QR opt-in is missing ${required}`);
     }
     assert(
-      /promotion_disclosure_text:\s*currentSnapshot!?\.participant_responsibility_disclosure_text/
+      /promotion_disclosure_text:\s*qrBingoEffectiveEntryDisclosure\(currentSnapshot!?\.participant_responsibility_disclosure_text\)/
         .test(optIn) &&
         optIn.includes("body.participant_responsibility_disclosure") &&
         optIn.includes(
           "currentSnapshot!.participant_responsibility_disclosure_text",
         ),
-      "QR opt-in must require and copy the exact immutable participant disclosure",
+      "QR opt-in must require the exact canonical amendment of the immutable participant disclosure",
     );
     assert(
       /staleVendorOffer\s*\? 409/.test(source) &&

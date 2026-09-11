@@ -1,3 +1,4 @@
+import { QR_ENTRY_ACCESS_POLICY_VERSION, QR_ENTRY_ACCESS_POLICY_DISCLOSURE, qrBingoEffectiveEntryDisclosure, qrBingoVendorDrawScannedIds, qrBingoEntryReadiness, qrBingoEntryOpensAt } from "../_shared/qr_bingo_entry_access.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { qrBingoScannerWindowOpen, qrBingoInShowScannedIds } from "../_shared/qr_bingo_scan_schedule.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
@@ -355,6 +356,12 @@ type RaffleEntry = {
   entry_method?: "qr_scan_opt_in" | "alternate_free_entry";
   in_show_scan_verified?: boolean | null;
   in_show_scan_verified_at?: string | null;
+  vendor_draw_scan_verified?: boolean | null;
+  vendor_draw_scan_verified_at?: string | null;
+  vendor_draw_scan_config_revision?: number | null;
+  entry_access_policy_version?: string | null;
+  entry_access_policy_disclosure?: string | null;
+  entry_access_applied_at?: string | null;
   promotion_responsibility_acknowledged?: boolean;
   promotion_disclosure_text?: string;
   promotion_responsibility_acknowledged_at?: string;
@@ -1240,7 +1247,8 @@ async function getFreshScanned(cookieJar: Map<string, string>, page: QrPage) {
   // Only the trusted website can establish an in-show booth visit. An early
   // Bingo scan (or a failed/legacy progress response) is not draw-entry proof.
   const inShowScanned = qrBingoInShowScannedIds(serverScanned, scanned);
-  return { scanned, inShowScanned };
+  const vendorDrawScanned = qrBingoVendorDrawScannedIds(serverScanned, scanned);
+  return { scanned, inShowScanned, vendorDrawScanned };
 }
 
 async function getSettings(
@@ -1286,7 +1294,7 @@ async function loadCurrentVendorOfferSnapshot(settings: RaffleSettings | null) {
   );
 }
 
-function offerSnapshotIsEnterable(snapshot: VendorOfferSnapshot | null) {
+function offerSnapshotHasAcceptedTerms(snapshot: VendorOfferSnapshot | null) {
   return Boolean(
     snapshot?.enabled &&
       snapshot.offer_enterable &&
@@ -1294,9 +1302,13 @@ function offerSnapshotIsEnterable(snapshot: VendorOfferSnapshot | null) {
       cleanText(snapshot.participant_responsibility_disclosure_text, 2000) &&
       offerVersionToken(snapshot.vendor_offer_version) &&
       raffleMaxWinners(snapshot.max_winners) === Number(snapshot.max_winners) &&
-      validPromotionTime(String(snapshot.entry_closes_at || "")) &&
-      Date.now() < new Date(String(snapshot.entry_closes_at)).getTime(),
+      validPromotionTime(String(snapshot.entry_closes_at || "")),
   );
+}
+
+function offerSnapshotIsEnterable(snapshot: VendorOfferSnapshot | null) {
+  return offerSnapshotHasAcceptedTerms(snapshot) &&
+    Date.now() < new Date(String(snapshot?.entry_closes_at)).getTime();
 }
 
 async function archivedLegacyEntryIds(eventKey: string, vendorId: string) {
@@ -1710,9 +1722,13 @@ function entryHasCurrentConsent(
 function entryHasProductionInPersonProof(
   entry: Partial<RaffleEntry> | null | undefined,
 ) {
-  return entry?.entry_method === "qr_scan_opt_in" &&
-    entry.in_show_scan_verified === true &&
-    Boolean(entry.in_show_scan_verified_at);
+  return entry?.entry_method === "qr_scan_opt_in" && (
+    (entry.in_show_scan_verified === true && Boolean(entry.in_show_scan_verified_at)) ||
+    (entry.vendor_draw_scan_verified === true && Boolean(entry.vendor_draw_scan_verified_at) &&
+      Number.isSafeInteger(entry.vendor_draw_scan_config_revision) && Number(entry.vendor_draw_scan_config_revision) > 0 &&
+      entry.entry_access_policy_version === QR_ENTRY_ACCESS_POLICY_VERSION &&
+      entry.entry_access_policy_disclosure === QR_ENTRY_ACCESS_POLICY_DISCLOSURE && Boolean(entry.entry_access_applied_at))
+  );
 }
 function vendorVisibleDraw(
   draw: RaffleDraw,
@@ -1952,9 +1968,9 @@ async function loadVendorEntryPool(
       ? "previous_winner"
       : "included";
     const poolStatusReason = poolStatus === "reacceptance_required"
-      ? "This historical entry remains in the contact list, but the couple must scan this booth and accept the current in-person entry rules before selection."
+      ? "This historical entry remains in the contact list, but the couple must scan this vendor’s QR code and accept the current entry terms before selection."
       : poolStatus === "in_person_scan_required"
-      ? "This historical entry remains in the contact list but has no verified in-show booth scan, so it cannot be selected."
+      ? "This historical entry remains in the contact list but has no verified qualifying QR scan, so it cannot be selected."
       : poolStatus === "excluded"
       ? cleanText(state?.exclusion_reason, 500)
       : poolStatus === "already_selected"
@@ -2304,6 +2320,8 @@ async function buildRaffleOffer(
   if (!isSettingsEnterable(settings, isolatedFixture)) return null;
   const snapshot = await loadCurrentVendorOfferSnapshot(settings);
   if (!offerSnapshotIsEnterable(snapshot)) return null;
+  const effectiveDisclosure = qrBingoEffectiveEntryDisclosure(snapshot!.participant_responsibility_disclosure_text);
+  if (!effectiveDisclosure) return null;
 
   const db = requireAdmin();
   const { data: existing, error } = await db
@@ -2342,14 +2360,14 @@ async function buildRaffleOffer(
     prize_description: snapshot!.prize_description,
     prize_approx_value_cad: positiveCadValue(snapshot!.prize_approx_value_cad),
     eligibility_region: snapshot!.eligibility_region,
-    entry_opens_at: snapshot!.history_starts_at,
+    entry_opens_at: qrBingoEntryOpensAt(qrBingoConfig()),
     entry_closes_at: snapshot!.entry_closes_at,
     draw_at: snapshot!.draw_at,
     odds_basis: snapshot!.odds_basis,
     no_purchase_required: snapshot!.no_purchase_required,
     skill_testing_question_required: snapshot!.skill_testing_question_required,
     entry_limit:
-      "One valid in-show QR entry per eligible couple per vendor draw.",
+      "One valid QR entry per eligible couple per vendor draw.",
     eligibility_exclusions: ELIGIBILITY_EXCLUSIONS,
     terms_url: snapshot!.official_rules_url,
     consent_version: snapshot!.rules_version,
@@ -2364,13 +2382,14 @@ async function buildRaffleOffer(
     co_sponsor_name: snapshot!.co_sponsor_name,
     prize_provider_name: snapshot!.prize_provider_name,
     apple_non_sponsor_disclaimer: APPLE_NON_SPONSOR_DISCLAIMER,
-    participant_responsibility_disclosure:
-      snapshot!.participant_responsibility_disclosure_text,
+    participant_responsibility_disclosure: effectiveDisclosure,
+    entry_access_policy_version: QR_ENTRY_ACCESS_POLICY_VERSION,
+    entry_access_policy_disclosure: QR_ENTRY_ACCESS_POLICY_DISCLOSURE,
   };
 }
 
 function consentText(snapshot: VendorOfferSnapshot) {
-  return `I reviewed and agree to version ${snapshot.rules_version} of the official rules. I authorize Wedding Win Inc. to process my entry, reconcile duplicates and prevent abuse, and share my name, email address, phone number, wedding date, and entry/consent evidence with ${snapshot.vendor_name}. I agree that ${snapshot.vendor_name} may use those details to administer this specific draw and contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time. ${snapshot.participant_responsibility_disclosure_text}`;
+  return `I reviewed and agree to version ${snapshot.rules_version} of the official rules. I authorize Wedding Win Inc. to process my entry, reconcile duplicates and prevent abuse, and share my name, email address, phone number, wedding date, and entry/consent evidence with ${snapshot.vendor_name}. I agree that ${snapshot.vendor_name} may use those details to administer this specific draw and contact me with wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time. ${qrBingoEffectiveEntryDisclosure(snapshot.participant_responsibility_disclosure_text)} ${QR_ENTRY_ACCESS_POLICY_DISCLOSURE}`;
 }
 
 function drawAdministrationContactShareConsentText(
@@ -2389,6 +2408,7 @@ async function optInToRaffle(
   body: Record<string, unknown>,
   eventKey = qrBingoConfig().event_key,
   isolatedFixture?: IsolatedRaffleFixture | null,
+  hasInShowScanProof = false,
 ) {
   const contactProfile = qrContactProfile(user);
   if (!contactProfile.complete) {
@@ -2506,7 +2526,7 @@ async function optInToRaffle(
   if (
     typeof body.participant_responsibility_disclosure !== "string" ||
     body.participant_responsibility_disclosure !==
-      currentSnapshot!.participant_responsibility_disclosure_text
+      qrBingoEffectiveEntryDisclosure(currentSnapshot!.participant_responsibility_disclosure_text)
   ) {
     return {
       entered: false,
@@ -2545,11 +2565,17 @@ async function optInToRaffle(
     vendor_marketing_consented_at: acceptedAt,
     vendor_marketing_consent_text: vendorMarketingConsentText(currentSnapshot!),
     entry_method: "qr_scan_opt_in",
-    in_show_scan_verified: true,
-    in_show_scan_verified_at: acceptedAt,
+    in_show_scan_verified: hasInShowScanProof ? true : null,
+    in_show_scan_verified_at: hasInShowScanProof ? acceptedAt : null,
+    vendor_draw_scan_verified: true,
+    vendor_draw_scan_verified_at: acceptedAt,
+    vendor_draw_scan_config_revision: qrBingoConfig().revision,
+    entry_access_policy_version: QR_ENTRY_ACCESS_POLICY_VERSION,
+    entry_access_policy_disclosure: QR_ENTRY_ACCESS_POLICY_DISCLOSURE,
+    entry_access_applied_at: acceptedAt,
     promotion_responsibility_acknowledged: true,
     promotion_disclosure_text:
-      currentSnapshot!.participant_responsibility_disclosure_text,
+      qrBingoEffectiveEntryDisclosure(currentSnapshot!.participant_responsibility_disclosure_text),
     promotion_responsibility_acknowledged_at: acceptedAt,
     promotion_responsibility_version: currentSnapshot!.rules_version,
     consent_version: currentSnapshot!.rules_version,
@@ -2688,6 +2714,12 @@ async function getVendorRaffleDashboard(
   isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
   const settings = await ensureSettings(vendor, eventKey);
+  const currentOffer = await loadCurrentVendorOfferSnapshot(settings);
+  const entryReadiness = qrBingoEntryReadiness(
+    { ...qrBingoConfig(), entry_closes_at: String(settings.entry_closes_at || qrBingoConfig().entry_closes_at) },
+    settings.enabled === true, isSettingsEnterable(settings, isolatedFixture) && offerSnapshotHasAcceptedTerms(currentOffer) && Boolean(qrBingoEffectiveEntryDisclosure(currentOffer?.participant_responsibility_disclosure_text)),
+    isolatedFixtureMatchesSettings(settings, isolatedFixture),
+  );
   const entryPool = await loadVendorEntryPool(
     vendor,
     eventKey,
@@ -2773,6 +2805,7 @@ async function getVendorRaffleDashboard(
     // remain in the database audit history. The separately audited CSV action remains
     // the only way to retrieve all currently consented entrants.
     entries: [],
+    ...entryReadiness,
     entry_count: entryPool.entry_count,
     included_entry_count: entryPool.included_entry_count,
     excluded_entry_count: entryPool.excluded_entry_count,
@@ -3246,7 +3279,7 @@ async function sendDrawEmails(
     profileLine,
     "",
     "Why you received this",
-    "You opted in after scanning this vendor's QR code at the wedding show.",
+    "You opted in after scanning this vendor's QR code during authorized QR Bingo scanning.",
     "",
     "WeddingWin.ca",
   ].join("\n");
@@ -3904,7 +3937,7 @@ Deno.serve(async (request) => {
             ok: false,
             code: "offsite_entry_retired",
             error:
-              "Vendor draws are available only to eligible couples who visit the booth and scan its QR code at the wedding show.",
+              "Vendor draws are available to eligible couples who scan this vendor’s QR code during authorized QR Bingo scanning.",
           },
           410,
           false,
@@ -4166,6 +4199,7 @@ Deno.serve(async (request) => {
         : await getQrPage(cookieJar, authenticatedMemberId);
       let scanned: string[];
       let inShowScanned: string[];
+      let vendorDrawScanned: string[];
       if (reviewFixture && isReviewCouple) {
         // The review account is a self-contained demonstration event. Never
         // expose the production roster/progress or allow its scan action to
@@ -4181,16 +4215,18 @@ Deno.serve(async (request) => {
           ),
         ];
         inShowScanned = [...scanned];
+        vendorDrawScanned = [...scanned];
       } else {
         // `get_scanned` is a couple-only website action. Vendor dashboards
         // authorize against the current BD member tag, never scan history.
-        const progress = isVendorRaffleAction ? { scanned: [], inShowScanned: [] }
+        const progress = isVendorRaffleAction ? { scanned: [], inShowScanned: [], vendorDrawScanned: [] }
           // A normal scan does not use pre-save history. Its successful write
           // is followed by the authoritative read and in-show draw proof.
-          : action === "scan" ? { scanned: page.scanned, inShowScanned: [] }
+          : action === "scan" ? { scanned: page.scanned, inShowScanned: [], vendorDrawScanned: [] }
           : await getFreshScanned(cookieJar, page);
         scanned = [...new Set(progress.scanned)];
         inShowScanned = [...new Set(progress.inShowScanned)];
+        vendorDrawScanned = [...new Set(progress.vendorDrawScanned)];
       }
 
       if (action === "scan") {
@@ -4227,6 +4263,7 @@ Deno.serve(async (request) => {
             vendors: page.vendors,
             scanned: freshScanned,
             in_show_scanned: freshScanned,
+            vendor_draw_scanned: freshScanned,
             scanned_count: freshScanned.length,
             total_count: page.vendors.length,
             matched_vendor: matchedVendor,
@@ -4295,8 +4332,8 @@ Deno.serve(async (request) => {
 
         const progress = await getFreshScanned(cookieJar, page);
         const freshScanned = [...new Set(progress.scanned)];
-        const raffleOffer = productionShowScanWindowOpen() &&
-            progress.inShowScanned.includes(matchedVendor.id)
+        const raffleOffer = qrBingoScannerWindowOpen(qrBingoConfig()) &&
+            progress.vendorDrawScanned.includes(matchedVendor.id)
           ? await buildRaffleOffer(matchedVendor, user) : null;
         const completed = page.vendors.length > 0 &&
           freshScanned.length >= page.vendors.length;
@@ -4305,6 +4342,7 @@ Deno.serve(async (request) => {
           vendors: page.vendors,
           scanned: freshScanned,
           in_show_scanned: progress.inShowScanned,
+          vendor_draw_scanned: progress.vendorDrawScanned,
           scanned_count: freshScanned.length,
           total_count: page.vendors.length,
           matched_vendor: matchedVendor,
@@ -4315,13 +4353,13 @@ Deno.serve(async (request) => {
 
       if (action === "raffle_offer") {
         if (
-          !(reviewFixture && isReviewCouple) && !productionShowScanWindowOpen()
+          !(reviewFixture && isReviewCouple) && !qrBingoScannerWindowOpen(qrBingoConfig())
         ) {
           return jsonResponse({
             ok: false,
             code: "show_entry_window_closed",
             error:
-              "Vendor draw entry is available only during the published wedding-show hours.",
+              "Vendor draw entry is available while QR Bingo scanning is open and the vendor draw is on, until the published closing time.",
           }, 403);
         }
         const vendorId = String(body?.vendor_id || "").trim();
@@ -4332,10 +4370,10 @@ Deno.serve(async (request) => {
             404,
           );
         }
-        if (!inShowScanned.includes(vendor.id)) {
+        if (!vendorDrawScanned.includes(vendor.id)) {
           return jsonResponse({
             ok: false,
-            error: "Scan this vendor at the wedding show before reviewing its draw.",
+            error: "Scan this vendor while QR Bingo scanning is open before reviewing its draw.",
           }, 403);
         }
         const raffleEventKey = reviewFixture && isReviewCouple &&
@@ -4354,6 +4392,8 @@ Deno.serve(async (request) => {
         return jsonResponse({
           ok: true,
           raffle_offer: raffleOffer,
+          vendor_draw_scanned: vendorDrawScanned,
+          in_show_scanned: inShowScanned,
           message: raffleOffer
             ? "This vendor draw is available. Entry remains optional."
             : "You are already entered, or this vendor draw is not currently open.",
@@ -4362,13 +4402,13 @@ Deno.serve(async (request) => {
 
       if (action === "raffle_opt_in") {
         if (
-          !(reviewFixture && isReviewCouple) && !productionShowScanWindowOpen()
+          !(reviewFixture && isReviewCouple) && !qrBingoScannerWindowOpen(qrBingoConfig())
         ) {
           return jsonResponse({
             ok: false,
             code: "show_entry_window_closed",
             error:
-              "Vendor draw entry is available only during the published wedding-show hours.",
+              "Vendor draw entry is available while QR Bingo scanning is open and the vendor draw is on, until the published closing time.",
           }, 403);
         }
         const vendorId = String(body?.vendor_id || "").trim();
@@ -4379,10 +4419,10 @@ Deno.serve(async (request) => {
             404,
           );
         }
-        if (!inShowScanned.includes(vendor.id)) {
+        if (!vendorDrawScanned.includes(vendor.id)) {
           return jsonResponse({
             ok: false,
-            error: "Scan this vendor at the wedding show before entering the draw.",
+            error: "Scan this vendor while QR Bingo scanning is open before entering the draw.",
           }, 403);
         }
         const raffleEventKey = reviewFixture && isReviewCouple &&
@@ -4398,6 +4438,7 @@ Deno.serve(async (request) => {
             vendor.id === reviewFixture.vendor_bingo_id
             ? reviewFixture
             : null,
+          inShowScanned.includes(vendor.id) && (Boolean(reviewFixture && isReviewCouple) || productionShowScanWindowOpen()),
         );
         const alreadyEntered = "already_entered" in result &&
           result.already_entered === true;
@@ -5123,6 +5164,7 @@ Deno.serve(async (request) => {
           vendors: page.vendors,
           scanned,
           in_show_scanned: inShowScanned,
+          vendor_draw_scanned: vendorDrawScanned,
           scanned_count: scanned.length,
           total_count: page.vendors.length,
           completed,

@@ -30,9 +30,10 @@
     "test:apple-web": "node --test scripts/test-website-apple-sign-in.mjs scripts/test-website-apple-routing.mjs",
     "test:apple-gateway": "node --test scripts/test-app-apple-sign-in-gateway.mjs",
     "audit:production": "node scripts/check-production-audit.mjs",
-    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --node-modules-dir=none --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs && npm run test:video && npm run test:google-login && npm run test:apple-native && npm run test:member-role && npm run test:contact-email && npm run test:session-expiry && npm run test:auth-keyboard && npm run test:apple-web && npm run test:apple-gateway && npm run test:bingo-contacts && npm run test:draw-reset",
+    "verify": "expo lint --no-cache && tsc --noEmit && expo install --check && expo-doctor . && deno test --node-modules-dir=none --no-lock --allow-read --allow-env supabase/functions/_shared/*_test.ts && node scripts/check-production-audit.mjs && npm run test:video && npm run test:google-login && npm run test:apple-native && npm run test:member-role && npm run test:contact-email && npm run test:session-expiry && npm run test:auth-keyboard && npm run test:apple-web && npm run test:apple-gateway && npm run test:bingo-contacts && npm run test:draw-reset && npm run test:draw-entry",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "ios": "expo run:ios",
+    "test:draw-entry": "node --test scripts/test-native-vendor-draw-invitation.mjs scripts/test-native-qr-scan-schedule.mjs scripts/test-native-qr-scanner-recovery.mjs scripts/test-website-scanner-opening.mjs scripts/test-website-vendor-wizard.mjs && node scripts/test-qr-draw-single-agreement.mjs && node scripts/test-qr-entry-access-migration.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",

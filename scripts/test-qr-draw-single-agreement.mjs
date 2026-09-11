@@ -20,6 +20,7 @@ const sources = [
   section('    async function saveVendorScan(', '    async function loadScannedVendors('),
   section("    const vendorDrawModal = document.getElementById('vendorDrawModal');", '    function renderGrid()'),
   section('    async function markScanned(', '    function updateProgress('),
+  section('    let scannerConfigUnavailable =', '    function websiteScannerRefreshConfig('),
   section('    async function startScanner()', '    function scanLoop()'),
   section('    function extractWeddingWinQrVendorId(', '    // Event listeners for desktop controls'),
   section('    function initApp()', '    // Ensure DOM is ready before initializing'),
@@ -87,9 +88,16 @@ function createHarness(options = {}) {
     const id = nextTimer++; timers.set(id, { callback, milliseconds }); return id;
   };
   const config = { event_key: 'isolated-local-test-event', revision: 7, rules_version: validOffer.consent_version,
-    vendor_draws_enabled: true, scan_enabled: true, show_scan_window_open: true, ...options.config };
+    vendor_draws_enabled: true, scan_enabled: true, show_scan_window_open: true,
+    history_starts_at: '2026-10-18T15:00:00Z', scan_opens_at: '2026-09-08T12:00:00Z',
+    entry_closes_at: validOffer.entry_closes_at, scan_open_early: true, ...options.config };
+  // Offer tests begin after a saved scan. Scan-path tests explicitly start empty.
+  const initialScanned = options.scanned ?? (options.fixture ? [] : [vendor.id]);
+  class FixtureDate extends Date { static now() { return Date.parse('2026-09-11T12:00:00Z'); } }
   const context = vm.createContext({
-    document, HTMLElement: Element, INITIAL_SCANNED: options.scanned || [], VENDORS: options.vendors || [vendor], EVENT_CONFIG: config,
+    document, HTMLElement: Element, INITIAL_SCANNED: initialScanned, VENDOR_DRAW_SCANNED: initialScanned,
+    IN_SHOW_SCANNED: [], QR_SCANNER_FIXTURE: options.fixture === true,
+    VENDORS: options.vendors || [vendor], EVENT_CONFIG: config, Date: FixtureDate,
     gridEl: elements.get('grid'),
     QR_WEBSITE_CSRF: websiteCsrf,
     PARTICIPATION_NOTICE_VERSION: options.noticeVersion || noticeVersion, CONTACT_PROFILE_COMPLETE: options.profileComplete !== false,
@@ -149,19 +157,23 @@ test('one compact linked agreement is before the scanner; detailed terms and sec
   assert.ok(checkboxAt >= 0 && checkboxAt < noticeMarkup.indexOf('id="qrFixtureScanButton"'));
   assert.doesNotMatch(noticeMarkup, /age and residency requirements|entry\/consent evidence|Each vendor is responsible|Apple Inc\.|Scroll to read/);
   assert.equal([...markup.matchAll(/type="checkbox"/g)].length, 0);
-  assert.match(markup, />Enter Draw<\/button>/); assert.match(markup, />No Thanks<\/button>/);
-  assert.doesNotMatch(markup, /id="vendorDraw(?:Roles|Apple)"/);
+  assert.match(markup, />Yes<\/button>/); assert.match(markup, />No<\/button>/);
+  assert.equal([...markup.matchAll(/<button\b/g)].length, 2);
+  assert.doesNotMatch(markup, /id="vendorDraw(?:Vendor|Description|Disclosure|Privacy|Terms|Rules|Roles|Apple)"/);
 });
 
-test('the linked QR Bingo terms retain all four pre-scan disclosures without changing their meaning', () => {
+test('the linked QR Bingo terms preserve consent and explain authorized early entry', () => {
   const terms = readFileSync(new URL('../brilliant-directories/pages/about-terms.html', import.meta.url), 'utf8');
   const start = terms.indexOf('<h2 id="qr-bingo">'), end = terms.indexOf('<h2', start + 1);
   assert.ok(start >= 0 && end > start, 'The exact linked QR Bingo terms section must exist');
   const sectionText = terms.slice(start, end).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
   for (const disclosure of [
-    'Scanning records your booth visit and QR Bingo progress. It does not enter a draw. After scanning, choose Enter Draw or No Thanks if the vendor offers a prize.',
+    'Scanning records QR Bingo progress. It does not enter a draw.',
+    'While the organizer has opened QR scanning, including early access, scanning a vendor whose draw is on can offer an optional entry.',
+    "Read and agree to the QR Bingo Terms and Draw Rules before scanning. When asked whether to enter the named vendor's draw, choose Yes to enter under that agreement or No to keep only the scan.",
+    'The displayed entry closing time and scheduled draw time still apply.',
     'I have read and agree to the QR Bingo Terms and Draw Rules. I confirm I meet the age and residency requirements and am not excluded under those rules.',
-    'If I choose Enter Draw, Wedding Win Inc. will share my name, email address, phone number, wedding date, and entry/consent evidence with that named vendor. I agree that the vendor may use these details for its draw and wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time.',
+    "If I choose Yes to enter a named vendor's draw, Wedding Win Inc. will share my name, email address, phone number, wedding date, wedding venue if provided, and entry/consent evidence with that named vendor. I agree that the vendor may use these details for its draw and wedding-related offers and promotions. I may unsubscribe from vendor marketing at any time.",
     'Each vendor is responsible for its draw, winner verification, and prize fulfilment. Wedding Win Inc. provides the technical system. Apple Inc. is not a sponsor of and is not involved in these promotions.',
   ]) assert.ok(sectionText.includes(disclosure), `The linked terms must retain: ${disclosure}`);
 });
@@ -182,11 +194,13 @@ test('checking pre-scan agreement launches camera setup only, never a draw entry
 });
 
 test('profile completion, administrator switch and show-date gates still prevent camera launch', async () => {
-  for (const options of [{ profileComplete: false }, { config: { scan_enabled: false } }, { config: { show_scan_window_open: false } }]) {
+  for (const options of [{ profileComplete: false }, { config: { scan_enabled: false } },
+    { config: { show_scan_window_open: false, scan_open_early: false, scan_opens_at: '2026-10-18T04:00:00Z' } }]) {
     const h = createHarness(options); await h.check(); h.api.init(); await h.api.start();
     assert.equal(h.effects.cameraRequests, 0, JSON.stringify(options)); assert.equal(h.calls.length, 0);
   }
-  const h = createHarness({ profileComplete: false }); await h.api.start(); assert.deepEqual(h.redirects, ['/account/contact']);
+  const h = createHarness({ profileComplete: false }); await h.api.start();
+  assert.equal(h.effects.cameraRequests, 0); assert.deepEqual(h.redirects, [], 'Incomplete contact remains gated on the current page');
 });
 
 test('old values, wrong account, changed event, rules or notice version cannot restore consent', async () => {
@@ -219,28 +233,28 @@ test('account/event/rules changes after acceptance fail closed; unchecking revok
 });
 
 test('QR scan saves Bingo progress and loads optional offer, without submitting an entry', async () => {
-  const h = createHarness(); await h.check();
-  h.queue({ data: { status: 'success', completed: true } }); h.queue({ data: { ok: true, raffle_offer: validOffer } });
+  const h = createHarness({ scanned: [] }); await h.check();
+  h.queue({ data: { status: 'success', completed: true, vendor_draw_scan: true, in_show_scan: false } }); h.queue({ data: { ok: true, raffle_offer: validOffer } });
   await h.api.decode('https://www.weddingwin.ca/qr?vendor_id=38970');
   assert.deepEqual(h.calls.map(call => call.form.get('action')), ['scan_vendor', 'raffle_offer']);
   assert.equal(h.api.state().scanned.length, 1); assert.equal(h.effects.progressUpdates, 1);
   assert.equal(h.el('vendorDrawModal').hidden, false); assert.equal(h.el('vendorDrawEnter').disabled, false);
-  assert.equal(h.el('vendorDrawPrivacy').textContent,
-    "Enter Draw confirms you meet this vendor's eligibility requirements and accept its prize details and Draw Rules. Your contact details will be shared with Fictional Wedding Vendor for this draw and wedding-related marketing.");
-  assert.match(h.el('vendorDrawDisclosure').textContent, /Eligibility: Ontario test residents/);
-  assert.match(h.el('vendorDrawDisclosure').textContent, /Entries close:/);
-  assert.match(h.el('vendorDrawDisclosure').textContent, /Scheduled draw:/);
-  assert.match(h.el('vendorDrawDisclosure').textContent, /Odds: One equal chance per eligible entry/);
+  assert.equal(h.el('vendorDrawTitle').textContent, 'Enter Fictional Wedding Vendor’s draw?');
+  assert.equal(h.el('vendorDrawStatus').textContent, '');
+  assert.equal(h.el('vendorDrawEnter').textContent, 'Yes');
+  assert.equal(h.el('vendorDrawDecline').textContent, 'No');
+  assert.equal(h.document.activeElement, h.el('vendorDrawDecline'));
+  for (const id of ['vendorDrawVendor', 'vendorDrawDescription', 'vendorDrawDisclosure', 'vendorDrawPrivacy', 'vendorDrawTerms', 'vendorDrawRules']) assert.equal(h.el(id), undefined);
   for (const call of h.calls) assert.equal(call.form.get('participation_notice_version'), noticeVersion);
 });
 
-test('No Thanks keeps scan progress; reopening requires only Enter Draw or No Thanks', async () => {
-  const h = createHarness(); await h.check(); h.queue({ data: { status: 'success' } }); await h.api.mark(vendor.id);
+test('No keeps scan progress; reopening requires only Yes or No', async () => {
+  const h = createHarness({ scanned: [] }); await h.check(); h.queue({ data: { status: 'success', vendor_draw_scan: true } }); await h.api.mark(vendor.id);
   h.api.show(vendor, validOffer); await h.el('vendorDrawDecline').click();
   assert.equal(h.el('vendorDrawModal').hidden, true); assert.equal(h.api.accepted(), true);
   assert.equal(h.api.state().scanned.length, 1); h.api.show(vendor, validOffer);
-  assert.equal(h.el('vendorDrawEnter').disabled, false); await h.el('vendorDrawRules').click();
-  assert.equal(h.calls.length, 1, 'Reopening or viewing rules must not submit an entry');
+  assert.equal(h.el('vendorDrawEnter').disabled, false);
+  assert.equal(h.calls.length, 1, 'Reopening the prompt must not submit an entry');
 });
 
 test('missing or stale offer evidence fails closed despite current pre-scan agreement', async () => {
@@ -253,7 +267,7 @@ test('missing or stale offer evidence fails closed despite current pre-scan agre
   }
 });
 
-test('explicit Enter Draw sends current vendor evidence and pre-scan acknowledgement', async () => {
+test('explicit Yes sends current vendor evidence and prior agreement without a new policy acceptance claim', async () => {
   const h = createHarness(); await h.check(); h.api.show(vendor, validOffer); assert.equal(h.calls.length, 0);
   h.queue({ data: { ok: true, message: 'Test entry confirmed.' } }); await h.el('vendorDrawEnter').click();
   assert.equal(h.calls.length, 1); const { url, request, form } = h.calls[0];
@@ -266,6 +280,7 @@ test('explicit Enter Draw sends current vendor evidence and pre-scan acknowledge
   for (const field of ['rules_viewed', 'age_of_majority_attested', 'residency_attested', 'exclusions_attested',
     'promotion_responsibility_acknowledged', 'draw_administration_contact_share_acknowledged',
     'vendor_marketing_consent_acknowledged', 'apple_non_sponsor_acknowledged']) assert.equal(form.get(field), '1', field);
+  for (const key of form.keys()) assert.equal(key.startsWith('entry_access_'), false, 'The browser must not invent a new policy acceptance');
   assert.equal(h.el('vendorDrawStatus').textContent, 'Test entry confirmed.');
 });
 
@@ -277,7 +292,7 @@ test('stale vendor offer requires another explicit choice but no new checkbox or
   assert.deepEqual(h.calls.map(call => call.form.get('action')), ['raffle_opt_in', 'raffle_offer']);
   assert.equal(h.api.state().offer.vendor_offer_version, updated.vendor_offer_version);
   assert.equal(h.api.accepted(), true); assert.equal(h.el('vendorDrawEnter').disabled, false);
-  assert.match(h.el('vendorDrawStatus').textContent, /choose Enter Draw or No Thanks/);
+  assert.match(h.el('vendorDrawStatus').textContent, /Choose Yes or No/);
   h.queue({ data: { ok: true } }); await h.el('vendorDrawEnter').click();
   assert.equal(h.calls.length, 3); assert.equal(h.calls[2].form.get('vendor_offer_version'), updated.vendor_offer_version);
 });
@@ -354,7 +369,7 @@ test('camera-denied test button follows ordinary scan and offer with current CSR
     assert.equal(call.form.get('participation_notice_version'), noticeVersion);
   }
   assert.deepEqual([...h.api.state().scanned], [vendor.id]); assert.equal(h.el('vendorDrawModal').hidden, false);
-  await h.el('vendorDrawDecline').click(); assert.equal(h.calls.length, 2, 'No Thanks cannot enter the draw');
+  await h.el('vendorDrawDecline').click(); assert.equal(h.calls.length, 2, 'No cannot enter the draw');
   assert.deepEqual([...h.api.state().scanned], [vendor.id]);
 });
 
@@ -393,8 +408,7 @@ test('actual grid review shows already-entered-or-closed server feedback without
   assert.equal(h.el('vendorDrawModal').hidden, false); assert.equal(h.el('vendorDrawTitle').textContent, 'Draw status');
   assert.equal(h.el('vendorDrawStatus').textContent, status);
   assert.equal(h.el('vendorDrawEnter').hidden, true); assert.equal(h.el('vendorDrawEnter').disabled, true);
-  assert.equal(h.el('vendorDrawRules').hidden, true); assert.equal(h.el('vendorDrawTerms').hidden, true);
-  assert.equal(h.el('vendorDrawRules').href, ''); assert.equal(h.el('vendorDrawDisclosure').hidden, true);
+  assert.equal(h.api.state().offer, null);
   assert.equal(h.el('vendorDrawDecline').textContent, 'Close'); assert.equal(h.document.activeElement, h.el('vendorDrawDecline'));
   await h.api.enter(); assert.equal(h.calls.length, 1, 'Status must not allow duplicate entry');
   await h.el('vendorDrawDecline').click(); assert.equal(h.el('vendorDrawModal').hidden, true);
@@ -403,8 +417,8 @@ test('actual grid review shows already-entered-or-closed server feedback without
 });
 
 test('ordinary scanning does not interrupt with a status dialog when a vendor has no available prize', async () => {
-  const h = createHarness({ cameraDenied: true }); await h.check();
-  h.queue({ data: { status: 'success' } });
+  const h = createHarness({ cameraDenied: true, scanned: [] }); await h.check();
+  h.queue({ data: { status: 'success', vendor_draw_scan: true } });
   h.queue({ data: { ok: true, raffle_offer: null, message: 'You are already entered, or this vendor draw is not currently open.' } });
   await h.api.decode('https://www.weddingwin.ca/qr?vendor_id=' + vendor.id);
   assert.equal(h.el('vendorDrawModal').hidden, true); assert.equal(h.api.state().scanned.length, 1);
@@ -425,31 +439,33 @@ test('explicit review failures are visible and closing permits a fresh normal of
     await h.api.enter(); assert.equal(h.calls.length, 1);
     await h.el('vendorDrawDecline').click(); h.queue({ data: { ok: true, raffle_offer: validOffer } });
     await h.api.open(vendor, true);
-    for (const id of ['vendorDrawEnter', 'vendorDrawRules', 'vendorDrawTerms', 'vendorDrawDisclosure', 'vendorDrawPrivacy']) assert.equal(h.el(id).hidden, false);
-    assert.equal(h.el('vendorDrawRules').href, validOffer.terms_url);
-    assert.equal(h.el('vendorDrawEnter').disabled, false); assert.equal(h.el('vendorDrawDecline').textContent, 'No Thanks');
+    assert.equal(h.el('vendorDrawEnter').hidden, false);
+    assert.equal(h.el('vendorDrawTitle').textContent, 'Enter Fictional Wedding Vendor’s draw?');
+    assert.equal(h.el('vendorDrawStatus').textContent, '');
+    assert.equal(h.el('vendorDrawEnter').disabled, false); assert.equal(h.el('vendorDrawDecline').textContent, 'No');
     assert.equal(h.el('vendorDrawStatus').classList.contains('is-error'), false);
   }
 });
 
-test('status clears an earlier offer rules link and the scoped hidden rule overrides link display styling', async () => {
+test('status clears an earlier offer and reopening restores only the simple named choice', async () => {
   const h = createHarness(); await h.check();
   assert.equal(h.api.show(vendor, validOffer), true);
-  assert.equal(h.el('vendorDrawRules').href, validOffer.terms_url);
+  assert.equal(h.api.state().offer.vendor_offer_version, validOffer.vendor_offer_version);
   await h.el('vendorDrawDecline').click();
   h.queue({ data: { ok: true, raffle_offer: null, message: 'This draw is not currently open.' } });
   await h.api.open(vendor, true);
-  assert.equal(h.el('vendorDrawRules').hidden, true);
-  assert.equal(h.el('vendorDrawRules').href, '');
-  assert.equal(h.el('vendorDrawTerms').hidden, true);
+  assert.equal(h.api.state().offer, null);
+  assert.equal(h.el('vendorDrawEnter').hidden, true);
+  assert.equal(h.el('vendorDrawStatus').textContent, 'This draw is not currently open.');
   assert.equal(h.document.activeElement, h.el('vendorDrawDecline'));
-  assert.match(widget, /\.vendor-draw-terms a\s*\{[^}]*display:\s*inline-block/);
-  assert.match(widget, /\.vendor-draw-dialog \[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
   await h.el('vendorDrawDecline').click();
   assert.equal(h.api.show(vendor, validOffer), true);
-  assert.equal(h.el('vendorDrawRules').href, validOffer.terms_url);
-  assert.equal(h.el('vendorDrawTerms').hidden, false);
-  assert.equal(h.el('vendorDrawRules').hidden, false);
+  assert.equal(h.el('vendorDrawTitle').textContent, 'Enter Fictional Wedding Vendor’s draw?');
+  assert.equal(h.el('vendorDrawStatus').textContent, '');
+  assert.equal(h.el('vendorDrawEnter').hidden, false);
+  assert.equal(h.el('vendorDrawEnter').disabled, false);
+  assert.equal(h.el('vendorDrawDecline').textContent, 'No');
+  for (const id of ['vendorDrawDescription', 'vendorDrawDisclosure', 'vendorDrawPrivacy', 'vendorDrawTerms', 'vendorDrawRules']) assert.equal(h.el(id), undefined);
 });
 
 test('rapid explicit reviews issue one request and cannot replace an open choice or pending entry', async () => {

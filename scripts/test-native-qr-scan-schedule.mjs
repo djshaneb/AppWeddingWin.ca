@@ -6,7 +6,7 @@ import { appSource, loadAppDeclarations } from './native-app-source-fixture.mjs'
 
 // Execute actual native declarations with isolated clock/network/native mocks.
 // No real camera, account, scan, consent, contact, or backend mutation occurs.
-const api = loadAppDeclarations(['validQrScanTimestamp', 'normalizeQrBingoEventConfig', 'isQrBingoScanWindowOpen', 'isQrBingoInShowWindow', 'normalizeQrInShowScannedIds']);
+const api = loadAppDeclarations(['validQrScanTimestamp', 'normalizeQrBingoEventConfig', 'isQrBingoScanWindowOpen', 'normalizeQrInShowScannedIds', 'normalizeQrVendorDrawScannedIds']);
 const original = Object.freeze({ event_key: 'niagara-wedding-show-2026', revision: 12,
   event_name: 'Niagara Wedding Show', venue_name: 'Americana Resort', vendor_tag_id: 30,
   app_card_enabled: true, scan_enabled: true, vendor_draws_enabled: true,
@@ -111,7 +111,7 @@ test('actual clock effect wakes at exact midnight and close, and clears native t
   assert.equal(api.isQrBingoScanWindowOpen(config(), values.at(-1)), true);
   assert.equal([...timers.values()][0].delay, Date.parse(original.history_starts_at) - now);
   now = Date.parse(original.history_starts_at); [...timers.values()][0].fn();
-  assert.equal(api.isQrBingoInShowWindow(config(), values.at(-1)), true);
+  assert.equal(api.isQrBingoScanWindowOpen(config(), values.at(-1)), true);
   assert.equal([...timers.values()][0].delay, Date.parse(original.entry_closes_at) - now);
   now = Date.parse(original.entry_closes_at); [...timers.values()][0].fn();
   assert.equal(api.isQrBingoScanWindowOpen(config(), values.at(-1)), false);
@@ -217,18 +217,18 @@ test('both native scan entry points enforce current clock directly, not only del
   assert(appSource.includes('isQrBingoScanWindowOpen(eventConfig, scanWindowNow)'));
 });
 
-test('draw hours remain11AM inclusive until close, regardless of early scan access', () => {
+test('vendor entry invitation availability follows scanner access without rewriting the show schedule', () => {
   for (const early of [true, false]) {
     const current = config({ scan_open_early: early });
-    assert.equal(api.isQrBingoInShowWindow(current, Date.parse('2026-10-18T04:00:00Z')), false);
-    assert.equal(api.isQrBingoInShowWindow(current, Date.parse('2026-10-18T14:59:59.999Z')), false);
-    assert.equal(api.isQrBingoInShowWindow(current, Date.parse(original.history_starts_at)), true);
-    assert.equal(api.isQrBingoInShowWindow(current, Date.parse(original.entry_closes_at)), false);
+    assert.equal(api.isQrBingoScanWindowOpen(current, Date.parse('2026-09-11T12:00:00Z')), early);
+    assert.equal(api.isQrBingoScanWindowOpen(current, Date.parse('2026-10-18T04:00:00Z')), true);
+    assert.equal(api.isQrBingoScanWindowOpen(current, Date.parse(original.entry_closes_at)), false);
+    assert.equal(current.history_starts_at, original.history_starts_at);
   }
 });
 
-test('an actual duplicate camera scan refreshes proof only during show hours, with rapid-tap protection', async () => {
-  for (const [inShow, isolated, expected] of [[false, false, 'none'], [true, false, 'save'], [false, true, 'preview']]) {
+test('an actual duplicate camera scan refreshes early entry proof with rapid-tap protection', async () => {
+  for (const [isolated, expected] of [[false, 'save'], [true, 'preview']]) {
     const writes = [], previews = [], feedback = [], vendor = { id: '901', name: 'Offline vendor' };
     let release;
     const pending = new Promise(resolve => { release = resolve; });
@@ -236,7 +236,7 @@ test('an actual duplicate camera scan refreshes proof only during show hours, wi
       reviewingParticipationNoticeRef: { current: false }, qrInteractionGenerationRef: { current: 1 },
       contactProfileComplete: true, participationNoticeAccepted: true, scannerConfigVerified: true, eventScanEnabled: true,
       eventVendorDrawsEnabled: true, eventConfig: config({ scan_open_early: true }),
-      isolatedFixtureActive: isolated, isQrBingoScanWindowOpen: () => true, isQrBingoInShowWindow: () => inShow,
+      isolatedFixtureActive: isolated, isQrBingoScanWindowOpen: () => true,
       scanLocked: false, scanInFlightRef: { current: false }, scanUnlockTimerRef: { current: null },
       raffleOffer: null, vendors: [vendor], scannedVendorIds: new Set(['901']),
       matchQrBingoVendor: () => vendor, setBingoError() {}, setScanLocked() {},
@@ -251,46 +251,48 @@ test('an actual duplicate camera scan refreshes proof only during show hours, wi
     release(); await Promise.all([first, second]);
     assert.deepEqual(writes, expected === 'save' ? ['901'] : []);
     assert.deepEqual(previews, expected === 'preview' ? ['901'] : []);
-    if (expected === 'none') assert(feedback[0][0].includes('during the wedding show'));
   }
 });
 
-test('in-show proof is independent of early progress and malformed/missing metadata fails closed', () => {
+test('qualified entry proof is independent of ordinary progress and malformed metadata fails closed', () => {
   for (const value of [undefined, null, {}, false, '901', [901, '0', '-1', ' 901', '901 ', '1.2', '']]) {
-    assert.deepEqual([...api.normalizeQrInShowScannedIds(value)], []);
+    assert.deepEqual([...api.normalizeQrVendorDrawScannedIds(value, [])], []);
   }
-  assert.deepEqual([...api.normalizeQrInShowScannedIds(['901', '902', '901'])], ['901', '902']);
+  assert.deepEqual([...api.normalizeQrVendorDrawScannedIds(['901', '902', '901'], [])], ['901', '902']);
+  assert.deepEqual([...api.normalizeQrVendorDrawScannedIds(undefined, ['901'])], ['901']);
+  assert.deepEqual([...api.normalizeQrVendorDrawScannedIds(null, ['901'])], []);
   const cleared = [];
   const { clearBingoCardState } = loadAppDeclarations(['clearBingoCardState'], { useCallback: fn => fn,
     setEventConfig() {}, setAppReviewFixture() {}, setEmailTestFixture() {}, setVendors() {}, setBingoTotalCount() {},
     setScannerConfigVerified() {},
-    setScannedVendorIds: value => cleared.push([...value]), setInShowScannedVendorIds: value => cleared.push([...value]),
+    setScannedVendorIds: value => cleared.push([...value]), setVendorDrawScannedVendorIds: value => cleared.push([...value]),
   });
   clearBingoCardState(); assert.deepEqual(cleared, [[], []]);
 });
 
-function proofResponseFixture(data) {
+function proofResponseFixture(data, overrides = {}) {
   const progress = [], proof = [], offers = [], requests = [];
   const globals = { useCallback: fn => fn, nativeSession: { user_id: 'offline', token: 'offline' },
     bingoCardRequestIdRef: { current: 0 }, qrInteractionGenerationRef: { current: 1 },
     accountDeletionIsInFlight: () => false, getAccountDeletionGeneration: () => 1, accountMutationIsCurrent: () => true,
     contactProfileComplete: true, participationNoticeAccepted: true, scannerConfigVerified: true, eventScanEnabled: true, eventConfig: config(),
-    isolatedFixtureActive: false, isQrBingoScanWindowOpen: () => true, isQrBingoInShowWindow: () => true,
+    isolatedFixtureActive: false, isQrBingoScanWindowOpen: () => true,
     QR_BINGO_SYNC_FUNCTION_URL: 'https://offline.invalid/sync', APP_BACKEND_PUBLISHABLE_KEY: 'offline',
     QR_BINGO_PARTICIPATION_NOTICE_VERSION: 'offline',
     fetchQrBingoJsonWithTimeout: async (_url, options) => { requests.push(JSON.parse(options.body).action); return { response: { ok: true }, data }; },
     normalizeQrContactProfile: () => ({ saved: true, complete: true }),
-    normalizeQrBingoEventConfig: api.normalizeQrBingoEventConfig, normalizeQrInShowScannedIds: api.normalizeQrInShowScannedIds,
-    setScannedVendorIds: value => progress.push([...value]), setInShowScannedVendorIds: value => proof.push([...value]),
+    normalizeQrBingoEventConfig: api.normalizeQrBingoEventConfig, normalizeQrVendorDrawScannedIds: api.normalizeQrVendorDrawScannedIds,
+    setScannedVendorIds: value => progress.push([...value]), setVendorDrawScannedVendorIds: value => proof.push([...value]),
     clearBingoCardState() {}, setLoadingBingo() {}, setBingoError() {}, setSavingBingo() {}, setServerMissingContactFields() {},
     setEventConfig() {}, setAppReviewFixture() {}, setEmailTestFixture() {}, setVendors() {}, setBingoTotalCount() {},
     setScannerConfigVerified() {},
     showScanFeedback() {}, setRaffleOffer: value => offers.push(value), vendors: [],
+    ...overrides,
   };
   return { ...loadAppDeclarations(['loadBingoCard', 'saveBingoScan'], globals), progress, proof, offers, requests };
 }
 
-test('actual list/scan callbacks retain early progress but only new in-show proof enables the offered draw', async () => {
+test('legacy responses require explicit in-show proof rather than ordinary progress for draw offers', async () => {
   for (const inShow of [undefined, [], ['901']]) {
     const offered = { vendor_id: '901', vendor_name: 'Offline vendor' };
     const data = { event_config: config(), scanned: ['901', '902'], in_show_scanned: inShow, raffle_offer: offered };
@@ -303,30 +305,45 @@ test('actual list/scan callbacks retain early progress but only new in-show proo
   }
 });
 
-test('actual production card preview cannot create scan proof or request a draw for an early-only visit', async () => {
+test('early authorized scan displays a named offer without show proof or automatic opt-in', async () => {
+  const offered = { vendor_id: '901', vendor_name: 'Fictional Test Vendor' };
+  const earlyConfig = config({ scan_open_early: true });
+  for (const [qualified, expected] of [[['901'], true], [[], false], [null, false], [undefined, false]]) {
+    const data = { event_config: earlyConfig, scanned: ['901'], in_show_scanned: [], vendor_draw_scanned: qualified, raffle_offer: offered };
+    const f = proofResponseFixture(data, {
+      eventConfig: earlyConfig,
+      isQrBingoScanWindowOpen: value => api.isQrBingoScanWindowOpen(value, Date.parse('2026-09-11T12:00:00Z')),
+    });
+    await f.loadBingoCard(); await f.saveBingoScan({ id: '901', name: 'Fictional Test Vendor' });
+    assert.deepEqual(f.requests, ['list', 'scan']);
+    assert.deepEqual(f.offers, expected ? [offered] : [null]);
+  }
+});
+
+test('actual production card preview cannot create entry proof from ordinary progress', async () => {
   const errors = [], feedback = [], requests = [];
   const { reopenVendorDrawOffer } = loadAppDeclarations(['reopenVendorDrawOffer'], { useCallback: fn => fn,
     accountDeletionIsInFlight: () => false, getAccountDeletionGeneration: () => 1,
     raffleOfferInFlightRef: { current: false }, nativeSession: { user_id: 'offline', token: 'offline' },
     clearBingoCardState() {}, participationNoticeAccepted: true, scannerConfigVerified: true, eventVendorDrawsEnabled: true,
     eventConfig: config({ scan_open_early: true }), isolatedFixtureActive: false,
-    isQrBingoInShowWindow: () => true, inShowScannedVendorIds: new Set(),
+    isQrBingoScanWindowOpen: () => true, vendorDrawScannedVendorIds: new Set(),
     setBingoError: value => errors.push(value), showScanFeedback: (...args) => feedback.push(args),
     fetchQrBingoJsonWithTimeout: () => requests.push('unexpected'),
   });
   assert.equal(await reopenVendorDrawOffer({ id: '901', name: 'Offline vendor' }), false);
   assert.deepEqual(requests, []); assert.deepEqual(errors, []);
-  assert(feedback[0][0].includes('during the wedding show'));
-  assert(appSource.includes('isScanned && (isolatedFixtureActive || inShowScannedVendorIds.has(vendor.id))'));
+  assert(feedback[0][0].includes('while scanning is open'));
+  assert(appSource.includes('isScanned && (isolatedFixtureActive || vendorDrawScannedVendorIds.has(vendor.id))'));
 });
 
-test('actual Enter Draw callback refuses an early-only vendor even with an otherwise visible stale offer', async () => {
+test('actual Enter Draw callback refuses missing qualified proof even with a stale visible offer', async () => {
   const requests = [];
   const { enterRaffle } = loadAppDeclarations(['enterRaffle'], { useCallback: fn => fn,
     accountDeletionIsInFlight: () => false, getAccountDeletionGeneration: () => 1,
     qrInteractionGenerationRef: { current: 1 }, nativeSession: { user_id: 'offline', token: 'offline' },
-    clearBingoCardState() {}, scannerConfigVerified: true, eventVendorDrawsEnabled: true, eventConfig: config({ scan_open_early: true }),
-    isolatedFixtureActive: false, isQrBingoInShowWindow: () => true, inShowScannedVendorIds: new Set(),
+    clearBingoCardState() {}, scannerConfigVerified: true, participationNoticeAccepted: true, eventVendorDrawsEnabled: true, eventConfig: config({ scan_open_early: true }),
+    isolatedFixtureActive: false, isQrBingoScanWindowOpen: () => true, vendorDrawScannedVendorIds: new Set(),
     raffleOffer: { vendor_id: '901' }, raffleSaving: false, raffleEntryInFlightRef: { current: false },
     ageOfMajorityAttested: true, exclusionsAttested: true, promotionResponsibilityAccepted: true,
     residencyAttested: true, raffleRulesViewedVersion: 'offline', reopenVendorDrawOffer() {}, showScanFeedback() {},

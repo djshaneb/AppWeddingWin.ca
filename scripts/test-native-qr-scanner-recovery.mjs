@@ -6,7 +6,7 @@ import { appSource, loadAppDeclarations } from './native-app-source-fixture.mjs'
 
 // Execute current app callbacks/effects with isolated native, network and timer
 // dependencies. These tests never invoke a camera, backend or real account.
-const api = loadAppDeclarations(['validQrScanTimestamp', 'normalizeQrBingoEventConfig', 'normalizeQrInShowScannedIds']);
+const api = loadAppDeclarations(['validQrScanTimestamp', 'normalizeQrBingoEventConfig', 'normalizeQrInShowScannedIds', 'normalizeQrVendorDrawScannedIds']);
 const event = Object.freeze({ event_key: 'offline-show', revision: 14,
   event_name: 'Offline show', venue_name: 'Offline venue', vendor_tag_id: 30,
   app_card_enabled: true, scan_enabled: true, scan_open_early: true,
@@ -27,7 +27,7 @@ function cameraFixture({ parserFailure = false, saveFailure = false, cueFailure 
     accountDeletionIsInFlight: () => false, qrInteractionGenerationRef: generation,
     contactProfileComplete: true, participationNoticeAccepted: true, scannerConfigVerified: verified,
     eventScanEnabled: true, eventConfig: event, eventVendorDrawsEnabled: true, isolatedFixtureActive: false,
-    isQrBingoScanWindowOpen: () => true, isQrBingoInShowWindow: () => true,
+    isQrBingoScanWindowOpen: () => true,
     scanLocked: false, scanInFlightRef: inFlight, scanUnlockTimerRef: { current: null }, raffleOffer: null,
     setBingoError: value => errors.push(value), setScanLocked: value => locks.push(value),
     vendors: [vendor], scannedVendorIds: new Set(duplicate ? [vendor.id] : []),
@@ -99,15 +99,15 @@ function saveFixture({ response = { ok: false }, data = { ok: false, error: 'The
     qrInteractionGenerationRef: generation, nativeSession: { user_id: 'offline', token: 'offline' },
     contactProfileComplete: true, participationNoticeAccepted: true, scannerConfigVerified: verified,
     eventScanEnabled: true, eventConfig: event, isolatedFixtureActive: false,
-    isQrBingoScanWindowOpen: () => true, isQrBingoInShowWindow: () => true,
+    isQrBingoScanWindowOpen: () => true,
     clearBingoCardState: () => assert.fail('A failed save must not erase a loaded card'), setSavingBingo() {},
     setBingoError: value => errors.push(value), setEventConfig: value => configs.push(value),
     setScannerConfigVerified: value => verifications.push(value),
     fetchQrBingoJsonWithTimeout: async (url, options, message) => { requests.push(JSON.parse(options.body).action); await pending; return transport ? transport(url, options, message) : { response, data }; },
     QR_BINGO_SYNC_FUNCTION_URL: 'https://offline.invalid', APP_BACKEND_PUBLISHABLE_KEY: 'offline', QR_BINGO_PARTICIPATION_NOTICE_VERSION: 'offline',
-    normalizeQrBingoEventConfig: api.normalizeQrBingoEventConfig, normalizeQrInShowScannedIds: api.normalizeQrInShowScannedIds,
+    normalizeQrBingoEventConfig: api.normalizeQrBingoEventConfig, normalizeQrVendorDrawScannedIds: api.normalizeQrVendorDrawScannedIds,
     vendors: [vendor], setVendors() {}, setBingoTotalCount() {}, showScanFeedback: (...args) => feedback.push(args),
-    setScannedVendorIds: value => progress.push([...value]), setInShowScannedVendorIds() {},
+    setScannedVendorIds: value => progress.push([...value]), setVendorDrawScannedVendorIds() {},
     setRaffleOffer: value => offers.push(value),
   };
   return { ...loadAppDeclarations(['saveBingoScan'], globals), configs, verifications, errors, progress, offers, requests, feedback,

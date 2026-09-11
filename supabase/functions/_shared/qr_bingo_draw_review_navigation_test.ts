@@ -60,10 +60,14 @@ Deno.test("one linked short agreement appears before the camera, with full detai
   );
   for (
     const text of [
-      "Scanning records your booth visit and QR Bingo progress. It does not enter a draw.",
+      "Scanning records QR Bingo progress. It does not enter a draw.",
+      "While the organizer has opened QR scanning, including early access, scanning a vendor whose draw is on can offer an optional entry.",
+      "Read and agree to the QR Bingo Terms and Draw Rules before scanning.",
+      "When asked whether to enter the named vendor's draw, choose Yes to enter under that agreement or No to keep only the scan.",
+      "The displayed entry closing time and scheduled draw time still apply.",
       "I have read and agree to the QR Bingo Terms and Draw Rules.",
       "I confirm I meet the age and residency requirements and am not excluded under those rules.",
-      "If I choose Enter Draw, Wedding Win Inc. will share my name, email address,",
+      "If I choose Yes to enter a named vendor's draw, Wedding Win Inc. will share my name, email address,",
       "phone number, wedding date, wedding venue if provided, and entry/consent evidence with that named vendor.",
       "offers and promotions",
       "unsubscribe from vendor marketing",
@@ -325,59 +329,25 @@ Deno.test("accepted users can review the agreement without rewriting consent or 
   );
 });
 
-Deno.test("post-scan vendor offer has an optional rules link and only Enter Draw or No Thanks", () => {
+Deno.test("post-scan vendor offer is only the named prompt and Yes or No under the prior agreement", () => {
   assert(
     modal.replace(/\s+/g, "").includes(
       "visible={vendorDrawsEnabled&&participationNoticeAccepted&&!!raffleOffer}",
-    ) &&
-      modal.includes("raffleOffer?.prize_title") &&
-      modal.includes("raffleOffer.prize_description") &&
-      modal.includes("raffleOffer?.vendor_name") &&
-      modal.includes("Eligibility: {raffleOffer.eligibility_region}") &&
-      modal.includes("for this draw and wedding-related marketing") &&
-      modal.includes('accessibilityLabel="View vendor draw rules"'),
-    "an offer must display the named vendor and current prize/eligibility terms after acceptance",
+    ) && modal.includes("raffleOffer?.vendor_name") &&
+      !modal.includes("prize_description") && !modal.includes("eligibility_region") &&
+      !modal.includes("entry_access") && !modal.includes("View vendor draw rules"),
+    "the offer must stay a simple named Yes/No choice after the existing pre-camera agreement",
   );
   const enterStart = modal.indexOf("styles.raffleEnterButton");
-  const enter = modal.slice(
-    enterStart,
-    modal.indexOf("</TouchableOpacity>", enterStart),
-  );
-  assert(
-    enter.includes("onPress={enterRaffle}") &&
-      enter.includes("disabled={raffleEntryDisabled}") &&
-      /<Text style=\{styles\.raffleEnterText\}>\s*Enter Draw\s*<\/Text>/.test(
-        enter,
-      ) &&
-      !modal.includes("Review & Continue") &&
-      !modal.includes("Accept Rules & Enter"),
-    "Enter Draw must be a separate direct choice, never another review or checkbox step",
-  );
+  const enter = modal.slice(enterStart, modal.indexOf("</TouchableOpacity>", enterStart));
+  assert(enter.includes("onPress={enterRaffle}") && enter.includes("disabled={raffleEntryDisabled}") &&
+    /<Text style=\{styles\.raffleEnterText\}>\s*Yes\s*<\/Text>/.test(enter),
+    "Yes must be the only explicit draw entry action");
   const declineStart = modal.indexOf("styles.raffleCancelButton");
-  const decline = modal.slice(
-    declineStart,
-    modal.indexOf("</TouchableOpacity>", declineStart),
-  );
-  assert(
-    decline.includes("No Thanks") && decline.includes("setRaffleOffer(null)") &&
-      !decline.includes("enterRaffle") &&
-      !decline.includes("setAcceptedParticipationNoticeKey"),
-    "declining closes the offer without entering or erasing the pre-camera agreement",
-  );
-  const rulesStart = modal.lastIndexOf(
-    "<TouchableOpacity",
-    modal.indexOf('accessibilityLabel="View vendor draw rules"'),
-  );
-  const link = modal.slice(
-    rulesStart,
-    modal.indexOf("</TouchableOpacity>", rulesStart),
-  );
-  assert(
-    link.includes("Linking.openURL(raffleOffer.terms_url)") &&
-      !link.includes("setAcceptedParticipationNoticeKey") &&
-      !link.includes("setRaffleRulesViewedVersion"),
-    "opening the optional rules link cannot grant consent or become an entry prerequisite",
-  );
+  const decline = modal.slice(declineStart, modal.indexOf("</TouchableOpacity>", declineStart));
+  assert(decline.includes(">No</Text>") && decline.includes("setRaffleOffer(null)") &&
+    !decline.includes("enterRaffle") && !decline.includes("setAcceptedParticipationNoticeKey"),
+    "No closes the offer without entering or erasing the prior agreement");
 });
 
 Deno.test("booth scan and repeat scan cannot create a draw entry", () => {

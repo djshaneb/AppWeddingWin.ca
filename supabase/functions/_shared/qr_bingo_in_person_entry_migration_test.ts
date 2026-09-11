@@ -126,7 +126,7 @@ Deno.test(
       const optIn = sourceFunction(source, "optInToRaffle");
       const actionStart = source.indexOf('if (action === "raffle_opt_in")');
       const scanCheck = source.indexOf(
-        "if (!inShowScanned.includes(vendor.id))",
+        "if (!vendorDrawScanned.includes(vendor.id))",
         actionStart,
       );
       const optInCall = source.indexOf("await optInToRaffle(", actionStart);
@@ -141,8 +141,8 @@ Deno.test(
       );
       assert(
         optIn.includes('entry_method: "qr_scan_opt_in"') &&
-          optIn.includes("in_show_scan_verified: true") &&
-          optIn.includes("in_show_scan_verified_at: acceptedAt"),
+          optIn.includes("vendor_draw_scan_verified: true") &&
+          optIn.includes("vendor_draw_scan_verified_at: acceptedAt"),
         `${endpointUrl.pathname} must stamp the paired proof in its server-built payload`,
       );
     }

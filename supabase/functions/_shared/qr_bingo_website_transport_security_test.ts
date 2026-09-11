@@ -452,8 +452,8 @@ for (const path of endpointPaths) {
     assert(historyReads === 3 && vendor.scanned.length === 0 && vendor.inShowScanned.length === 0);
     const afterWrite = source.slice(source.indexOf('if (scanResult.status !== "success")'), source.indexOf('if (action === "raffle_offer")'));
     assert(afterWrite.includes("const progress = await getFreshScanned(cookieJar, page)") &&
-      afterWrite.includes("productionShowScanWindowOpen() &&") &&
-      afterWrite.includes("progress.inShowScanned.includes(matchedVendor.id)"),
+      afterWrite.includes("qrBingoScannerWindowOpen(qrBingoConfig()) &&") &&
+      afterWrite.includes("progress.vendorDrawScanned.includes(matchedVendor.id)"),
       "Post-save verification or draw eligibility was weakened");
   });
 

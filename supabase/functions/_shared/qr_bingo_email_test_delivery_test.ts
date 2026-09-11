@@ -461,7 +461,7 @@ Deno.test("winner preview matches the friendly couple email delivered by Wedding
       "Draw item:",
       "will follow up with the prize details and next steps.",
       "You opted in after scanning this vendor",
-      "QR code at the wedding show.",
+      "QR code during authorized QR Bingo scanning.",
       "WeddingWin.ca",
     ]
   ) {

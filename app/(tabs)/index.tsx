@@ -296,6 +296,7 @@ type QrBingoSyncResponse = {
   vendors?: QrBingoVendor[];
   scanned?: string[];
   in_show_scanned?: string[];
+  vendor_draw_scanned?: string[];
   scanned_count?: number;
   total_count?: number;
   matched_vendor?: QrBingoVendor;
@@ -453,6 +454,11 @@ type QrBingoVendorRaffleResponse = {
   rules_version?: string;
   rules_current?: boolean;
   vendor_acceptance_current?: boolean;
+  entry_setup_ready?: boolean;
+  entry_open?: boolean;
+  entry_status?: 'open' | 'scheduled' | 'closed' | 'disabled' | 'incomplete' | 'paused';
+  entry_opens_at?: string;
+  entry_status_message?: string;
   couple_email_subject?: string;
   administrator_name?: string;
   co_sponsor_name?: string;
@@ -1521,6 +1527,46 @@ function parseWeddingDate(value?: string): Date {
   return fallback;
 }
 
+function vendorDrawEntryStatus(
+  data: QrBingoVendorRaffleResponse | null,
+  draftEnabled: boolean,
+  saving: boolean,
+  saveFailed: boolean,
+) {
+  if (saveFailed) return {
+    title: 'Draw setting not confirmed',
+    message: 'Your latest change was not saved. Tap Try again to confirm whether your draw is on or off.',
+  };
+  if (saving || draftEnabled !== Boolean(data?.settings?.enabled)) return {
+    title: 'Saving your draw setting…',
+    message: 'Wait for confirmation that your draw is saved.',
+  };
+  if (!draftEnabled) return {
+    title: 'Your draw is off',
+    message: 'Couples can scan your booth, but cannot enter your draw.',
+  };
+  if (data?.entry_status && data.entry_status !== 'open') return {
+    title: data.entry_status === 'scheduled' ? 'Your draw is on and ready'
+      : data.entry_status === 'closed' ? 'Draw entries are closed'
+      : data.entry_status === 'paused' ? 'Draw entries are paused'
+      : data.entry_status === 'disabled' ? 'Your draw is off' : 'Your draw needs attention',
+    message: data.entry_status_message || 'Refresh your draw settings to check when couples can enter.',
+  };
+  if (!data?.vendor_acceptance_current || data.rules_current === false) return {
+    title: 'Your draw needs attention',
+    message: 'Your on setting is saved. Review the current rules and prize details before accepting entries.',
+  };
+  const entryCount = Number(data.entrant_count ?? data.entry_count ?? 0);
+  return {
+    title: 'Your draw is on',
+    message: entryCount > 0
+      ? `Saved to the app and website. ${entryCount} ${entryCount === 1 ? 'couple has' : 'couples have'} entered your draw.`
+      : data?.entry_open === true
+        ? 'Saved to the app and website. You’re ready and waiting for couples to enter. Couples can scan your QR code and choose Yes to enter your draw.'
+        : 'Saved to the app and website. You’re ready and waiting for couples to enter when entries are open.',
+  };
+}
+
 function normalizedVendorProfileUrl(value: unknown): string {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -1677,17 +1723,6 @@ function isQrBingoScanWindowOpen(
     (config.scan_open_early === true || nowMs >= opensAt);
 }
 
-function isQrBingoInShowWindow(
-  config: QrBingoEventConfig | null,
-  nowMs = Date.now(),
-): boolean {
-  if (!config || !Number.isFinite(nowMs)) return false;
-  const startsAt = Date.parse(config.history_starts_at);
-  const closesAt = Date.parse(config.entry_closes_at);
-  return Number.isFinite(startsAt) && Number.isFinite(closesAt) &&
-    startsAt < closesAt && nowMs >= startsAt && nowMs < closesAt;
-}
-
 function normalizeQrBingoEventConfig(
   value: unknown,
 ): QrBingoEventConfig | null {
@@ -1761,11 +1796,17 @@ function normalizeQrBingoEventConfig(
 }
 
 function normalizeQrInShowScannedIds(value: unknown): Set<string> {
-  // Progress can include early visits. Only this separate server proof permits
-  // production draw previews; older/malformed responses must not imply a visit.
+  // Only explicit server-qualified IDs can enable a draw; ordinary card
+  // progress must never imply entry proof.
   return new Set(Array.isArray(value)
     ? value.filter((id): id is string => typeof id === 'string' && /^[1-9]\d*$/.test(id))
     : []);
+}
+
+function normalizeQrVendorDrawScannedIds(value: unknown, legacyInShow: unknown): Set<string> {
+  // Older servers expose only show-time proof. An explicitly malformed new
+  // field must not activate a more permissive fallback.
+  return normalizeQrInShowScannedIds(value === undefined ? legacyInShow : value);
 }
 
 function NativeQrScanner({
@@ -1803,7 +1844,7 @@ function NativeQrScanner({
   const [scannedVendorIds, setScannedVendorIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [inShowScannedVendorIds, setInShowScannedVendorIds] = useState<Set<string>>(
+  const [vendorDrawScannedVendorIds, setVendorDrawScannedVendorIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [lastScanLabel, setLastScanLabel] = useState('');
@@ -1926,7 +1967,7 @@ function NativeQrScanner({
     setVendors([]);
     setBingoTotalCount(null);
     setScannedVendorIds(new Set());
-    setInShowScannedVendorIds(new Set());
+    setVendorDrawScannedVendorIds(new Set());
   }, []);
 
   const clearScanFeedbackTimer = useCallback(() => {
@@ -2025,7 +2066,7 @@ function NativeQrScanner({
           : data.vendors?.length || 0,
       );
       setScannedVendorIds(new Set((data.scanned || []).map(String)));
-      setInShowScannedVendorIds(normalizeQrInShowScannedIds(data.in_show_scanned));
+      setVendorDrawScannedVendorIds(normalizeQrVendorDrawScannedIds(data.vendor_draw_scanned, data.in_show_scanned));
     } catch (error) {
       if (requestId !== bingoCardRequestIdRef.current) return;
       clearBingoCardState();
@@ -2303,8 +2344,8 @@ function NativeQrScanner({
             : data.vendors?.length || vendors.length,
         );
         setScannedVendorIds(new Set((data.scanned || [vendor.id]).map(String)));
-        const nextInShowScannedIds = normalizeQrInShowScannedIds(data.in_show_scanned);
-        setInShowScannedVendorIds(nextInShowScannedIds);
+        const nextVendorDrawScannedIds = normalizeQrVendorDrawScannedIds(data.vendor_draw_scanned, data.in_show_scanned);
+        setVendorDrawScannedVendorIds(nextVendorDrawScannedIds);
         showScanFeedback(
           data.completed
             ? 'Congratulations! You’ve completed Vendor Bingo. You’re now entered in the grand prize draw.'
@@ -2313,8 +2354,8 @@ function NativeQrScanner({
           data.completed ? undefined : 5000,
         );
         if (nextEventConfig?.vendor_draws_enabled &&
-          (isolatedFixtureActive || (isQrBingoInShowWindow(nextEventConfig, Date.now()) &&
-            nextInShowScannedIds.has(vendor.id))) && data.raffle_offer) {
+          (isolatedFixtureActive || (isQrBingoScanWindowOpen(nextEventConfig, Date.now()) &&
+            nextVendorDrawScannedIds.has(vendor.id))) && data.raffle_offer) {
           setRaffleOffer(data.raffle_offer);
         } else {
           setRaffleOffer(null);
@@ -2381,12 +2422,12 @@ function NativeQrScanner({
         );
         return false;
       }
-      if (!isolatedFixtureActive && !isQrBingoInShowWindow(eventConfig, Date.now())) {
-        showScanFeedback('Optional vendor draws are available during the wedding show.', 'duplicate', 5000);
+      if (!isolatedFixtureActive && !isQrBingoScanWindowOpen(eventConfig, Date.now())) {
+        showScanFeedback('Optional vendor draws are available while QR scanning is open.', 'duplicate', 5000);
         return false;
       }
-      if (!isolatedFixtureActive && !inShowScannedVendorIds.has(vendor.id)) {
-        showScanFeedback('Scan this vendor’s booth QR code during the wedding show to view its optional draw.', 'duplicate', 5000);
+      if (!isolatedFixtureActive && !vendorDrawScannedVendorIds.has(vendor.id)) {
+        showScanFeedback('Scan this vendor’s booth QR code while scanning is open to view its optional draw.', 'duplicate', 5000);
         return false;
       }
 
@@ -2422,6 +2463,7 @@ function NativeQrScanner({
           return false;
         const nextEventConfig = normalizeQrBingoEventConfig(data.event_config);
         setEventConfig(nextEventConfig);
+        setScannerConfigVerified(Boolean(nextEventConfig));
         if (!response.ok || data?.ok === false) {
           throw new Error(
             data?.detail ||
@@ -2436,6 +2478,16 @@ function NativeQrScanner({
             'duplicate',
             5000,
           );
+          return false;
+        }
+        const nextVendorDrawScannedIds = normalizeQrVendorDrawScannedIds(
+          data.vendor_draw_scanned, data.in_show_scanned,
+        );
+        setVendorDrawScannedVendorIds(nextVendorDrawScannedIds);
+        if (!isolatedFixtureActive && (!isQrBingoScanWindowOpen(nextEventConfig, Date.now()) ||
+          !nextVendorDrawScannedIds.has(vendor.id))) {
+          setRaffleOffer(null);
+          showScanFeedback('Scan this vendor’s QR code while scanning is open to review its draw.', 'duplicate', 5000);
           return false;
         }
         if (!data.raffle_offer) {
@@ -2478,7 +2530,7 @@ function NativeQrScanner({
       eventConfig,
       eventConfig?.rules_version,
       eventVendorDrawsEnabled,
-      inShowScannedVendorIds,
+      vendorDrawScannedVendorIds,
       isolatedFixtureActive,
       nativeSession,
       participationNoticeAccepted,
@@ -2541,8 +2593,8 @@ function NativeQrScanner({
         if (scannedVendorIds.has(matched.id)) {
           unlockDelay = 1200;
           setBingoError(null);
-          if (!isolatedFixtureActive && isQrBingoInShowWindow(eventConfig, Date.now())) {
-            // Early progress needs a real camera rescan to obtain show proof.
+          if (!isolatedFixtureActive && isQrBingoScanWindowOpen(eventConfig, Date.now())) {
+            // Rescanning asks the server for current entry proof and the latest vendor offer.
             const saved = await saveBingoScan(matched);
             if (interactionGeneration !== qrInteractionGenerationRef.current) return;
             if (!saved) showScanFeedback('We could not confirm this scan. Please scan again to check your progress.', 'error', 5000);
@@ -2550,7 +2602,7 @@ function NativeQrScanner({
             await reopenVendorDrawOffer(matched);
           } else {
             showScanFeedback(
-              `Already scanned: ${matched.name}. ${eventVendorDrawsEnabled ? 'Optional vendor draws open during the wedding show.' : 'Optional vendor draws are temporarily unavailable.'}`,
+              `Already scanned: ${matched.name}. ${eventVendorDrawsEnabled ? 'Optional vendor draws are available while QR scanning is open.' : 'Optional vendor draws are temporarily unavailable.'}`,
               'duplicate',
               5000,
             );
@@ -2609,10 +2661,11 @@ function NativeQrScanner({
     }
     if (
       !scannerConfigVerified ||
+      !participationNoticeAccepted ||
       eventVendorDrawsEnabled !== true ||
-      (!isolatedFixtureActive && !isQrBingoInShowWindow(eventConfig, Date.now())) ||
+      (!isolatedFixtureActive && !isQrBingoScanWindowOpen(eventConfig, Date.now())) ||
       !raffleOffer ||
-      (!isolatedFixtureActive && !inShowScannedVendorIds.has(raffleOffer.vendor_id)) ||
+      (!isolatedFixtureActive && !vendorDrawScannedVendorIds.has(raffleOffer.vendor_id)) ||
       raffleSaving ||
       raffleEntryInFlightRef.current
     )
@@ -2778,9 +2831,10 @@ function NativeQrScanner({
     eventVendorDrawsEnabled,
     eventConfig?.rules_version,
     exclusionsAttested,
-    inShowScannedVendorIds,
+    vendorDrawScannedVendorIds,
     isolatedFixtureActive,
     nativeSession,
+    participationNoticeAccepted,
     promotionResponsibilityAccepted,
     raffleOffer,
     raffleRulesViewedVersion,
@@ -2847,7 +2901,7 @@ function NativeQrScanner({
   const scanEnabled = scannerConfigVerified && eventScanEnabled === true && !scanWindowClosed;
   const scanDisabled = eventScanEnabled === false;
   const vendorDrawsEnabled = scannerConfigVerified && eventVendorDrawsEnabled === true &&
-    (isolatedFixtureActive || isQrBingoInShowWindow(eventConfig, scanWindowNow));
+    (isolatedFixtureActive || isQrBingoScanWindowOpen(eventConfig, scanWindowNow));
   const onlyPhoneNumberMissing =
     missingContactFields.length === 1 &&
     missingContactFields[0].toLowerCase() === 'phone number';
@@ -3288,7 +3342,7 @@ function NativeQrScanner({
               {vendors.map((vendor) => {
                 const isScanned = scannedVendorIds.has(vendor.id);
                 const canReviewVendorDraw =
-                  isScanned && (isolatedFixtureActive || inShowScannedVendorIds.has(vendor.id)) &&
+                  isScanned && (isolatedFixtureActive || vendorDrawScannedVendorIds.has(vendor.id)) &&
                   vendorDrawsEnabled && participationNoticeAccepted;
                 return (
                   <TouchableOpacity
@@ -3357,103 +3411,16 @@ function NativeQrScanner({
       >
         <View style={styles.raffleModalBackdrop}>
           <View style={styles.raffleModalCard}>
-            <ScrollView
-              testID="vendor-draw-offer-scroll"
-              style={styles.raffleModalBody}
-              contentContainerStyle={styles.raffleModalCardContent}
-              showsVerticalScrollIndicator
-            >
-              <Text style={styles.raffleModalEyebrow}>Vendor Draw</Text>
+            <View style={styles.raffleModalCardContent} testID="vendor-draw-offer">
               <Text style={styles.raffleModalTitle}>
-                {raffleOffer?.prize_title || 'Enter vendor draw'}
+                Enter {raffleOffer?.vendor_name || 'this vendor'}’s draw?
               </Text>
-              <Text style={styles.raffleModalVendor}>
-                {raffleOffer?.vendor_name}
-              </Text>
-              <Text style={styles.raffleModalText}>
-                Named vendor sponsor, operator, and prize provider:{' '}
-                {raffleOffer?.vendor_business_name || raffleOffer?.vendor_name}
-              </Text>
-              {raffleOffer?.vendor_profile_url ? (
-                <TouchableOpacity
-                  activeOpacity={0.76}
-                  onPress={() =>
-                    Linking.openURL(raffleOffer.vendor_profile_url!).catch(() =>
-                      setBingoError('The vendor profile could not be opened.'),
-                    )
-                  }
-                  accessibilityRole="link"
-                  accessibilityLabel="Open the named vendor profile and contact route"
-                >
-                  <Text style={styles.raffleTermsLink}>
-                    Open vendor identity, profile, and contact route
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
-              {raffleOffer?.app_review_fixture ? (
-                <Text style={styles.raffleModalText}>
-                  App Review test fixture only. This is not a real promotion, no
-                  prize is awarded, and outbound email is disabled.
-                </Text>
-              ) : null}
-              {raffleOffer?.email_test_fixture ? (
-                <Text style={styles.raffleModalText}>
-                  Test emails are sent only to the approved test recipient.
-                  No real prize is awarded, and real draw entries are not included.
-                </Text>
-              ) : null}
-              {raffleOffer?.prize_description ? (
-                <Text style={styles.raffleModalText}>
-                  {raffleOffer.prize_description}
-                </Text>
-              ) : null}
-              <Text style={styles.raffleModalText}>
-                Approximate prize value / maximum savings: $
-                {Number(raffleOffer?.prize_approx_value_cad || 0).toFixed(2)}{' '}
-                CAD{`\n`}
-                One winning couple per draw.
-              </Text>
-              {raffleOffer?.eligibility_region ? (
-                <Text style={styles.raffleModalText}>
-                  Eligibility: {raffleOffer.eligibility_region}
-                </Text>
-              ) : null}
-              <Text style={styles.raffleModalText}>
-                Enter Draw confirms you meet this vendor&apos;s eligibility
-                requirements and accept its prize details and Draw Rules. Your
-                contact details will be shared with{' '}
-                {raffleOffer?.vendor_business_name ||
-                  raffleOffer?.vendor_name ||
-                  'the named vendor'}
-                {' '}for this draw and wedding-related marketing.
-              </Text>
-              <TouchableOpacity
-                activeOpacity={0.76}
-                onPress={() => {
-                  if (!raffleOffer?.terms_url) return;
-                  Linking.openURL(raffleOffer.terms_url)
-                    .then(() => {
-                      setBingoError(null);
-                    })
-                    .catch(() =>
-                      setBingoError('The official rules could not be opened.'),
-                    );
-                }}
-                accessibilityRole="link"
-                accessibilityLabel="View vendor draw rules"
-              >
-                <Text style={styles.raffleTermsLink}>View draw rules</Text>
-              </TouchableOpacity>
               {bingoError ? (
-                <Text
-                  style={styles.qrErrorText}
-                  accessibilityRole="alert"
-                  accessibilityLiveRegion="assertive"
-                >
+                <Text style={styles.qrErrorText} accessibilityRole="alert" accessibilityLiveRegion="assertive">
                   {bingoError}
                 </Text>
               ) : null}
-            </ScrollView>
+            </View>
             <View style={styles.raffleModalActions}>
               <TouchableOpacity
                 style={styles.raffleCancelButton}
@@ -3464,9 +3431,9 @@ function NativeQrScanner({
                 }}
                 disabled={raffleSaving}
                 accessibilityRole="button"
-                accessibilityLabel="Decline vendor draw entry"
+                accessibilityLabel={`No, decline ${raffleOffer?.vendor_name || 'this vendor'}’s draw`}
               >
-                <Text style={styles.raffleCancelText}>No Thanks</Text>
+                <Text style={styles.raffleCancelText}>No</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -3477,7 +3444,7 @@ function NativeQrScanner({
                 onPress={enterRaffle}
                 disabled={raffleEntryDisabled}
                 accessibilityRole="button"
-                accessibilityLabel="Enter vendor draw"
+                accessibilityLabel={`Yes, enter ${raffleOffer?.vendor_name || 'this vendor'}’s draw`}
                 accessibilityHint="Enters this named vendor's draw under the terms you accepted before scanning."
                 accessibilityState={{ disabled: raffleEntryDisabled }}
               >
@@ -3485,7 +3452,7 @@ function NativeQrScanner({
                   <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
                   <Text style={styles.raffleEnterText}>
-                    Enter Draw
+                    Yes
                   </Text>
                 )}
               </TouchableOpacity>
@@ -5728,6 +5695,9 @@ function NativeHome({
     : vendorRaffleSaveIsPending
       ? 'Saving changes...'
       : 'Saved automatically';
+  const vendorRaffleEntryStatus = vendorDrawEntryStatus(
+    vendorRaffle, raffleEnabled, vendorRaffleSaveIsPending, vendorRaffleSaveHasIssue,
+  );
   const vendorRafflePrizeStepComplete = Boolean(
     rafflePrizeDescription.trim() && Number(rafflePrizeApproxValueCad) > 0,
   );
@@ -7144,6 +7114,15 @@ function NativeHome({
                 ) : null}
                 {vendorRaffle?.vendor ? (
                   <>
+                    <View style={styles.vendorRaffleDrawStatusCard}
+                      testID="vendor-draw-entry-status" accessibilityLiveRegion="polite">
+                      <Text style={styles.vendorRaffleDrawStatusLabel}>
+                        {vendorRaffleEntryStatus.title}
+                      </Text>
+                      <Text style={styles.vendorRaffleDrawStatusText}>
+                        {vendorRaffleEntryStatus.message}
+                      </Text>
+                    </View>
                     {vendorRaffle.app_review_fixture ? (
                       <View style={styles.vendorRaffleTestNotice}>
                         <Text style={styles.vendorRaffleDrawStatusLabel}>
@@ -7445,9 +7424,9 @@ function NativeHome({
                                     Current event and entry terms
                                   </Text>
                                   <Text style={styles.vendorRaffleInfoText}>
-                                    Vendor draws are for eligible couples
-                                    attending the wedding show in person.
-                                    Couples visit your booth, scan your QR code,
+                                    Vendor draws are for eligible couples while
+                                    QR Bingo scanning is open and your draw is on.
+                                    Couples scan your QR code,
                                     and separately choose whether to enter. The
                                     QR entry replaces a paper ballot. General
                                     admission is free in advance while
@@ -7639,9 +7618,7 @@ function NativeHome({
                                 Open your prize draw
                               </Text>
                               <Text style={styles.vendorRaffleToggleText}>
-                                {raffleEnabled
-                                  ? 'Couples can now choose to enter your draw.'
-                                  : 'Off: couples can scan your booth, but cannot enter your draw.'}
+                                {vendorRaffleEntryStatus.message}
                               </Text>
                             </View>
                           </TouchableOpacity>
@@ -7823,7 +7800,7 @@ function NativeHome({
                                 </Text>
                                 <Text style={styles.vendorRafflePreviewBody}>
                                   You opted in after scanning this vendor{'’s'}{' '}
-                                  QR code at the wedding show.
+                                  QR code during authorized QR Bingo scanning.
                                 </Text>
                                 <Text style={styles.vendorRafflePreviewFooter}>
                                   WeddingWin.ca
@@ -8030,7 +8007,7 @@ function NativeHome({
                                     : poolStatus === 'reacceptance_required'
                                       ? 'Needs to enter again'
                                       : poolStatus === 'in_person_scan_required'
-                                        ? 'Needs a show scan'
+                                        ? 'Needs a QR scan'
                                         : poolStatus === 'excluded'
                                           ? 'Removed from draw'
                                           : 'In the draw';

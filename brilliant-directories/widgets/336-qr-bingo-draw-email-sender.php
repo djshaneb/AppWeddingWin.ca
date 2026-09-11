@@ -174,7 +174,7 @@ if (!function_exists('ww_qbdes_json')) {
             $profileUrl ? 'Vendor profile: ' . $profileUrl : 'You can connect with them through WeddingWin.ca.',
             '',
             'Why you received this',
-            "You opted in after scanning this vendor's QR code at the wedding show.",
+            "You opted in after scanning this vendor's QR code during authorized QR Bingo scanning.",
             '',
             'WeddingWin.ca'
         );
@@ -192,7 +192,7 @@ if (!function_exists('ww_qbdes_json')) {
         $html .= ww_qbdes_section('<p style="margin:0 0 14px;font-size:16px;line-height:1.55;">Hi ' . ww_qbdes_e($winner) . ',</p><p style="margin:0;font-size:16px;line-height:1.55;"><strong>Congratulations,</strong> your name was selected by ' . ww_qbdes_e($vendor) . ' for their draw.</p>');
         $html .= ww_qbdes_section(ww_qbdes_heading('Your draw') . '<p style="margin:0 0 8px;"><strong>Vendor:</strong> ' . ww_qbdes_e($vendor) . '</p><p style="margin:0;overflow-wrap:anywhere;"><strong>Draw item:</strong> ' . nl2br(ww_qbdes_e($prize)) . '</p>' . $valueHtml, '#fff7f6', '1px solid #efd8d5');
         $html .= ww_qbdes_section(ww_qbdes_heading('What happens next') . '<p style="margin:0;">' . ww_qbdes_e($vendor) . ' will follow up with the prize details and next steps.</p>' . $profile);
-        $html .= ww_qbdes_section(ww_qbdes_heading('Why you received this') . '<p style="margin:0;">You opted in after scanning this vendor&#39;s QR code at the wedding show.</p>');
+        $html .= ww_qbdes_section(ww_qbdes_heading('Why you received this') . '<p style="margin:0;">You opted in after scanning this vendor&#39;s QR code during authorized QR Bingo scanning.</p>');
         $html .= '<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="width:100%;"><tr><td style="padding:4px 20px 0;font-family:Arial,Helvetica,sans-serif;color:#2e2e32;font-size:15px;line-height:1.55;">WeddingWin.ca</td></tr></table>';
         return $html;
     }

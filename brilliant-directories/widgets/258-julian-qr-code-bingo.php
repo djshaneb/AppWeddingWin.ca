@@ -849,9 +849,9 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                     echo json_encode(array('ok' => false, 'error' => 'Optional vendor draws are temporarily unavailable.'));
                     exit();
                 }
-                if (!$fixtureContext && (time() < (int)$eventConfig['history_starts_at_unix'] || time() >= (int)$eventConfig['entry_closes_at_unix'])) {
+                if (!ww_qr_bingo_scan_window_open($eventConfig, time(), !empty($fixtureContext))) {
                     http_response_code(403);
-                    echo json_encode(array('ok' => false, 'code' => 'show_draw_window_closed', 'error' => 'Vendor draws open during the wedding show. Scan the vendor again at the show to enter.'));
+                    echo json_encode(array('ok' => false, 'code' => 'vendor_draw_window_closed', 'error' => 'Vendor draw entry is available while QR scanning is open and the vendor has enabled its draw.'));
                     exit();
                 }
                 $drawVendorId = isset($_POST['vendor_id']) && is_string($_POST['vendor_id'])
@@ -945,6 +945,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                     $drawPayload['draw_administration_contact_share_acknowledged'] = isset($_POST['draw_administration_contact_share_acknowledged']) && (string)$_POST['draw_administration_contact_share_acknowledged'] === '1';
                     $drawPayload['vendor_marketing_consent_acknowledged'] = isset($_POST['vendor_marketing_consent_acknowledged']) && (string)$_POST['vendor_marketing_consent_acknowledged'] === '1';
                     $drawPayload['participant_responsibility_disclosure'] = $participantResponsibilityDisclosure;
+
                 }
                 $drawResponse = ww_qr_bingo_vendor_draw_request(
                     $_POST['action'],
@@ -1097,6 +1098,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
                 echo json_encode([
                     'status' => 'success',
+                    'vendor_draw_scan' => ww_qr_bingo_scan_window_open($eventConfig, $scanRequestTime),
                     'in_show_scan' => $scanRequestTime >= (int)$eventConfig['history_starts_at_unix'] && $scanRequestTime < (int)$eventConfig['entry_closes_at_unix'],
                     'scanned_count' => $scannedCount,
                     'completed' => ($scannedCount >= $totalVendors)
@@ -1109,7 +1111,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                     echo json_encode(array(
                         'status' => 'success',
                         'scanned' => $fixtureContext['scanned'],
-                        'in_show_scanned' => $fixtureContext['scanned']
+                        'in_show_scanned' => $fixtureContext['scanned'],
+                        'vendor_draw_scanned' => $fixtureContext['scanned']
                     ));
                     exit();
                 }
@@ -1137,7 +1140,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                 echo json_encode([
                     'status' => 'success',
                     'scanned' => $scanned,
-                    'in_show_scanned' => $inShowScanned
+                    'in_show_scanned' => $inShowScanned,
+                    'vendor_draw_scanned' => $scanned
                 ]);
                 exit();
             }
@@ -1752,6 +1756,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 	      data-storage-key="<?php echo htmlspecialchars($rulesNoticeStorageKey, ENT_QUOTES, 'UTF-8'); ?>"
 	    >
 	      <h2>Before you scan</h2>
+	      <p>While QR scanning is open, including early access, scanning a vendor with its draw turned on offers an optional entry. Choose Yes to enter or No to keep only your scan. The displayed entry deadline and draw date still apply.</p>
 	      <div class="qr-rules-notice-row">
 	        <input id="qrRulesNoticeAcknowledged" type="checkbox">
 	        <label for="qrRulesNoticeAcknowledged">
@@ -1863,20 +1868,12 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
   </div>
 
   <div class="vendor-draw-modal" id="vendorDrawModal" hidden>
-    <section class="vendor-draw-dialog" id="vendorDrawDialog" role="dialog" aria-modal="true" aria-labelledby="vendorDrawTitle" aria-describedby="vendorDrawDescription vendorDrawPrivacy vendorDrawStatus" tabindex="-1">
-      <p class="vendor-draw-eyebrow">Optional vendor draw</p>
-      <h2 id="vendorDrawTitle">Vendor prize</h2>
-      <p class="vendor-draw-vendor" id="vendorDrawVendor"></p>
-      <p class="vendor-draw-copy" id="vendorDrawDescription"></p>
-      <p class="vendor-draw-copy" id="vendorDrawDisclosure"></p>
-      <p class="vendor-draw-copy" id="vendorDrawPrivacy"></p>
-      <div class="vendor-draw-terms" id="vendorDrawTerms" hidden>
-        <a id="vendorDrawRules" target="_blank" rel="noopener" hidden>View draw rules</a>
-      </div>
-      <p class="vendor-draw-status" id="vendorDrawStatus" role="status" aria-live="polite">Prize entry is separate and optional. One valid in-show QR entry is allowed per eligible couple for this vendor draw. Declining does not change your saved booth visit.</p>
+    <section class="vendor-draw-dialog" id="vendorDrawDialog" role="dialog" aria-modal="true" aria-labelledby="vendorDrawTitle" aria-describedby="vendorDrawStatus" tabindex="-1">
+      <h2 id="vendorDrawTitle">Enter this vendor’s draw?</h2>
+      <p class="vendor-draw-status" id="vendorDrawStatus" role="status" aria-live="polite"></p>
       <div class="vendor-draw-actions">
-        <button class="vendor-draw-decline" id="vendorDrawDecline" type="button">No Thanks</button>
-        <button class="vendor-draw-enter" id="vendorDrawEnter" type="button" disabled>Enter Draw</button>
+        <button class="vendor-draw-decline" id="vendorDrawDecline" type="button">No</button>
+        <button class="vendor-draw-enter" id="vendorDrawEnter" type="button" disabled>Yes</button>
       </div>
     </section>
   </div>
@@ -2002,6 +1999,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const QR_AUTHENTICATED_MEMBER_ID = <?php echo json_encode((string)$userId, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const QR_WEBSITE_CSRF = <?php echo json_encode($qrWebsiteCsrf, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const INITIAL_SCANNED = <?php echo json_encode($scannedVendors, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
+    const VENDOR_DRAW_SCANNED = <?php echo json_encode($scannedVendors, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const IN_SHOW_SCANNED = <?php echo json_encode($inShowScannedVendors, JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const QR_SCANNER_FIXTURE = <?php echo !empty($fixtureContext) ? 'true' : 'false'; ?>;
   </script>
@@ -2013,6 +2011,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
   <script>
     // --- State Management ---
     let scanned = new Set(INITIAL_SCANNED);
+    let vendorDrawScanned = new Set(typeof VENDOR_DRAW_SCANNED === 'undefined' ? (typeof IN_SHOW_SCANNED === 'undefined' ? [] : IN_SHOW_SCANNED) : VENDOR_DRAW_SCANNED);
     let inShowScanned = new Set(typeof IN_SHOW_SCANNED === 'undefined' ? [] : IN_SHOW_SCANNED);
     const vendorScanRequests = new Map();
     let rafId = null;
@@ -2134,6 +2133,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         if (!response.ok || data.status !== 'success') {
           throw new Error(data.message || 'Vendor scan could not be saved');
         }
+        if (data.vendor_draw_scan === true || data.in_show_scan === true || (typeof QR_SCANNER_FIXTURE !== 'undefined' && QR_SCANNER_FIXTURE === true)) vendorDrawScanned.add(vendorId);
         if (data.in_show_scan === true || (typeof QR_SCANNER_FIXTURE !== 'undefined' && QR_SCANNER_FIXTURE === true)) inShowScanned.add(vendorId);
         console.log('✅ Vendor scan saved to database');
         if (data.completed) {
@@ -2164,6 +2164,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         if (data.status === 'success') {
           scanned = new Set(data.scanned);
           inShowScanned = new Set(Array.isArray(data.in_show_scanned) ? data.in_show_scanned : []);
+          vendorDrawScanned = new Set((Array.isArray(data.vendor_draw_scanned) ? data.vendor_draw_scanned : Array.from(inShowScanned)).filter(id => typeof id === 'string' && scanned.has(id)));
           hydrateTiles();
         }
       } catch (error) {
@@ -2182,12 +2183,6 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const vendorDrawModal = document.getElementById('vendorDrawModal');
     const vendorDrawDialog = document.getElementById('vendorDrawDialog');
     const vendorDrawTitle = document.getElementById('vendorDrawTitle');
-    const vendorDrawVendor = document.getElementById('vendorDrawVendor');
-    const vendorDrawDescription = document.getElementById('vendorDrawDescription');
-    const vendorDrawDisclosure = document.getElementById('vendorDrawDisclosure');
-    const vendorDrawPrivacy = document.getElementById('vendorDrawPrivacy');
-    const vendorDrawTerms = document.getElementById('vendorDrawTerms');
-    const vendorDrawRules = document.getElementById('vendorDrawRules');
     const vendorDrawStatus = document.getElementById('vendorDrawStatus');
     const vendorDrawDecline = document.getElementById('vendorDrawDecline');
     const vendorDrawEnter = document.getElementById('vendorDrawEnter');
@@ -2391,34 +2386,15 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       currentVendorDrawVendor = vendor;
       resetVendorDrawChoice();
       vendorDrawDecline.disabled = false;
-      vendorDrawDecline.textContent = 'No Thanks';
+      vendorDrawDecline.textContent = 'No';
       vendorDrawEnter.hidden = false;
-      vendorDrawDisclosure.hidden = false;
-      vendorDrawPrivacy.hidden = false;
-      vendorDrawTerms.hidden = false;
-      vendorDrawRules.hidden = false;
-      vendorDrawTitle.textContent = cleanPromotionText(offer.prize_title) || 'Vendor prize';
-      const namedVendor = cleanPromotionText(offer.vendor_business_name) || cleanPromotionText(offer.vendor_name) || cleanPromotionText(vendor && vendor.name) || 'the named vendor';
-      vendorDrawVendor.textContent = namedVendor;
-      vendorDrawDescription.textContent = cleanPromotionText(offer.prize_description);
-      const value = Number(offer.prize_approx_value_cad);
-      vendorDrawDisclosure.textContent = [
-        `Approximate prize value / maximum savings: $${Number.isFinite(value) ? value.toFixed(2) : '0.00'} CAD`,
-        "One winning couple per draw.",
-        cleanPromotionText(offer.eligibility_region) ? `Eligibility: ${cleanPromotionText(offer.eligibility_region)}` : '',
-        cleanPromotionText(offer.entry_closes_at) ? `Entries close: ${formatPromotionDate(offer.entry_closes_at)}` : '',
-        cleanPromotionText(offer.draw_at) ? `Scheduled draw: ${formatPromotionDate(offer.draw_at)}` : '',
-        cleanPromotionText(offer.odds_basis) ? `Odds: ${cleanPromotionText(offer.odds_basis)}` : '',
-        'No purchase from this vendor is required.',
-        'This in-show QR entry replaces a paper ballot. Eligibility, dates, odds, admission, and entry limits are explained in the Draw Rules.'
-      ].filter(Boolean).join(String.fromCharCode(10));
-      vendorDrawPrivacy.textContent = `Enter Draw confirms you meet this vendor's eligibility requirements and accept its prize details and Draw Rules. Your contact details will be shared with ${namedVendor} for this draw and wedding-related marketing.`;
-      vendorDrawRules.href = rulesUrl;
+      const namedVendor = cleanPromotionText(offer.vendor_business_name) || cleanPromotionText(offer.vendor_name) || cleanPromotionText(vendor && vendor.name) || 'this vendor';
+      vendorDrawTitle.textContent = 'Enter ' + namedVendor + '’s draw?';
       vendorDrawStatus.classList.remove('is-error');
-      vendorDrawStatus.textContent = 'Prize entry is separate and optional. One valid in-show QR entry is allowed per eligible couple for this vendor draw. Declining does not change your saved booth visit.';
+      vendorDrawStatus.textContent = '';
       updateVendorDrawEntryButton();
       vendorDrawModal.hidden = false;
-      vendorDrawRules.focus();
+      vendorDrawDecline.focus();
       return true;
     }
 
@@ -2428,13 +2404,6 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       currentVendorDrawVendor = vendor;
       resetVendorDrawChoice();
       vendorDrawTitle.textContent = 'Draw status';
-      vendorDrawVendor.textContent = cleanPromotionText(vendor && vendor.name);
-      vendorDrawDescription.textContent = 'Your QR Bingo progress is unchanged.';
-      vendorDrawDisclosure.hidden = true;
-      vendorDrawPrivacy.hidden = true;
-      vendorDrawTerms.hidden = true;
-      vendorDrawRules.hidden = true;
-      vendorDrawRules.removeAttribute('href');
       vendorDrawEnter.hidden = true;
       vendorDrawDecline.disabled = false;
       vendorDrawDecline.textContent = 'Close';
@@ -2491,7 +2460,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
           throw new Error('The refreshed vendor offer was unavailable or invalid.');
         }
         vendorDrawStatus.classList.add('is-error');
-        vendorDrawStatus.textContent = 'The vendor offer changed. Review the updated prize and Draw Rules, then choose Enter Draw or No Thanks.';
+        vendorDrawStatus.textContent = 'The vendor updated this draw. Choose Yes or No.';
       } catch (refreshError) {
         currentVendorDrawOffer = null;
         resetVendorDrawChoice();
@@ -2643,7 +2612,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     async function markScanned(id) {
       if (!hasCurrentParticipationNotice()) return false;
       if (!VENDORS.find(v => v.id === id)) return false;
-      const alreadyRecorded = isWebsiteDrawWindowOpen() ? inShowScanned.has(id) : scanned.has(id);
+      const alreadyRecorded = isWebsiteDrawWindowOpen() ? vendorDrawScanned.has(id) : scanned.has(id);
       if (alreadyRecorded) return true;
       if (vendorScanRequests.has(id)) return vendorScanRequests.get(id);
 
@@ -2728,18 +2697,17 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     function isWebsiteDrawWindowOpen(now = Date.now()) {
       if (scannerConfigUnavailable || scannerSettingsRequireRefresh || EVENT_CONFIG.scan_enabled !== true) return false;
       if (typeof QR_SCANNER_FIXTURE !== 'undefined' && QR_SCANNER_FIXTURE === true) return true;
-      const opens = Date.parse(EVENT_CONFIG.history_starts_at), closes = Date.parse(EVENT_CONFIG.entry_closes_at);
-      return Number.isFinite(opens) && Number.isFinite(closes) && now >= opens && now < closes;
+      return EVENT_CONFIG.vendor_draws_enabled === true && isWebsiteScannerWindowOpen(now);
     }
     function canReviewVendorDraw(vendorId) {
-      return EVENT_CONFIG.vendor_draws_enabled === true && isWebsiteDrawWindowOpen() && typeof vendorId === 'string' && inShowScanned.has(vendorId);
+      return EVENT_CONFIG.vendor_draws_enabled === true && isWebsiteDrawWindowOpen() && typeof vendorId === 'string' && vendorDrawScanned.has(vendorId);
     }
     function scannerAvailabilityMessage() {
       if (scannerSettingsRequireRefresh) return 'The show settings changed. Refresh QR Bingo when you are ready; your entered details have not been cleared.';
       if (scannerConfigUnavailable) return 'Scanner availability could not be checked. Retrying shortly; your saved progress is unchanged.';
       if (EVENT_CONFIG.scan_enabled !== true) return 'Scanning is paused. Your saved progress is unchanged.';
       if (!isWebsiteScannerWindowOpen()) return Date.now() >= Date.parse(EVENT_CONFIG.entry_closes_at) ? 'Scanning for this wedding show has closed.' : 'Scanner opens ' + formatPromotionDate(EVENT_CONFIG.scan_opens_at || EVENT_CONFIG.history_starts_at) + '.';
-      if (!isWebsiteDrawWindowOpen()) return 'Bingo scanning is open. Vendor draws open ' + formatPromotionDate(EVENT_CONFIG.history_starts_at) + '; scan again at the show to enter.';
+      if (!isWebsiteDrawWindowOpen()) return 'Bingo scanning is open. Optional vendor draws are currently paused.';
       return 'QR Bingo scanning is open.';
     }
     function syncWebsiteScannerAvailability() {
