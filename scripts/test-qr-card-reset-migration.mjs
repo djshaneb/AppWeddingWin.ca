@@ -374,7 +374,31 @@ try {
   const state = async (who=couple) => (await row('select read_qr_bingo_card_state($1,$2) value',[event,who])).value;
   const preview = async (who=couple) => (await row('select qr_bingo_card_reset_snapshot($1,$2) value',[event,who])).value;
   let cutoff = new Date(Math.floor(Date.now()/1000)*1000).toISOString();
-  const reset = async (p,request=id(801),reason='Reset test card',at=cutoff) => (await row('select admin_reset_qr_bingo_couple_card($1,$2,$3,$4,$5,$6,$7,$8) value',[event,couple,p.expected_generation,p.preview_token,request,'Offline admin',reason,at])).value;
+  // Match the production RPC role, including its intentionally read-only
+  // configuration table access. A JWT role claim alone leaves this harness
+  // executing as its superuser and cannot detect PostgreSQL table privileges.
+  await db.exec('revoke all on qr_bingo_event_configs,qr_bingo_draw_email_deliveries from service_role; grant select on qr_bingo_event_configs,qr_bingo_draw_email_deliveries,app_review_raffle_fixture_participants to service_role; grant usage on schema auth to service_role;');
+  const reset = async (p,request=id(801),reason='Reset test card',at=cutoff) => {
+    await db.exec('begin; set local role service_role;');
+    try {
+      const value=(await row('select admin_reset_qr_bingo_couple_card($1,$2,$3,$4,$5,$6,$7,$8) value',[event,couple,p.expected_generation,p.preview_token,request,'Offline admin',reason,at])).value;
+      await db.exec('commit');
+      return value;
+    } catch(error) { await db.exec('rollback'); throw error; }
+  };
+  await test('old reset reproduces config row-lock denial under the real service role',async()=>{
+    await assert.rejects(reset(await preview(),id(800)),/permission denied for table qr_bingo_event_configs/);
+    assert.equal((await state()).generation,0);
+    assert.equal((await row('select count(*) n from qr_bingo_card_reset_audit')).n,0);
+  });
+  await test('permission correction changes only the redundant lock and preserves SELECT-only access',async()=>{
+    const before=(await row("select pg_get_functiondef('public.admin_reset_qr_bingo_couple_card(text,text,bigint,text,uuid,text,text,timestamptz)'::regprocedure) value")).value;
+    await db.exec(await readFile(new URL('../supabase/migrations/20260914012236_fix_card_reset_config_read_permissions.sql',import.meta.url),'utf8'));
+    const after=(await row("select pg_get_functiondef('public.admin_reset_qr_bingo_couple_card(text,text,bigint,text,uuid,text,text,timestamptz)'::regprocedure) value")).value;
+    assert.equal(after,before.replace(' perform 1 from public.qr_bingo_event_configs where published order by revision desc limit 1 for share;',' -- Published config is stable under qr_bingo_event_config_publish acquired above.').replace(' perform 1 from public.qr_bingo_draw_email_deliveries delivery join public.qr_bingo_raffle_draws draw on draw.id=delivery.draw_id where draw.event_key=p_event_key and draw.couple_bd_user_id=p_couple_id order by delivery.id for update of delivery;',' -- Delivery state is stable under its parent draw FOR UPDATE locks above.'));
+    const privileges=await row("select has_table_privilege('service_role','public.qr_bingo_event_configs','SELECT') read, has_table_privilege('service_role','public.qr_bingo_event_configs','UPDATE') write, has_table_privilege('service_role','public.qr_bingo_draw_email_deliveries','UPDATE') delivery_write");
+    assert.equal(privileges.read,true);assert.equal(privileges.write,false);assert.equal(privileges.delivery_write,false);
+  });
   let firstPreview;
   await test('preview is read only and exact-account scoped',async()=>{
     firstPreview=await preview();assert.equal(firstPreview.entry_count,1);assert.equal(firstPreview.can_reset,true);assert.equal(firstPreview.expected_generation,0);
