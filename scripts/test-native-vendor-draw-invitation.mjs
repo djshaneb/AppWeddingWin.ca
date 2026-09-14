@@ -226,3 +226,42 @@ test('the draw popup shows the named repeat notice only for a confirmed repeated
   assert.equal(notice.type, 'Text');
   assert.equal(notice.children.join('').trim(), 'Fictional Test Vendor has already been scanned.');
 });
+
+function offerReviewFixture({ proof = ['901'], isolated = false, message = 'You are already entered, or this vendor draw is not currently open.' } = {}) {
+  const { normalizeQrVendorDrawScannedIds } = loadAppDeclarations([
+    'normalizeQrInShowScannedIds', 'normalizeQrVendorDrawScannedIds',
+  ]);
+  const f = entryFixture({
+    data: { ok: true, event_config: { vendor_draws_enabled: true },
+      vendor_draw_scanned: proof, raffle_offer: null, message },
+    isolatedFixtureActive: isolated, raffleOffer: null,
+    raffleOfferInFlightRef: { current: false },
+    setSavingBingo() {}, setScannerConfigVerified() {},
+    normalizeQrVendorDrawScannedIds, setVendorDrawScannedVendorIds() {},
+  });
+  return { ...f, ...loadAppDeclarations(['reopenVendorDrawOffer'], f.globals) };
+}
+
+test('reopening an already-entered tile reports the scanned vendor without opening a modal or entering again', async () => {
+  const f = offerReviewFixture();
+  assert.equal(await f.reopenVendorDrawOffer({ id: '901', name: 'Fictional Test Vendor' }), false);
+  assert.deepEqual(f.requests.map(request => request.action), ['raffle_offer']);
+  assert.equal(f.requests[0].vendor_id, '901');
+  assert.deepEqual(f.feedback, [['Fictional Test Vendor has already been scanned.', 'duplicate', 3000]]);
+  assert.deepEqual(f.offers, []);
+  assert.deepEqual(f.offerNotices, []);
+  assert.deepEqual(f.errors.filter(Boolean), []);
+});
+
+test('no-offer response without current scan proof retains server guidance instead of claiming a repeat', async () => {
+  const message = 'This card was reset. Scan the vendor again.';
+  // Isolated review bypasses the production proof guard, exercising the
+  // no-offer branch itself with no authoritative proof after a reset.
+  const f = offerReviewFixture({ proof: [], isolated: true, message });
+  assert.equal(await f.reopenVendorDrawOffer({ id: '901', name: 'Fictional Test Vendor' }), false);
+  assert.deepEqual(f.requests.map(request => request.action), ['raffle_offer']);
+  assert.deepEqual(f.feedback, [[message, 'duplicate', 3000]]);
+  assert.deepEqual(f.offers, []);
+  assert.deepEqual(f.offerNotices, []);
+  assert.deepEqual(f.errors.filter(Boolean), []);
+});

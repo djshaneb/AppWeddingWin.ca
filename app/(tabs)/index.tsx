@@ -2516,10 +2516,11 @@ function NativeQrScanner({
         }
         if (!data.raffle_offer) {
           showScanFeedback(
-            data.message ||
-              `No entry action is currently available for ${vendor.name}.`,
+            nextVendorDrawScannedIds.has(vendor.id)
+              ? `${vendor.name} has already been scanned.`
+              : data.message || `No entry action is currently available for ${vendor.name}.`,
             'duplicate',
-            5000,
+            3000,
           );
           return false;
         }
