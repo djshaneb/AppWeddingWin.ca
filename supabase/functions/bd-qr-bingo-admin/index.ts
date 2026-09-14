@@ -317,12 +317,14 @@ async function dashboardStats(
         count: "exact",
         head: true,
       })
-        .eq("event_key", config.event_key),
+        .eq("event_key", config.event_key)
+        .is("card_reset_at", null),
       db.from("qr_bingo_raffle_entries").select("id", {
         count: "exact",
         head: true,
       })
         .eq("event_key", config.event_key)
+        .is("card_reset_at", null)
         .eq("entry_method", "alternate_free_entry"),
       db.from("qr_bingo_raffle_draws").select(
         "vendor_email_sent_at,couple_email_sent_at",
