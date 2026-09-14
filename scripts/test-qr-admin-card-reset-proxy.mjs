@@ -46,14 +46,15 @@ const fixture=`
 ${load}
 class RowSet { public $rows; function __construct($rows){$this->rows=$rows;} }
 class ResponseSent extends Exception {}
-$_SESSION=array();$queries=array();$calls=array();$held=false;$nonce=0;$generation=2;$cutoff='2026-09-10T12:00:00Z';$backendToken=str_repeat('a',64);$entryCount=2;$scans=array(array('vendor_id'=>'99001','scan_date'=>'2026-09-11 10:00:00'),array('vendor_id'=>'99002','scan_date'=>'2026-09-11 10:10:00'));$members=array(array('user_id'=>'90002','first_name'=>'Alex','last_name'=>'Jamie','email'=>'couple@example.test','subscription_id'=>'18','active'=>'2'));$lockBusy=false;$mode='normal';$receipts=array();$resetCalls=0;$mutations=0;$flags=array();$currentScanned=0;$currentTotal=2;$flagFailure=false;$allowReset=true;
+$_SESSION=array();$queries=array();$calls=array();$held=false;$nonce=0;$generation=2;$cutoff='2026-09-10T12:00:00Z';$backendToken=str_repeat('a',64);$entryCount=2;$scans=array(array('vendor_id'=>'99001','scan_date'=>'2026-09-11 10:00:00'),array('vendor_id'=>'99002','scan_date'=>'2026-09-11 10:10:00'));$members=array(array('user_id'=>'90002','first_name'=>'Alex','last_name'=>'Jamie','email'=>'couple@example.test','subscription_id'=>'18','active'=>'2'));$lockBusy=false;$mode='normal';$receipts=array();$resetCalls=0;$mutations=0;$flags=array();$currentScanned=0;$currentTotal=2;$flagFailure=false;$allowReset=true;$completionColumns=array('bingo_completed','bingo_completion_date');$schemaFailure=false;
 function mysql_real_escape_string($s){return str_replace("'","''",$s);}
 function mysql_fetch_assoc($result){return count($result->rows)?array_shift($result->rows):false;}
-function mysql($db,$sql){global $queries,$held,$members,$scans,$lockBusy,$flags,$currentScanned,$currentTotal,$flagFailure;$queries[]=$sql;
+function mysql($db,$sql){global $queries,$held,$members,$scans,$lockBusy,$flags,$currentScanned,$currentTotal,$flagFailure,$completionColumns,$schemaFailure;$queries[]=$sql;
  if(strpos($sql,'SELECT u.user_id,u.first_name')===0)return new RowSet($members);
  if(strpos($sql,'SELECT GET_LOCK(')===0){if(!$lockBusy)$held=true;return new RowSet(array(array('acquired'=>$lockBusy?'0':'1')));}
  if(strpos($sql,'SELECT RELEASE_LOCK(')===0){$held=false;return new RowSet(array(array('released'=>'1')));}
  if(!$held)throw new Exception('Fixture observed SQL outside card lock');
+ if($sql==="SHOW COLUMNS FROM users_data WHERE Field IN ('bingo_completed','bingo_completion_date')"){if($schemaFailure)return false;$rows=array();foreach($completionColumns as $field)$rows[]=array('Field'=>$field);return new RowSet($rows);}
  if(strpos($sql,'SELECT vv.vendor_id,vv.scan_date')===0)return new RowSet($scans);
  if(strpos($sql,'SELECT COUNT(DISTINCT u.user_id)')===0)return new RowSet(array(array('total_vendors'=>(string)$currentTotal)));
  if(strpos($sql,'SELECT COUNT(DISTINCT vv.vendor_id)')===0)return new RowSet(array(array('scanned_count'=>(string)$currentScanned,'completed_at'=>$currentScanned?'2026-09-12 14:00:00':null)));
@@ -133,4 +134,25 @@ test('scan cutoff list fails closed and filters only identified couples at or be
 test('bounded session previews evict safe stale selections but retain uncertain reset receipts',()=>{
   const got=php(fixture+`$p=dispatch(preview_request());$r=reset_request($p);$mode='timeout_no_commit';$a=dispatch($r);for($i=0;$i<25;$i++)$latest=dispatch(preview_request());$protected=isset($_SESSION['ww_qr_card_reset_previews'][$r['scan_preview_token']]);$size=count($_SESSION['ww_qr_card_reset_previews']);$b=dispatch($r);$saved=$_SESSION['ww_qr_card_reset_previews'][$r['scan_preview_token']];$_SESSION['ww_qr_card_reset_previews']=array();for($i=0;$i<20;$i++)$_SESSION['ww_qr_card_reset_previews'][str_pad(dechex($i+100),64,'0',STR_PAD_LEFT)]=$saved;$blocked=dispatch(preview_request());echo json_encode(array('protected'=>$protected,'size'=>$size,'latest'=>$latest,'retry'=>$b,'blocked'=>$blocked,'remaining'=>count($_SESSION['ww_qr_card_reset_previews'])));`);
   assert.equal(got.protected,true);assert.equal(got.size,20);assert.equal(got.latest.status,200);assert.equal(got.retry.status,503);assert.match(got.retry.body.error,/Retry this same request/);assert.equal(got.blocked.status,503);assert.match(got.blocked.body.error,/Finish an earlier reset/);assert.equal(got.remaining,20);
+});
+
+
+test('verified absence of both optional completion fields succeeds and replays without mirror writes',()=>{
+  const got=php(fixture+`$completionColumns=array();$p=dispatch(preview_request());$r=reset_request($p);$a=dispatch($r);$b=dispatch($r);echo json_encode(array('out'=>array($a,$b),'resetCalls'=>$resetCalls,'mutations'=>$mutations,'flags'=>$flags,'queries'=>$queries,'generation'=>$generation));`);
+  assert.deepEqual(got.out.map(x=>x.status),[200,200]);assert.equal(got.out[1].body.replayed,true);assert.equal(got.out[0].body.to_generation,3);assert.equal(got.generation,3);
+  assert.equal(got.resetCalls,1);assert.equal(got.mutations,1);assert.deepEqual(got.flags,[]);
+  assert.equal(got.queries.filter(x=>x.startsWith('SHOW COLUMNS')).length,2);
+  assert.equal(got.queries.some(x=>x.startsWith('SELECT COUNT(DISTINCT')),false,'absent mirrors must not perform completion reads or writes');
+  assert.equal(got.queries.filter(x=>x.startsWith('SELECT GET_LOCK')).length,got.queries.filter(x=>x.startsWith('SELECT RELEASE_LOCK')).length);
+});
+
+test('schema query failure never counts as absent and receipt retry only repairs the mirror',()=>{
+  const got=php(fixture+`$p=dispatch(preview_request());$r=reset_request($p);$schemaFailure=true;$a=dispatch($r);$schemaFailure=false;$b=dispatch($r);echo json_encode(array('out'=>array($a,$b),'resetCalls'=>$resetCalls,'mutations'=>$mutations,'flags'=>$flags,'generation'=>$generation));`);
+  assert.deepEqual(got.out.map(x=>x.status),[503,200]);assert.match(got.out[0].body.error,/schema could not be checked/);assert.equal(got.out[1].body.replayed,true);assert.equal(got.resetCalls,1);assert.equal(got.mutations,1);assert.equal(got.generation,3);assert.equal(got.flags.length,1);
+});
+
+test('either partial optional schema fails while complete schema keeps derived completion behavior',()=>{
+  const got=php(fixture+`$p=dispatch(preview_request());$r=reset_request($p);$out=array();foreach(array(array('bingo_completed'),array('bingo_completion_date')) as $completionColumns)$out[]=dispatch($r);$completionColumns=array('bingo_completion_date','bingo_completed');$currentScanned=2;$out[]=dispatch($r);echo json_encode(array('out'=>$out,'resetCalls'=>$resetCalls,'mutations'=>$mutations,'flags'=>$flags));`);
+  assert.deepEqual(got.out.map(x=>x.status),[503,503,200]);for(const r of got.out.slice(0,2))assert.match(r.body.error,/schema is incomplete/);
+  assert.equal(got.out[2].body.replayed,true);assert.equal(got.resetCalls,1);assert.equal(got.mutations,1);assert.equal(got.flags.length,1);assert.match(got.flags[0],/bingo_completed=1,bingo_completion_date='2026-09-12 14:00:00' WHERE user_id='90002'$/);
 });

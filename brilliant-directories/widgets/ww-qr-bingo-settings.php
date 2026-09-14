@@ -1202,6 +1202,17 @@ if (!function_exists('ww_qrbs_escape')) {
         return array('scan_count' => count($rows), 'scan_digest' => hash('sha256', json_encode(array($event, $couple, $config['revision'], $config['vendor_tag_id'], $start, $end, $state, $rows))), 'scan_where' => $where, 'vendor_tag_id' => $config['vendor_tag_id']);
     }
     function ww_qrbs_card_refresh_completion($database, $previewRequest) {
+        // These historical mirrors are optional. Current scanner/results derive
+        // completion from generation-filtered scans, so no columns means no write.
+        $columnResult = mysql($database, "SHOW COLUMNS FROM users_data WHERE Field IN ('bingo_completed','bingo_completion_date')");
+        if ($columnResult === false) throw new Exception('The reset was recorded, but the card status schema could not be checked. Retry this same request.');
+        $columns = array();
+        while ($column = mysql_fetch_assoc($columnResult)) {
+            if (!isset($column['Field']) || !in_array($column['Field'], array('bingo_completed', 'bingo_completion_date'), true) || isset($columns[$column['Field']])) throw new Exception('The reset was recorded, but the card status schema is inconsistent. Retry this same request.');
+            $columns[$column['Field']] = true;
+        }
+        if (count($columns) === 0) return;
+        if (count($columns) !== 2) throw new Exception('The reset was recorded, but the card status schema is incomplete. Retry this same request.');
         // Replays may arrive after a new card has already been completed. Read
         // its current generation under the scan lock rather than clearing blindly.
         $result = ww_qrbs_edge_call($database, $previewRequest);
