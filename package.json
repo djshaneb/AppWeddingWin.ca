@@ -26,7 +26,7 @@
     "test:auth-keyboard": "node --test scripts/test-native-auth-keyboard.mjs",
     "test:wedding-date": "node --test scripts/test-native-wedding-date-input.mjs",
     "test:bingo-contacts": "node --test scripts/test-native-bingo-contact-profile.mjs scripts/test-native-wedding-date-input.mjs scripts/test-qr-contact-admin-ui.mjs",
-    "test:draw-reset": "node --test scripts/test-qr-admin-draw-reset-ui.mjs scripts/test-qr-admin-draw-reset-proxy.mjs && node scripts/test-qr-draw-reset-migration.mjs",
+    "test:draw-reset": "node --test scripts/test-qr-admin-draw-reset-ui.mjs scripts/test-qr-admin-draw-reset-proxy.mjs && node scripts/test-qr-draw-reset-migration.mjs && node scripts/test-qr-draw-reset-permissions.mjs",
     "test:apple-web": "node --test scripts/test-website-apple-sign-in.mjs scripts/test-website-apple-routing.mjs",
     "test:apple-gateway": "node --test scripts/test-app-apple-sign-in-gateway.mjs",
     "audit:production": "node scripts/check-production-audit.mjs",
