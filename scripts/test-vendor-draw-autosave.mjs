@@ -125,6 +125,7 @@ function harness(options = {}) {
     vendorResponsibilityDisclosure: 'Fictional unit-test disclosure, never sent.',
     vendorRaffleSaveInFlightRef: { current: false },
     vendorRaffleLocalEditGenerationRef: { current: 0 },
+    vendorRaffleOpenGenerationRef: { current: 1 },
     vendorRaffleSaveSeqRef: { current: 0 },
     vendorRaffleLastSavedRef: { current: '' },
     vendorRaffleLastFailedSignatureRef: { current: '' },
@@ -186,6 +187,110 @@ function harness(options = {}) {
   }
   return { state, requests, alerts, hydrations, currentSignature, save: state.tested.save };
 }
+
+const enabledDraft = {
+  raffleEnabled: true,
+  raffleLegalAccepted: true,
+  vendorRaffleRulesViewedVersion: rulesVersion,
+};
+const readyReply = body => ({ response: { ok: true, status: 200 },
+  data: replyFor(body, {}, { vendor_acceptance_current: true,
+    rules_current: true, entry_status: 'open', entry_open: true }) });
+
+test('turning the draw on confirms once after the automatic save succeeds', async () => {
+  const wait = deferred();
+  const h = harness({ state: enabledDraft, transport: async body => {
+    await wait.promise;
+    return readyReply(body);
+  } });
+  const pending = h.save({ silent: true });
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.alerts.length, 0, 'Toggling or a pending save must not claim success');
+  assert.equal(await h.save({ silent: true }), false, 'Rapid taps cannot start another save');
+  wait.resolve();
+  assert.equal(await pending, true);
+  assert.equal(h.alerts.length, 1);
+  assert.equal(h.alerts[0][0], 'Congratulations!');
+  assert.equal(h.alerts[0][1], 'Your draw is on. You’re all set for the wedding show.');
+  assert.equal(h.alerts[0][2][0].text, 'Done');
+  assert.equal(await h.save({ silent: true }), true);
+  assert.equal(h.alerts.length, 1, 'Subsequent edits to an already enabled draw must not celebrate again');
+});
+
+test('a successfully saved scheduled draw also confirms wedding-show readiness', async () => {
+  const h = harness({ state: enabledDraft, transport: async body => {
+    const reply = readyReply(body);
+    Object.assign(reply.data, { entry_status: 'scheduled', entry_open: false });
+    return reply;
+  } });
+  assert.equal(await h.save(), true);
+  assert.equal(h.alerts.length, 1, 'Do not also show the generic Saved alert');
+  assert.equal(h.alerts[0][0], 'Congratulations!');
+});
+
+test('rejected, incomplete, conflicted, or timed-out saves never congratulate', async () => {
+  for (const outcome of ['rejected', 'incomplete', 'conflict', 'timeout', 'acceptance']) {
+    const h = harness({ state: enabledDraft, transport: async body => {
+      if (outcome === 'timeout') throw new Error('Unit-test timeout');
+      if (outcome === 'incomplete') return { response: { ok: true, status: 200 }, data: { ok: true } };
+      if (outcome === 'acceptance') { const reply = readyReply(body); reply.data.vendor_acceptance_current = false; return reply; }
+      return { response: { ok: false, status: outcome === 'conflict' ? 409 : 503 },
+        data: { ...readyReply(body).data, ok: false, error: 'Unit-test failure' } };
+    } });
+    assert.equal(await h.save({ silent: true }), false);
+    assert.equal(h.alerts.length, 0, outcome);
+  }
+});
+
+test('saved off, paused, closed, incomplete, or unconfirmed entry availability never claims all set', async () => {
+  for (const patch of [
+    { entry_status: 'paused', entry_open: false }, { entry_status: 'closed', entry_open: false },
+    { entry_status: 'incomplete', entry_open: false }, { entry_status: undefined },
+    { entry_status: 'open', entry_open: false }, { rules_current: false },
+    { vendor: { id: 'different-vendor' } },
+  ]) {
+    const h = harness({ state: enabledDraft, transport: async body => {
+      const reply = readyReply(body); Object.assign(reply.data, patch); return reply;
+    } });
+    await h.save({ silent: true });
+    assert.equal(h.alerts.length, 0);
+  }
+  const h = harness({ state: enabledDraft, transport: async body => {
+    const reply = readyReply(body); reply.data.settings.enabled = false; return reply;
+  } });
+  await h.save({ silent: true });
+  assert.equal(h.alerts.length, 0);
+});
+
+test('a late successful toggle cannot congratulate a newer edit, screen, save, or retired account', async () => {
+  for (const superseded of ['edit', 'screen', 'save', 'account']) {
+    const wait = deferred();
+    const h = harness({ state: enabledDraft, transport: async body => { await wait.promise; return readyReply(body); } });
+    const pending = h.save({ silent: true });
+    if (superseded === 'edit') { h.state.vendorRaffleLocalEditGenerationRef.current += 1; h.state.raffleEnabled = false; }
+    if (superseded === 'screen') h.state.vendorRaffleOpenGenerationRef.current += 1;
+    if (superseded === 'save') h.state.vendorRaffleSaveSeqRef.current += 1;
+    if (superseded === 'account') h.state.accountMutationIsCurrent = () => false;
+    wait.resolve(); await pending;
+    assert.equal(h.alerts.length, 0, superseded);
+  }
+});
+
+test('session changes and unmount invalidate pending vendor confirmations', () => {
+  const effect = findNode(node => ts.isCallExpression(node) &&
+    node.expression.getText(parsed) === 'useEffect' &&
+    node.arguments[0]?.getText(parsed).includes('vendorRaffleOpenGenerationRef.current += 1'));
+  assert(effect, 'Vendor confirmation must retire when the session or component changes');
+  let cleanup, dependencies;
+  const state = { nativeSession: { user_id: 'test-vendor', token: 'unit-test-token' },
+    vendorRaffleOpenGenerationRef: { current: 7 },
+    useEffect: (callback, deps) => { cleanup = callback(); dependencies = deps; } };
+  vm.runInNewContext(transpile(effect.getText(parsed)), state);
+  assert.deepEqual(Array.from(dependencies), ['test-vendor', 'unit-test-token']);
+  assert.equal(state.vendorRaffleOpenGenerationRef.current, 7);
+  cleanup();
+  assert.equal(state.vendorRaffleOpenGenerationRef.current, 8);
+});
 
 test('normalizing server response keeps multiline draft and currency formatting without a resave loop', async () => {
   const h = harness();

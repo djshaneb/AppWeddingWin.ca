@@ -77,14 +77,14 @@
     if (setupReady && data.entry_open === true && data.entry_status === 'open') {
       const count = Math.max(0, Math.floor(number(data.entry_count != null ? data.entry_count : data.entrant_count)));
       return {
-        label: `${drawName} is on`, summary: 'Entries open', kind: 'success', open: true,
+        label: `${drawName} is on`, summary: 'Entries open', kind: 'success', open: true, ready: true,
         message: `${count === 0 ? 'Ready and waiting for couples to scan' : 'Couples can scan'} your booth QR code and choose Yes to enter. Entrants will appear here after they confirm.`,
       };
     }
     if (setupReady && data.entry_open === false && data.entry_status === 'scheduled') {
       const opensAt = text(data.entry_opens_at);
       return {
-        label: `${drawName} is on — entries scheduled`, summary: 'Entries scheduled', kind: 'waiting', open: false,
+        label: `${drawName} is on — entries scheduled`, summary: 'Entries scheduled', kind: 'waiting', open: false, ready: true,
         message: opensAt && Number.isFinite(Date.parse(opensAt))
           ? `Your setup is saved. Entries open ${formatDate(opensAt)}. Couples can enter after scanning during the entry window.`
           : 'Your setup is saved. Entries have not opened yet. Check the current Official Rules for the entry schedule.',
@@ -232,6 +232,7 @@
       currentStep: 1,
       wizardTouched: false,
       initialStepSelected: false,
+      activationConfirmationScope: '',
     };
 
     function setStatus(message, kind) {
@@ -303,6 +304,12 @@
         state.responsibilityViewedVersion === rulesVersion
       );
       const readiness = savedDrawReadiness(data);
+      if (state.activationConfirmationScope &&
+        (readiness.ready !== true || state.activationConfirmationScope !== drawActivationScope())) {
+        state.activationConfirmationScope = '';
+        if (status.textContent === 'Congratulations! Your draw is on. You’re all set for the wedding show.') setStatus('');
+      }
+      const activationConfirmed = Boolean(state.activationConfirmationScope);
       const entriesOpen = readiness.open;
       const toggleUnsaved = typeof settings.enabled === 'boolean' && enabled.checked !== settings.enabled;
       const count = Math.max(0, Math.floor(number(data.entry_count != null ? data.entry_count : data.entrant_count)));
@@ -325,11 +332,11 @@
       });
 
       saveButton.textContent = 'Save and continue';
-      drawReadinessLabel.textContent = readiness.label;
-      drawReadinessMessage.textContent = readiness.message + (toggleUnsaved
+      drawReadinessLabel.textContent = activationConfirmed ? 'Congratulations! Your draw is on.' : readiness.label;
+      drawReadinessMessage.textContent = (activationConfirmed ? 'You’re all set for the wedding show. ' : '') + readiness.message + (toggleUnsaved
         ? ' Your on/off change is not saved yet. Select Save and continue to apply it.' : '');
-      drawReadiness.classList.toggle('is-success', readiness.kind === 'success');
-      drawReadiness.classList.toggle('is-waiting', readiness.kind !== 'success');
+      drawReadiness.classList.toggle('is-success', activationConfirmed || readiness.kind === 'success');
+      drawReadiness.classList.toggle('is-waiting', !activationConfirmed && readiness.kind !== 'success');
       const enabledHelp = enabled.closest('.ww-qrvd-switch').querySelector('small');
       if (enabledHelp) {
         enabledHelp.textContent = enabled.checked
@@ -351,6 +358,13 @@
       ]);
     }
 
+    function drawActivationScope() {
+      const data = state.data || {};
+      return JSON.stringify([
+        text(data.event_key), text(data.vendor && data.vendor.id),
+        text(data.settings && data.settings.updated_at), text(data.rules_version), currentDraftSignature(),
+      ]);
+    }
 
     function setBusy(value) {
       state.busy = Boolean(value);
@@ -1141,6 +1155,10 @@
       const submittedEnabled = Boolean(enabled.checked);
       const submittedEvent = text(state.data.event_key);
       const submittedVendor = text(state.data.vendor && state.data.vendor.id);
+      const submittedSettingsVersion = text(settings.updated_at);
+      const turningDrawOn = settings.enabled === false && submittedEnabled;
+      state.activationConfirmationScope = '';
+      updateWizardSummary();
       setBusy(true);
       setStatus('Saving your draw…');
       try {
@@ -1166,15 +1184,28 @@
           throw new Error('The save could not be confirmed. Please try again.');
         }
         const hasNewerEdits = currentDraftSignature() !== submittedDraftSignature;
+        const savedContextUnchanged = text(state.data.event_key) === submittedEvent &&
+          text(state.data.vendor && state.data.vendor.id) === submittedVendor &&
+          text(state.data.settings && state.data.settings.updated_at) === submittedSettingsVersion &&
+          text(state.data.rules_version) === rulesVersion;
+        const activationConfirmed = turningDrawOn && !hasNewerEdits && savedContextUnchanged &&
+          text(data.rules_version) === rulesVersion && savedDrawReadiness(data).ready === true &&
+          Date.parse(data.settings.updated_at) > Date.parse(submittedSettingsVersion);
         state.conflict = false;
         renderDashboard(data, {
           hydrateForm: !hasNewerEdits,
           draftFormatting: { description: descriptionValue, prizeValue: submittedPrizeValue },
         });
+        if (activationConfirmed) {
+          state.activationConfirmationScope = drawActivationScope();
+          updateWizardSummary();
+        }
         if (!hasNewerEdits) showWizardStep(3, { userInitiated: false, focus: true });
         setStatus(
           hasNewerEdits
             ? 'Saved your earlier changes. Save again to keep your latest edits.'
+            : activationConfirmed
+            ? 'Congratulations! Your draw is on. You’re all set for the wedding show.'
             : `Saved. ${savedDrawReadiness(data).label}. ${savedDrawReadiness(data).message}`,
           'success'
         );

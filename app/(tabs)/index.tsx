@@ -3951,6 +3951,11 @@ function NativeHome({
   const vendorRaffleScrollRef = useRef<ScrollView>(null);
   const vendorRaffleEntriesAutoLoadRef = useRef(false);
 
+  useEffect(() => () => {
+    // A completed save must not show its confirmation in a different session.
+    vendorRaffleOpenGenerationRef.current += 1;
+  }, [nativeSession?.user_id, nativeSession?.token]);
+
   useEffect(() => {
     setProfileFirstName(qrContactProfile?.name || '');
     setProfileEmail(qrContactProfile?.email || '');
@@ -4460,6 +4465,7 @@ function NativeHome({
         return false;
       const deletionGeneration = getAccountDeletionGeneration();
       const saveEditGeneration = vendorRaffleLocalEditGenerationRef.current;
+      const saveOpenGeneration = vendorRaffleOpenGenerationRef.current;
       const saveSeq = vendorRaffleSaveSeqRef.current + 1;
       vendorRaffleSaveSeqRef.current = saveSeq;
       const draftEnabled = raffleEnabled;
@@ -4471,6 +4477,7 @@ function NativeHome({
       const draftLegalAccepted = raffleLegalAccepted;
       const prizeDetailsLocked = areVendorPrizeDetailsLocked(vendorRaffle);
       const currentSettings = vendorRaffle?.settings;
+      const currentVendorId = vendorRaffle?.vendor?.id;
       const requestPrizeTitle = prizeDetailsLocked
         ? currentSettings?.prize_title || draftPrizeTitle
         : draftPrizeDescription.trim().split(/\r?\n/)[0]?.trim() ||
@@ -4622,13 +4629,27 @@ function NativeHome({
           );
           finishVendorRaffleHydration();
         }
+        const drawTurnedOn =
+          currentSettings?.enabled === false && draftEnabled &&
+          data.settings.enabled === true && acceptancePersisted &&
+          data.rules_current !== false &&
+          data.vendor.id === currentVendorId &&
+          ((data.entry_status === 'open' && data.entry_open === true) ||
+            (data.entry_status === 'scheduled' && data.entry_open === false)) &&
+          vendorRaffleLocalEditGenerationRef.current === saveEditGeneration &&
+          vendorRaffleOpenGenerationRef.current === saveOpenGeneration &&
+          saveSeq === vendorRaffleSaveSeqRef.current;
+        const drawOnMessage = 'Your draw is on. You’re all set for the wedding show.';
         setVendorRaffleSaveMessage(
           vendorRaffleLocalEditGenerationRef.current !== saveEditGeneration
             ? 'Saving your latest changes...'
-            : 'Saved to the app and website.',
+            : drawTurnedOn ? `Congratulations! ${drawOnMessage}`
+              : 'Saved to the app and website.',
         );
         setVendorRaffleSaveError(null);
-        if (!options.silent) {
+        if (drawTurnedOn) {
+          Alert.alert('Congratulations!', drawOnMessage, [{ text: 'Done' }]);
+        } else if (!options.silent) {
           Alert.alert(
             'Saved',
             'Your QR Bingo vendor draw settings are synced in the app and on the website.',
