@@ -21,6 +21,7 @@
     let selectedMember = null, contactEvent = '', confirmation = null, pendingMutation = null;
     let resetConfirmation = null, pendingReset = null;
     let cardEvent = '', cardSelection = null, cardPreview = null, pendingCardReset = null;
+    let pendingMasterStart = null;
     const validId = value => typeof value === 'string' && /^[1-9][0-9]{0,17}$/.test(value);
     const validDrawId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
     const eventKey = () => byId('wwQrDataEvent').value.trim();
@@ -44,15 +45,16 @@
       fields.set('ww_qrbs_form_action', action);
       return fields;
     }
-    async function post(fields) {
+    async function post(fields, timeoutMs = 20000) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(form.action, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: fields.toString(), signal: controller.signal });
         const result = await response.json();
         if (!response.ok || !result || result.ok !== true) {
           const error = new Error(result && typeof result.error === 'string' ? result.error : 'The request could not be completed. Please try again.');
           error.httpStatus = response.status;
+          error.code = result && result.code;
           throw error;
         }
         return result;
@@ -76,6 +78,55 @@
       const name = byId('wwQrDataOperator').value.trim();
       if (name.length < 3 || name.length > 160) { output.textContent = message; byId('wwQrDataOperator').focus(); return ''; }
       return name;
+    }
+    async function downloadMasterContacts() {
+      if (busy) return;
+      const output = byId('wwQrMasterStatus');
+      const operator = adminName('Enter your admin name before downloading.', output);
+      if (!operator) return;
+      if (!pendingMasterStart || pendingMasterStart.operator !== operator) pendingMasterStart = { operator, requestId: crypto.randomUUID() };
+      const attempt = pendingMasterStart;
+      const masterFields = action => {
+        const fields = fieldsFor(action);
+        fields.set('dataset', 'master_contacts'); fields.set('operator_identity', operator);
+        return fields;
+      };
+      const validCount = value => Number.isSafeInteger(value) && value >= 0;
+      const validReply = (reply, action) => reply.action === action && reply.dataset === 'master_contacts';
+      setBusy(true); output.textContent = 'Preparing all agreed couples…';
+      try {
+        const startFields = masterFields('master_contacts_export_start');
+        startFields.set('request_id', attempt.requestId);
+        const start = await post(startFields, 40000);
+        if (!validReply(start, 'master_contacts_export_start') || start.request_id !== attempt.requestId || !validDrawId(start.export_id) || !validCount(start.total) || start.page_size !== 250 || !Array.isArray(start.columns) || !start.columns.length || start.columns.length > 50 || start.columns.some(column => !column || typeof column.key !== 'string' || typeof column.label !== 'string') || typeof start.csv_header !== 'string' || start.csv_header.charCodeAt(0) !== 65279 || !Number.isFinite(Date.parse(start.generated_at)) || !Number.isFinite(Date.parse(start.expires_at))) throw new Error('The master spreadsheet could not be verified. No file was downloaded.');
+        const parts = [start.csv_header];
+        let cursor = 0;
+        while (cursor < start.total) {
+          const fields = masterFields('master_contacts_export_page');
+          fields.set('export_id', start.export_id); fields.set('cursor', String(cursor));
+          const chunk = await post(fields);
+          const expectedCount = Math.min(start.page_size, start.total - cursor);
+          const nextCursor = cursor + expectedCount;
+          const done = nextCursor === start.total;
+          if (!validReply(chunk, 'master_contacts_export_page') || chunk.export_id !== start.export_id || chunk.total !== start.total || chunk.cursor !== cursor || chunk.row_count !== expectedCount || chunk.done !== done || chunk.next_cursor !== (done ? null : nextCursor) || typeof chunk.csv_chunk !== 'string' || !chunk.csv_chunk.length) throw new Error('The master spreadsheet was incomplete. No file was downloaded; please retry.');
+          parts.push(chunk.csv_chunk); cursor = nextCursor;
+          output.textContent = 'Preparing ' + cursor + ' of ' + start.total + ' couples…';
+        }
+        const finishFields = masterFields('master_contacts_export_complete');
+        finishFields.set('export_id', start.export_id); finishFields.set('expected_row_count', String(cursor));
+        const finish = await post(finishFields);
+        const report = finish.report;
+        if (!validReply(finish, 'master_contacts_export_complete') || finish.export_id !== start.export_id || finish.total !== start.total || !report || report.row_count !== cursor || report.generated_at !== start.generated_at || report.mime_type !== 'text/csv;charset=utf-8' || typeof report.filename !== 'string' || !/^[a-zA-Z0-9._-]+[.]csv$/.test(report.filename)) throw new Error('The completed spreadsheet could not be verified. No file was downloaded.');
+        const url = URL.createObjectURL(new Blob(parts, { type: report.mime_type }));
+        const link = document.createElement('a'); link.href = url; link.download = report.filename;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        pendingMasterStart = null;
+        output.textContent = cursor + ' couples downloaded. Includes all recorded agreements across all events.';
+      } catch (error) {
+        if (error && (error.httpStatus === 409 || error.httpStatus === 410)) pendingMasterStart = null;
+        output.textContent = errorText(error) + ' No partial spreadsheet was downloaded.';
+      } finally { setBusy(false); }
     }
     function rowAction(record, selectedEvent) {
       const column = document.createElement('td');
@@ -343,6 +394,7 @@
     }));
     form.addEventListener('submit', event => { event.preventDefault(); void request(false, 1); });
     document.getElementById('wwQrDataExport').addEventListener('click', () => { void request(true, 1); });
+    if (byId('wwQrMasterExport')) byId('wwQrMasterExport').addEventListener('click', () => { void downloadMasterContacts(); });
     previous.addEventListener('click', () => { if (page > 1) void request(false, page - 1); });
     next.addEventListener('click', () => { if (hasMore) void request(false, page + 1); });
     ['wwQrDataEvent', 'wwQrDataVendor', 'wwQrDataSearch', 'wwQrDataContactStatus'].forEach(id => document.getElementById(id).addEventListener(id === 'wwQrDataContactStatus' ? 'change' : 'input', () => { if (!busy) { page = 1; clearRows(); closeConfirmation(); closeReset(); closeCardReset(); if (id === 'wwQrDataEvent') { closeAdd(); clearMember(); } status.textContent = 'Filters changed. Select Show list.'; } }));

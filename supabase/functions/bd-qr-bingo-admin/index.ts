@@ -1,5 +1,9 @@
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import {
+  handleQrAdminMasterExport,
+  QrAdminMasterExportError,
+} from "../_shared/qr_bingo_admin_master_export.ts";
+import {
   handleQrAdminDrawReset,
   QrAdminDrawResetError,
 } from "../_shared/qr_bingo_admin_draw_reset.ts";
@@ -441,6 +445,29 @@ Deno.serve(async (request) => {
     await requireSignedAdminRequest(request, rawBody);
     const body = JSON.parse(rawBody || "{}") as Record<string, unknown>;
     const action = String(body.action || "");
+
+    if (
+      [
+        "master_contacts_export_start",
+        "master_contacts_export_page",
+        "master_contacts_export_complete",
+      ].includes(action)
+    ) {
+      try {
+        return jsonResponse(
+          await handleQrAdminMasterExport(requireAdmin(), body),
+        );
+      } catch (error) {
+        if (error instanceof QrAdminMasterExportError) {
+          return jsonResponse({
+            ok: false,
+            code: error.code,
+            error: error.message,
+          }, error.status);
+        }
+        throw error;
+      }
+    }
 
     if (
       ["card_reset_preview", "card_reset", "card_reset_cutoffs"].includes(

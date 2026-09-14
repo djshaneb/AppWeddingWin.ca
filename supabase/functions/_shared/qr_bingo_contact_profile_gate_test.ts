@@ -194,9 +194,11 @@ Deno.test("native, website, and both Edge endpoints use one versioned participat
     ) &&
       website.includes("function currentParticipationNoticeScope()") &&
       website.includes("window.localStorage.getItem(storageKey) === scope") &&
-      website.includes("window.localStorage.setItem(storageKey, acceptedScope)") &&
+      website.includes("window.localStorage.setItem(qrRulesNotice.dataset.storageKey, scope)") &&
+      website.includes("void saveParticipationNotice('cached')") &&
+      website.includes("!validParticipationReceipt(data.participation_agreement)") &&
       !website.includes("window.localStorage.getItem(storageKey) === '1'"),
-    "website notice storage must require the current account, event, rules and notice scope, not a legacy boolean",
+    "website acknowledgement storage must bind the current account, event and versions; cached acknowledgements require a valid server receipt before unlocking",
   );
   assert(
     app.includes(

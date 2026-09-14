@@ -263,8 +263,8 @@ test('QR transport preserves roster/history and still gates scans and opt-ins be
   const profile = section(qr, "if (!function_exists('ww_qr_bingo_contact_profile'))", "if (!function_exists('ww_qr_bingo_fixture_context'))");
   assert.match(profile, /contact_profile_get/);
   assert.doesNotMatch(profile, /ww_email_verification_state\(|ww_ev_user\(|UPDATE users_data|mail\(/);
-  assert.match(qr, /array\('fixture_context', 'contact_profile_get', 'contact_profile_save', 'scan', 'raffle_offer', 'raffle_opt_in'\)/);
-  assert.match(qr, /array\('scan_vendor', 'raffle_offer', 'raffle_opt_in'\), true\)\s*&& !\$qrContactComplete/);
+  assert.match(qr, /array\('fixture_context', 'contact_profile_get', 'contact_profile_save', 'participation_accept', 'scan', 'raffle_offer', 'raffle_opt_in'\)/);
+  assert.match(qr, /array\('participation_accept', 'scan_vendor', 'raffle_offer', 'raffle_opt_in'\), true\)\s*&& !\$qrContactComplete/);
   assert.match(qr, /code' => 'participation_notice_required'/);
   assert.match(qr, /if \(\$_POST\['action'\] === 'get_scanned'\)/);
   assert.match(qr, /const VENDORS =/);

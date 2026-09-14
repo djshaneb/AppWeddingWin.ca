@@ -290,6 +290,7 @@ type QrBingoSyncResponse = {
   profile_edit_url?: string;
   contact_profile?: QrBingoContactProfile;
   participation_notice_version?: string;
+  participation_agreement?: unknown;
   app_review_fixture?: boolean;
   email_test_fixture?: boolean;
   event_config?: QrBingoEventConfig | null;
@@ -1819,6 +1820,20 @@ function normalizeQrVendorDrawScannedIds(value: unknown, legacyInShow: unknown):
   return normalizeQrInShowScannedIds(value === undefined ? legacyInShow : value);
 }
 
+function isCurrentQrParticipationAgreement(
+  value: unknown, coupleId: string, eventKey: string, rulesVersion: string, profileEventKey: string,
+): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const receipt = value as Record<string, unknown>;
+  return receipt.recorded === true && receipt.couple_id === coupleId &&
+    receipt.event_key === eventKey && receipt.rules_version === rulesVersion &&
+    receipt.participation_notice_version === `${rulesVersion}|${QR_BINGO_PARTICIPATION_NOTICE_VERSION}` &&
+    Boolean(profileEventKey) && receipt.profile_event_key === profileEventKey &&
+    typeof receipt.acceptance_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(receipt.acceptance_id) &&
+    typeof receipt.accepted_at === 'string' && /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$/.test(receipt.accepted_at) && Number.isFinite(Date.parse(receipt.accepted_at)) &&
+    typeof receipt.excluded_from_master === 'boolean';
+}
+
 function NativeQrScanner({
   visible,
   onClose,
@@ -1868,6 +1883,11 @@ function NativeQrScanner({
     useState('');
   const [participationNoticeLoading, setParticipationNoticeLoading] =
     useState(false);
+  const [participationNoticeBackfillKey, setParticipationNoticeBackfillKey] = useState('');
+  const [serverParticipationAgreement, setServerParticipationAgreement] = useState<unknown>(null);
+  const [participationProfileEventKey, setParticipationProfileEventKey] = useState('');
+  const participationNoticeRequestRef = useRef<{ scope: string; promise: Promise<boolean> } | null>(null);
+  const participationNoticeScopeRef = useRef('');
   const [reviewingParticipationNotice, setReviewingParticipationNotice] =
     useState(false);
   const reviewingParticipationNoticeRef = useRef(false);
@@ -1902,7 +1922,7 @@ function NativeQrScanner({
     missingContactFields.length === 0;
   const participationNoticeKey = useMemo(() => {
     const userId = String(
-      member?.user_id || nativeSession?.user_id || '',
+      nativeSession?.user_id || '',
     ).trim();
     const rulesVersion = String(
       eventConfig?.rules_version || QR_BINGO_PARTICIPATION_NOTICE_VERSION,
@@ -1914,9 +1934,11 @@ function NativeQrScanner({
   }, [
     eventConfig?.event_key,
     eventConfig?.rules_version,
-    member?.user_id,
     nativeSession?.user_id,
   ]);
+  const participationNoticeScope = JSON.stringify([visible, contactProfileComplete,
+    nativeSession?.user_id, nativeSession?.token, participationNoticeKey, eventConfig?.revision, participationProfileEventKey]);
+  participationNoticeScopeRef.current = participationNoticeScope;
   const participationNoticeAccepted = Boolean(
     participationNoticeKey &&
       acceptedParticipationNoticeKey === participationNoticeKey,
@@ -1973,6 +1995,8 @@ function NativeQrScanner({
 
   const clearBingoCardState = useCallback(() => {
     bingoCardStateKeyRef.current = null;
+    setServerParticipationAgreement(null);
+    setParticipationProfileEventKey('');
     setEventConfig(null);
     setScannerConfigVerified(false);
     setAppReviewFixture(false);
@@ -2067,6 +2091,8 @@ function NativeQrScanner({
       }
 
       setServerMissingContactFields([]);
+      setServerParticipationAgreement(data.participation_agreement ?? null);
+      setParticipationProfileEventKey(loadedContact.event_key);
       const loadedEventConfig = normalizeQrBingoEventConfig(data.event_config);
       setEventConfig(loadedEventConfig);
       setScannerConfigVerified(Boolean(loadedEventConfig));
@@ -2180,33 +2206,98 @@ function NativeQrScanner({
   }, [clearBingoCardState, contactProfileComplete, eventConfig?.event_key,
     eventConfig?.revision, eventConfig?.vendor_tag_id, loadBingoCard, visible]);
 
+  const syncParticipationNotice = useCallback((source: 'explicit' | 'cached'): Promise<boolean> => {
+    if (!visible || !participationNoticeKey || !contactProfileComplete ||
+        !scannerConfigVerified || !eventConfig || !participationProfileEventKey || !nativeSession?.user_id ||
+        !nativeSession?.token || accountDeletionIsInFlight()) return Promise.resolve(false);
+    const scope = participationNoticeScope;
+    if (participationNoticeRequestRef.current?.scope === scope) {
+      return participationNoticeRequestRef.current.promise;
+    }
+    const interactionGeneration = qrInteractionGenerationRef.current;
+    const deletionGeneration = getAccountDeletionGeneration();
+    const stillCurrent = () => participationNoticeScopeRef.current === scope &&
+      interactionGeneration === qrInteractionGenerationRef.current &&
+      accountMutationIsCurrent(deletionGeneration);
+    const request = { scope, promise: Promise.resolve(false) };
+    participationNoticeRequestRef.current = request;
+    setParticipationNoticeLoading(true);
+    setBingoError(null);
+    request.promise = (async () => {
+      try {
+        const { response, data } = await fetchQrBingoJsonWithTimeout<QrBingoSyncResponse>(
+          QR_BINGO_SYNC_FUNCTION_URL,
+          { method: 'POST', headers: {
+            Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+            apikey: APP_BACKEND_PUBLISHABLE_KEY, 'Content-Type': 'application/json',
+          }, body: JSON.stringify({ action: 'participation_accept', native_session: nativeSession,
+            accepted: true, expected_event_key: eventConfig.event_key,
+            expected_config_revision: eventConfig.revision, rules_version: eventConfig.rules_version,
+            participation_notice_version: `${eventConfig.rules_version}|${QR_BINGO_PARTICIPATION_NOTICE_VERSION}`,
+            acceptance_source: source }) },
+          'Saving your acknowledgement took too long. Please try again.',
+        );
+        if (!stillCurrent()) return false;
+        if (!response.ok || data?.ok !== true || !isCurrentQrParticipationAgreement(
+          data.participation_agreement, String(nativeSession.user_id), eventConfig.event_key, eventConfig.rules_version, participationProfileEventKey,
+        )) throw new Error(data?.detail || data?.error || 'Your acknowledgement could not be saved. Please try again.');
+        // The server receipt is durable; a local storage failure must not erase it.
+        await SecureStore.setItemAsync(participationNoticeKey, '1').catch(() => {});
+        if (!stillCurrent()) return false;
+        setServerParticipationAgreement(data.participation_agreement);
+        setAcceptedParticipationNoticeKey(participationNoticeKey);
+        setParticipationNoticeBackfillKey('');
+        reviewingParticipationNoticeRef.current = false;
+        setReviewingParticipationNotice(false);
+        return true;
+      } catch (error) {
+        if (stillCurrent()) {
+          setAcceptedParticipationNoticeKey('');
+          setBingoError(error instanceof Error ? error.message : 'Your acknowledgement could not be saved. Please try again.');
+        }
+        return false;
+      } finally {
+        if (participationNoticeRequestRef.current === request) participationNoticeRequestRef.current = null;
+        if (stillCurrent()) setParticipationNoticeLoading(false);
+      }
+    })();
+    return request.promise;
+  }, [contactProfileComplete, eventConfig, nativeSession, participationNoticeKey,
+    participationNoticeScope, participationProfileEventKey, scannerConfigVerified, visible]);
+
   useEffect(() => {
-    if (
-      !visible ||
-      !contactProfileComplete ||
-      !participationNoticeKey
-    ) {
+    let active = true;
+    if (!visible || !contactProfileComplete || !participationNoticeKey || !eventConfig) {
       setParticipationNoticeLoading(false);
+      setParticipationNoticeBackfillKey('');
       return;
     }
-    let active = true;
     setParticipationNoticeLoading(true);
-    SecureStore.getItemAsync(participationNoticeKey)
-      .then((value) => {
-        if (active) setAcceptedParticipationNoticeKey(
-          value === '1' ? participationNoticeKey : '',
-        );
-      })
-      .catch(() => {
-        if (active) setAcceptedParticipationNoticeKey('');
-      })
-      .finally(() => {
-        if (active) setParticipationNoticeLoading(false);
-      });
-    return () => {
-      active = false;
+    setParticipationNoticeBackfillKey('');
+    const restore = async () => {
+      if (isCurrentQrParticipationAgreement(serverParticipationAgreement,
+        String(nativeSession?.user_id || ''), eventConfig.event_key, eventConfig.rules_version, participationProfileEventKey)) {
+        if (active) {
+          setAcceptedParticipationNoticeKey(participationNoticeKey);
+          setParticipationNoticeLoading(false);
+          void SecureStore.setItemAsync(participationNoticeKey, '1').catch(() => {});
+        }
+        return;
+      }
+      const value = await SecureStore.getItemAsync(participationNoticeKey).catch(() => null);
+      if (!active) return;
+      setAcceptedParticipationNoticeKey('');
+      if (value === '1') {
+        // Preserve the actual earlier agreement; retry syncing it without a new checkbox decision.
+        setParticipationNoticeBackfillKey(participationNoticeKey);
+        await syncParticipationNotice('cached');
+      }
+      if (active) setParticipationNoticeLoading(false);
     };
-  }, [contactProfileComplete, participationNoticeKey, visible]);
+    void restore();
+    return () => { active = false; };
+  }, [contactProfileComplete, eventConfig, nativeSession?.user_id, participationNoticeKey,
+    participationProfileEventKey, serverParticipationAgreement, syncParticipationNotice, visible]);
 
   useEffect(() => {
     if (
@@ -2861,21 +2952,12 @@ function NativeQrScanner({
   ]);
 
   const acceptParticipationNotice = useCallback(() => {
-    if (
-      !participationNoticeKey ||
-      !contactProfileComplete ||
-      !nativeSession?.user_id ||
-      !nativeSession?.token ||
-      accountDeletionIsInFlight()
-    ) return;
-    reviewingParticipationNoticeRef.current = false;
-    setReviewingParticipationNotice(false);
-    setAcceptedParticipationNoticeKey(participationNoticeKey);
-    setBingoError(null);
-    SecureStore.setItemAsync(participationNoticeKey, '1').catch(() => {
-      // The acknowledgement still applies for this open scanner session.
-    });
-  }, [contactProfileComplete, nativeSession, participationNoticeKey]);
+    return syncParticipationNotice('explicit');
+  }, [syncParticipationNotice]);
+
+  const retryParticipationNoticeSync = useCallback(() => {
+    return syncParticipationNotice('cached');
+  }, [syncParticipationNotice]);
 
   const reviewParticipationNotice = useCallback(() => {
     if (
@@ -3077,6 +3159,18 @@ function NativeQrScanner({
             <Text style={styles.qrPermissionTitle}>
               Checking your acknowledgement
             </Text>
+          </View>
+        ) : participationNoticeBackfillKey === participationNoticeKey && !participationNoticeAccepted ? (
+          <View style={styles.qrPermissionPanel}>
+            <Text style={styles.qrPermissionTitle}>Your acknowledgement needs to sync</Text>
+            <Text style={styles.qrPermissionText}>
+              {bingoError || 'Please retry saving your existing acknowledgement before scanning.'}
+            </Text>
+            <TouchableOpacity style={styles.qrPermissionButton} onPress={retryParticipationNoticeSync}
+              accessibilityRole="button" accessibilityLabel="Retry saving QR Bingo acknowledgement"
+              testID="qr-bingo-agreement-sync-retry">
+              <Text style={styles.qrPermissionButtonText}>Retry</Text>
+            </TouchableOpacity>
           </View>
         ) : showingParticipationNotice ? (
           <View

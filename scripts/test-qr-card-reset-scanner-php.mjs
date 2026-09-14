@@ -33,8 +33,9 @@ const config = { event_key: 'offline-event', event_name: 'Offline show', vendor_
   history_starts_at: '2030-10-18T15:00:00Z', entry_closes_at: '2030-10-18T19:00:00Z' };
 
 function route({ action = 'get_scanned', card = initial, privateFixture = false, probeCard = card,
-  scanCard = card, lock = '1', visits = [], fields = {}, origin = 'https://www.weddingwin.ca' } = {}) {
-  const fixture = { action, card, privateFixture, probeCard, scanCard, lock, visits, config };
+  scanCard = card, lock = '1', visits = [], fields = {}, origin = 'https://www.weddingwin.ca',
+  agreementResponse = null, profileComplete = true } = {}) {
+  const fixture = { action, card, privateFixture, probeCard, scanCard, lock, visits, config, agreementResponse, profileComplete };
   const post = { action, vendor_id: '707', qr_csrf: 'c'.repeat(64), expected_event_key: config.event_key,
     expected_config_revision: '9', participation_notice_version: 'offline-rules|2026-09-04-pre-scan-draw-consent', ...fields };
   const adapted = source.replace('$eventConfig = ww_qr_bingo_runtime_config();', '$eventConfig = ww_qr_bingo_scanner_config($fixture["config"]);');
@@ -70,8 +71,15 @@ function route({ action = 'get_scanned', card = initial, privateFixture = false,
     }
     function ww_qr_bingo_vendor_draw_request($action,$payload){global $fixture,$events,$calls;
       $events[]=$action;$calls[]=array('action'=>$action,'payload'=>$payload);
-      if($action==='contact_profile_get')return array('status_code'=>200,'body'=>array('ok'=>true,'profile_complete'=>true,'event_key'=>$fixture['card']['event_key'],'card_state'=>$fixture['card'],
+      if($action==='contact_profile_get')return array('status_code'=>200,'body'=>array('ok'=>true,'profile_complete'=>$fixture['profileComplete'],'event_key'=>$fixture['card']['event_key'],'card_state'=>$fixture['card'],
         'contact_profile'=>array('name'=>'Alex and Sam','email'=>'couple@example.invalid','phone'=>'5550100','version'=>1),'missing_profile_fields'=>array()));
+      if($action==='participation_accept'){
+        if($fixture['agreementResponse']!==null)return $fixture['agreementResponse'];
+        return array('status_code'=>200,'body'=>array('ok'=>true,'participation_agreement'=>array(
+          'recorded'=>true,'couple_id'=>'90001','event_key'=>$fixture['config']['event_key'],'profile_event_key'=>$fixture['card']['event_key'],
+          'rules_version'=>'offline-rules','participation_notice_version'=>'offline-rules|2026-09-04-pre-scan-draw-consent',
+          'accepted_at'=>'2026-09-14T12:00:00Z','acceptance_id'=>'d3e4a889-7ca4-46f2-8c88-9c637b35a099','excluded_from_master'=>$fixture['privateFixture'])));
+      }
       if($action==='fixture_context'||$action==='scan'){
         $state=$action==='scan'?$fixture['scanCard']:$fixture['probeCard'];
         $scanned=$action==='scan'?array('707'):array();
@@ -175,4 +183,55 @@ test('fixture state from another couple or generation cannot be reused across re
   assert(stale.events.includes('release'));
   const responseStale = route({ action: 'scan_vendor', privateFixture: true, card, scanCard: { ...card, generation: 2 } });
   assert.equal(responseStale.status, 502, responseStale.raw); assert.equal(responseStale.body.status, 'error');
+});
+
+
+const agreementFields = { accepted: '1', rules_version: 'offline-rules', acceptance_source: 'explicit' };
+const agreementReceipt = { recorded: true, couple_id: '90001', event_key: 'offline-event', profile_event_key: 'offline-event',
+  rules_version: 'offline-rules', participation_notice_version: 'offline-rules|2026-09-04-pre-scan-draw-consent',
+  accepted_at: '2026-09-14T12:00:00Z', acceptance_id: 'd3e4a889-7ca4-46f2-8c88-9c637b35a099', excluded_from_master: false };
+
+test('real PHP agreement route forwards only current server identity scope and exact consent, without scans or entry', () => {
+  for (const acceptance_source of ['explicit', 'cached']) {
+    for (const privateFixture of [false, true]) {
+      const card = privateFixture ? { ...initial, event_key: 'private-offline-event' } : initial;
+      const got = route({ action: 'participation_accept', privateFixture, card, fields: { ...agreementFields, acceptance_source, user_id: '90002' } });
+      assert.equal(got.status, 200, got.raw); assert.equal(got.body.participation_agreement.couple_id, '90001');
+      assert.equal(got.body.participation_agreement.profile_event_key, card.event_key);
+      assert.equal(got.body.participation_agreement.excluded_from_master, privateFixture);
+      assert.deepEqual(got.calls.find(c => c.action === 'participation_accept').payload, { accepted: true,
+        expected_event_key: config.event_key, expected_config_revision: config.revision, rules_version: config.rules_version,
+        participation_notice_version: agreementReceipt.participation_notice_version, acceptance_source });
+      assert.equal(got.visits.length, 0); assert.equal(got.calls.some(c => ['scan', 'raffle_opt_in'].includes(c.action)), false);
+    }
+  }
+});
+
+test('real agreement route fails closed on CSRF, origin, incomplete profile, stale context and malformed acknowledgement', () => {
+  const cases = [
+    [{ fields: { qr_csrf: 'bad' } }, 403], [{ origin: 'https://foreign.invalid' }, 403], [{ profileComplete: false }, 422],
+    [{ fields: { expected_event_key: 'other' } }, 409], [{ fields: { expected_config_revision: '8' } }, 409],
+    [{ fields: { participation_notice_version: 'old' } }, 428], [{ fields: { rules_version: 'old' } }, 400],
+    [{ fields: { accepted: '0' } }, 400], [{ fields: { accepted: ['1'] } }, 400], [{ fields: { acceptance_source: 'inferred' } }, 400],
+  ];
+  for (const [options, status] of cases) {
+    const got = route({ ...options, action: 'participation_accept', fields: { ...agreementFields, ...options.fields } });
+    assert.equal(got.status, status, got.raw); assert.equal(got.calls.some(c => c.action === 'participation_accept'), false);
+    assert.equal(got.visits.length, 0);
+  }
+});
+
+test('PHP receipt validation rejects wrong identities, fixture scope and malformed durable receipt; propagates retryable backend errors', () => {
+  for (const patch of [{ couple_id: '90002' }, { event_key: 'other' }, { profile_event_key: 'other' },
+    { rules_version: 'old' }, { participation_notice_version: 'old' }, { recorded: false }, { acceptance_id: 'bad' },
+    { accepted_at: '2026-02-30T12:00:00Z' }, { excluded_from_master: 'false' }]) {
+    const got = route({ action: 'participation_accept', fields: agreementFields,
+      agreementResponse: { status_code: 200, body: { ok: true, participation_agreement: { ...agreementReceipt, ...patch } } } });
+    assert.equal(got.status, 502, got.raw); assert.equal(got.visits.length, 0);
+  }
+  for (const status_code of [409, 503]) {
+    const body = { ok: false, code: 'participation_agreement_stale', error: 'Please retry.' };
+    const got = route({ action: 'participation_accept', fields: agreementFields, agreementResponse: { status_code, body } });
+    assert.equal(got.status, status_code); assert.deepEqual(got.body, body);
+  }
 });

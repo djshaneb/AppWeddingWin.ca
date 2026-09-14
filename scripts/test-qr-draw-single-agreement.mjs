@@ -46,6 +46,7 @@ function deferred() {
 
 function createHarness(options = {}) {
   const calls = [], responses = [], redirects = [], timers = new Map();
+  const agreementCalls = [], agreementResponses = [...(options.agreementResponses || [])];
   const storage = options.storage || new Map();
   const effects = { cameraRequests: 0, progressUpdates: 0 };
   let nextTimer = 1, document;
@@ -99,7 +100,8 @@ function createHarness(options = {}) {
     IN_SHOW_SCANNED: [], QR_SCANNER_FIXTURE: options.fixture === true,
     VENDORS: options.vendors || [vendor], EVENT_CONFIG: config, Date: FixtureDate,
     gridEl: elements.get('grid'),
-    QR_WEBSITE_CSRF: websiteCsrf,
+    QR_WEBSITE_CSRF: websiteCsrf, QR_AUTHENTICATED_MEMBER_ID: '90001', QR_CONTACT_PROFILE: { event_key: config.event_key },
+    QR_PARTICIPATION_AGREEMENT: options.serverAgreement ?? null,
     PARTICIPATION_NOTICE_VERSION: options.noticeVersion || noticeVersion, CONTACT_PROFILE_COMPLETE: options.profileComplete !== false,
     URL, URLSearchParams, AbortController, console: { error() {}, log() {}, warn() {} },
     ...Object.fromEntries(scannerElements.map(id => [id, elements.get(id)])), lastScan: elements.get('lastScanEl'),
@@ -117,7 +119,19 @@ function createHarness(options = {}) {
       localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     },
     fetch: async (url, request) => {
-      calls.push({ url, request, form: new URLSearchParams(request.body) });
+      const form = new URLSearchParams(request.body);
+      if (form.get('action') === 'participation_accept') {
+        agreementCalls.push({ url, request, form });
+        assert.equal(form.get('qr_csrf'), websiteCsrf);
+        const reply = agreementResponses.length ? await agreementResponses.shift() : { data: { ok: true, participation_agreement: {
+          recorded: true, couple_id: '90001', event_key: config.event_key, profile_event_key: config.event_key,
+          rules_version: config.rules_version, participation_notice_version: options.noticeVersion || noticeVersion,
+          accepted_at: '2026-09-14T12:00:00Z', acceptance_id: 'd3e4a889-7ca4-46f2-8c88-9c637b35a099', excluded_from_master: false,
+        } } };
+        if (reply instanceof Error) throw reply;
+        return { ok: (reply.status ?? 200) < 300, json: async () => reply.data };
+      }
+      calls.push({ url, request, form });
       assert.equal(new URLSearchParams(request.body).get('qr_csrf'), websiteCsrf,
         'Every couple POST must carry the current session-bound CSRF');
       assert.ok(responses.length, 'Unexpected transport call: queue each local response explicitly');
@@ -133,9 +147,12 @@ function createHarness(options = {}) {
     refresh: refreshVendorDrawAfterStale, accepted: hasCurrentParticipationNotice,
     init: initApp, start: startScanner, save: saveVendorScan, mark: markScanned, decode: handleDecoded,
     fixtureScan: scanFixtureBooth, fixtureReady: canScanFixtureBooth, updateFixture: updateFixtureScanButton,
+    agreementSave: saveParticipationNotice,
     state: () => ({ offer: currentVendorDrawOffer, scope: qrRulesNoticeAcceptedScope, scanned: [...scanned] })
   };`].join('\n'), context, { filename: '258-julian-qr-code-bingo.php:real-extracted-script' });
-  return { api: context.drawTest, config, elements, calls, effects, timers, storage, redirects, document,
+  return { api: context.drawTest, config, elements, calls, agreementCalls, effects, timers, storage, redirects, document,
+    queueAgreement: response => agreementResponses.push(response),
+    async flush() { for (let i = 0; i < 12; i++) await Promise.resolve(); },
     queue: response => responses.push(response), el: id => elements.get(id),
     async check(value = true) {
       const checkbox = elements.get('qrRulesNoticeAcknowledged'); checkbox.checked = value; await checkbox.emit('change');
@@ -190,6 +207,7 @@ test('checking pre-scan agreement launches camera setup only, never a draw entry
   const h = createHarness(); await h.check();
   assert.equal(h.api.accepted(), true); assert.equal(h.el('qrRulesNotice').hidden, true);
   assert.equal(h.effects.cameraRequests, 1); assert.equal(h.calls.length, 0);
+  assert.equal(h.agreementCalls.length, 1, 'Agreement saves once without a draw entry');
   await h.check(); assert.equal(h.effects.cameraRequests, 1, 'Repeated taps cannot initialize another scanner');
 });
 
@@ -216,6 +234,7 @@ test('old values, wrong account, changed event, rules or notice version cannot r
     assert.equal(await h.api.save(vendor.id), false); assert.equal(h.calls.length, 0);
   }
   const restored = createHarness({ storage: new Map(original.storage) });
+  await restored.flush();
   assert.equal(restored.api.accepted(), true); restored.api.init(); assert.equal(restored.effects.cameraRequests, 1);
 });
 
@@ -493,4 +512,73 @@ test('the previous entry confirmation timer cannot dismiss a freshly reopened st
   await h.api.open(vendor, true); assert.equal(h.el('vendorDrawModal').hidden, false);
   oldTimer.callback(); assert.equal(h.el('vendorDrawModal').hidden, false);
   assert.equal(h.el('vendorDrawEnter').hidden, true); assert.equal(h.calls.length, 2);
+});
+
+
+test('agreement POST is server-first, scoped, authenticated and coalesces pending checkbox events', async () => {
+  const pending = deferred(); const h = createHarness({ agreementResponses: [pending.promise] });
+  const saving = h.check(); const duplicate = h.check();
+  assert.equal(h.agreementCalls.length, 1); assert.equal(h.api.accepted(), false); assert.equal(h.effects.cameraRequests, 0);
+  assert.equal(h.el('qrRulesNoticeAcknowledged').disabled, true); assert.equal(h.storage.size, 0);
+  const form = h.agreementCalls[0].form;
+  assert.equal(form.get('accepted'), '1'); assert.equal(form.get('acceptance_source'), 'explicit');
+  assert.equal(form.get('expected_event_key'), h.config.event_key); assert.equal(form.get('expected_config_revision'), '7');
+  assert.equal(form.get('rules_version'), h.config.rules_version); assert.equal(form.get('participation_notice_version'), noticeVersion);
+  assert.equal(h.agreementCalls[0].request.credentials, 'same-origin');
+  pending.resolve({ data: { ok: true, participation_agreement: validReceipt(h) } });
+  await saving; await duplicate;
+  assert.equal(h.api.accepted(), true); assert.equal(h.effects.cameraRequests, 1); assert.equal(h.calls.length, 0);
+});
+
+function validReceipt(h, patch = {}) {
+  return { recorded: true, couple_id: '90001', event_key: h.config.event_key, profile_event_key: h.config.event_key,
+    rules_version: h.config.rules_version, participation_notice_version: noticeVersion,
+    acceptance_id: 'd3e4a889-7ca4-46f2-8c88-9c637b35a099', accepted_at: '2026-09-14T12:00:00Z', excluded_from_master: false, ...patch };
+}
+
+test('agreement failures, malformed or foreign receipts stay retryable with camera and draw locked', async () => {
+  for (const response of [new Error('offline'), { status: 503, data: { ok: false } }, { data: { ok: true } }]) {
+    const h = createHarness({ agreementResponses: [response] }); await h.check();
+    assert.equal(h.api.accepted(), false); assert.equal(h.effects.cameraRequests, 0); assert.equal(h.storage.size, 0);
+    assert.equal(h.el('qrRulesNoticeAcknowledged').checked, false); assert.equal(h.el('qrRulesNoticeAcknowledged').disabled, false);
+    assert(h.el('qrRulesNoticeStatus').textContent); await h.check(); assert.equal(h.api.accepted(), true);
+  }
+  for (const patch of [{ couple_id: 'foreign' }, { event_key: 'foreign' }, { profile_event_key: 'foreign' }, { acceptance_id: 'not-a-uuid' }, { rules_version: 'old' },
+    { participation_notice_version: 'old' }, { recorded: false }, { accepted_at: 'not-a-date' }]) {
+    const h = createHarness(); h.queueAgreement({ data: { ok: true, participation_agreement: validReceipt(h, patch) } });
+    await h.check(); assert.equal(h.api.accepted(), false); assert.equal(h.effects.cameraRequests, 0);
+  }
+});
+
+test('pending website agreement cannot unlock a changed account, event, rules, revision or revoked decision', async () => {
+  for (const change of [h => { h.el('qrRulesNotice').dataset.storageKey = 'new-account'; },
+    h => { h.config.event_key = 'new-event'; }, h => { h.config.rules_version = 'new-rules'; },
+    h => { h.config.revision++; }, async h => { await h.check(false); }]) {
+    const pending = deferred(), h = createHarness({ agreementResponses: [pending.promise] });
+    const receipt = validReceipt(h), saving = h.check(); await change(h);
+    pending.resolve({ data: { ok: true, participation_agreement: receipt } }); await saving;
+    assert.equal(h.api.accepted(), false); assert.equal(h.effects.cameraRequests, 0); assert.equal(h.storage.size, 0);
+  }
+});
+
+test('cached acknowledgement sync retries without asking for a new checkbox decision', async () => {
+  const original = createHarness(); await original.check();
+  const pending = deferred(), h = createHarness({ storage: new Map(original.storage), agreementResponses: [pending.promise] });
+  assert.equal(h.api.accepted(), false); assert.equal(h.el('qrRulesNoticeAcknowledged').checked, true);
+  assert.equal(h.el('qrRulesNoticeAcknowledged').disabled, true); assert.equal(h.agreementCalls[0].form.get('acceptance_source'), 'cached');
+  pending.resolve(new Error('offline')); await h.flush();
+  assert.equal(h.api.accepted(), false); assert.equal(h.el('qrRulesNoticeRetry').hidden, false); assert.equal(h.storage.size, 1);
+  await h.el('qrRulesNoticeRetry').click(); assert.equal(h.api.accepted(), true);
+  assert.equal(h.agreementCalls[1].form.get('acceptance_source'), 'cached'); assert.equal(h.effects.cameraRequests, 1);
+});
+
+test('current server receipt restores agreement across devices without a write or another decision', async () => {
+  const reference = createHarness();
+  const h = createHarness({ serverAgreement: validReceipt(reference) }); await h.flush();
+  assert.equal(h.api.accepted(), true); assert.equal(h.agreementCalls.length, 0); assert.equal(h.effects.cameraRequests, 1);
+  for (const change of [candidate => { candidate.config.revision++; },
+    candidate => { candidate.el('qrRulesNotice').dataset.storageKey = 'new-account'; }]) {
+    const stale = createHarness({ serverAgreement: validReceipt(reference) }); change(stale); await stale.flush();
+    assert.equal(stale.api.accepted(), false); assert.equal(stale.agreementCalls.length, 0); assert.equal(stale.effects.cameraRequests, 0);
+  }
 });

@@ -1,3 +1,4 @@
+import { loadQrParticipationReceipt, recordQrParticipation, validateQrParticipationRequest, shouldRecordQrParticipationOnUse, QrParticipationError } from "../_shared/qr_bingo_participation.ts";
 import { loadQrBingoCardState, assertQrBingoCardGeneration, QrBingoCardStateError, type QrBingoCardState } from "../_shared/qr_bingo_card_state.ts";
 import { QR_ENTRY_ACCESS_POLICY_VERSION, QR_ENTRY_ACCESS_POLICY_DISCLOSURE, qrBingoEffectiveEntryDisclosure, qrBingoVendorDrawScannedIds, qrBingoEntryReadiness, qrBingoEntryOpensAt } from "../_shared/qr_bingo_entry_access.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -4090,7 +4091,7 @@ Deno.serve(async (request) => {
               : reviewFixture.authenticated_couple_bd_user_id),
       );
       const isContactProfileAction = ["contact_profile_get", "contact_profile_save"].includes(action);
-      const isCoupleContactAction = ["list", "scan", "raffle_offer", "raffle_opt_in", "contact_profile_get", "contact_profile_save"].includes(action);
+      const isCoupleContactAction = ["list", "scan", "raffle_offer", "raffle_opt_in", "contact_profile_get", "contact_profile_save", "participation_accept"].includes(action);
       const isCoupleAccount = ["4", "18"].includes(String(user.subscription_id)) && String(user.active) === "2";
       if (isCoupleContactAction && action !== "list" && !isCoupleAccount) {
         return jsonResponse({ok:false,error:"Sign in with a couple account to use QR Bingo."},403);
@@ -4108,6 +4109,14 @@ Deno.serve(async (request) => {
       }
       let bingoContactProfile: QrContactProfile | null = isCoupleContactAction && isCoupleAccount
         ? await loadQrContactProfile(requireAdmin(), contactEventKey, authenticatedMemberId, user) : null;
+      let participationAgreement = isCoupleAccount && ["list", "contact_profile_get", "contact_profile_save"].includes(action)
+        ? await loadQrParticipationReceipt(requireAdmin(), qrBingoConfig(), contactEventKey, authenticatedMemberId) : null;
+      if (action === "participation_accept") {
+        const basis = validateQrParticipationRequest(body as Record<string, unknown>, qrBingoConfig());
+        participationAgreement = await recordQrParticipation(requireAdmin(), qrBingoConfig(), contactEventKey,
+          authenticatedMemberId, bingoContactProfile!, basis, body.expected_config_revision);
+        return jsonResponse({ok:true,participation_agreement:participationAgreement});
+      }
       if (isContactProfileAction) {
         if (body.expected_event_key !== undefined && body.expected_event_key !== contactEventKey) {
           return jsonResponse({ok:false,code:"contact_event_changed",error:"The wedding show changed. Reload QR Bingo before saving."},409);
@@ -4138,6 +4147,7 @@ Deno.serve(async (request) => {
           }
         }
         return jsonResponse({ok:true,event_key:contactEventKey,contact_profile:bingoContactProfile,
+          participation_agreement:participationAgreement,
           card_state:cardState,card_generation:cardState?.generation,
           profile_complete:bingoContactProfile!.complete,missing_profile_fields:bingoContactProfile!.missing_fields,
           requires_non_relay_email:true,participation_notice_version:qrParticipationNoticeVersion(),
@@ -4186,6 +4196,10 @@ Deno.serve(async (request) => {
           error:
             "Save the allowlisted contact email before continuing with this isolated email test.",
         }, 403);
+      }
+      if (shouldRecordQrParticipationOnUse(action, body as Record<string, unknown>, qrBingoConfig())) {
+        await recordQrParticipation(requireAdmin(), qrBingoConfig(), contactEventKey,
+          authenticatedMemberId, bingoContactProfile!, "notice_on_use");
       }
       // Website proof is the authentication. Only normal couple requests use
       // the already-existing canonical BD token for scan-history transport.
@@ -5199,6 +5213,7 @@ Deno.serve(async (request) => {
           missing_profile_fields: contactProfile.missing_fields,
           profile_edit_url: `${BD_API_BASE_URL}/qr`,
           participation_notice_version: qrParticipationNoticeVersion(),
+          participation_agreement: participationAgreement,
         });
       }
 
@@ -5208,6 +5223,7 @@ Deno.serve(async (request) => {
       );
     });
   } catch (error) {
+    if (error instanceof QrParticipationError) return jsonResponse({ok:false,code:error.code,error:error.message,retriable:error.status===503},error.status);
     if (error instanceof QrBingoCardStateError) return jsonResponse({ok:false,code:error.code,error:error.message},error.status);
     if (error && typeof error === "object" && "code" in error && error.code === "55000" && "message" in error && String(error.message).includes("stale_card_generation")) {
       return jsonResponse({ok:false,code:"stale_card_generation",error:"An administrator reset this Bingo card. Refresh and scan the vendor again."},409);

@@ -176,67 +176,28 @@ Deno.test("stored participation acceptance rotates for account, event, rules and
   }
   assert(
     scanner.includes("SecureStore.getItemAsync(participationNoticeKey)") &&
-      scanner.includes("value === '1' ? participationNoticeKey : ''") &&
-      scanner.includes("if (active) setAcceptedParticipationNoticeKey") &&
+      scanner.includes("setParticipationNoticeBackfillKey(participationNoticeKey)") &&
+      scanner.includes("await syncParticipationNotice('cached')") &&
+      scanner.includes("if (!active) return;") &&
       scanner.includes("active = false;"),
     "asynchronous restore must remain bound to its original key and ignore a disposed request",
   );
 });
 
-Deno.test("accepting before the scanner stores only the acknowledgement and never enters a draw", () => {
-  const callback = block(
-    scanner,
-    "const acceptParticipationNotice = useCallback",
-  )
+Deno.test("explicit agreement delegates only to durable participation acceptance, never draw entry", async () => {
+  const callback = block(scanner, "const acceptParticipationNotice = useCallback")
     .replace("const acceptParticipationNotice = useCallback(", "");
-  for (const complete of [true, false]) {
-    let accepted = "";
-    const writes: string[][] = [];
-    const accept = new Function(
-      "participationNoticeKey",
-      "contactProfileComplete",
-      "nativeSession",
-      "accountDeletionIsInFlight",
-      "setAcceptedParticipationNoticeKey",
-      "setBingoError",
-      "SecureStore",
-      "reviewingParticipationNoticeRef",
-      "setReviewingParticipationNotice",
-      "return " + callback + ";",
-    )(
-      "current-notice-key",
-      complete,
-      { user_id: "test-couple", token: "local-stub" },
-      () => false,
-      (key: string) => accepted = key,
-      () => {},
-      {
-        setItemAsync: (key: string, value: string) => {
-          writes.push([key, value]);
-          return Promise.resolve();
-        },
-      },
-      { current: false },
-      () => {},
-    ) as () => void;
-    accept();
-    assert(
-      accepted === (complete ? "current-notice-key" : ""),
-      "incomplete contact details cannot be acknowledged past the profile gate",
-    );
-    assert(
-      writes.length === (complete ? 1 : 0),
-      "only an explicit valid acknowledgement is stored",
-    );
-    if (complete) {
-      assert(writes[0][1] === "1", "store the version-bound acknowledgement");
-    }
-  }
-  assert(
-    !callback.includes("enterRaffle") &&
-      !callback.includes("fetchQrBingoJsonWithTimeout"),
-    "acceptance must never send a draw entry or contact-sharing request",
-  );
+  const sources: string[] = [];
+  const accept = new Function("syncParticipationNotice", "return " + callback + ";")(
+    async (source: string) => { sources.push(source); return true; },
+  ) as () => Promise<boolean>;
+  assert(await accept(), "explicit acceptance must wait for the durable sync result");
+  assert(sources.length === 1 && sources[0] === "explicit", "explicit acceptance must retain its actual source");
+  assert(!callback.includes("enterRaffle") && !callback.includes("setAcceptedParticipationNoticeKey"),
+    "a local checkbox alone cannot enter a draw or unlock the scanner");
+  const sync = block(scanner, "const syncParticipationNotice = useCallback");
+  assert(sync.includes("action: 'participation_accept'") && sync.includes("isCurrentQrParticipationAgreement(") &&
+    !sync.includes("action: 'raffle_opt_in'"), "durable consent is its own scoped action, not a draw entry");
 });
 
 Deno.test("the agreement is content-sized with accessible links and no inner legal scroll", () => {

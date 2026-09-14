@@ -1231,6 +1231,33 @@ if (!function_exists('ww_qrbs_escape')) {
     }
     /* WW_QR_ADMIN_CARD_RESET_HELPERS_END */
 
+    /* WW_QR_MASTER_EXPORT_HELPERS_START */
+    function ww_qrbs_master_export_request($source) {
+        $action = isset($source['action']) && is_string($source['action']) ? $source['action'] : '';
+        $actions = array('master_contacts_export_start', 'master_contacts_export_page', 'master_contacts_export_complete');
+        if (!in_array($action, $actions, true)) throw new Exception('Choose a valid master download action.');
+        $allowed = array('csrf_token', 'action', 'dataset', 'operator_identity');
+        if ($action === 'master_contacts_export_start') $allowed[] = 'request_id';
+        else { $allowed[] = 'export_id'; $allowed[] = $action === 'master_contacts_export_page' ? 'cursor' : 'expected_row_count'; }
+        foreach ($source as $key => $value) {
+            if (!in_array($key, $allowed, true) || !is_string($value)) throw new Exception('The master download does not use list filters. Please retry.');
+        }
+        if (!isset($source['dataset']) || $source['dataset'] !== 'master_contacts') throw new Exception('Choose the master couples spreadsheet.');
+        $operator = isset($source['operator_identity']) ? trim($source['operator_identity']) : '';
+        if (!ww_qrbs_is_plain_text($operator, 3, 160, false)) throw new Exception('Enter your administrator name or work email for the download record.');
+        $payload = array('action' => $action, 'dataset' => 'master_contacts', 'operator_identity' => $operator);
+        $idKey = $action === 'master_contacts_export_start' ? 'request_id' : 'export_id';
+        if (!isset($source[$idKey]) || !preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iD', $source[$idKey])) throw new Exception('The download reference is invalid. Please retry.');
+        $payload[$idKey] = strtolower($source[$idKey]);
+        if ($action !== 'master_contacts_export_start') {
+            $countKey = $action === 'master_contacts_export_page' ? 'cursor' : 'expected_row_count';
+            if (!isset($source[$countKey]) || !preg_match('/^(0|[1-9][0-9]{0,8})$/D', $source[$countKey])) throw new Exception('The download position is invalid. Please retry.');
+            $payload[$countKey] = (int)$source[$countKey];
+        }
+        return $payload;
+    }
+    /* WW_QR_MASTER_EXPORT_HELPERS_END */
+
     /* WW_QR_ADMIN_DATA_HELPERS_START */
     function ww_qrbs_data_filters($source) {
         $allowed = array('csrf_token', 'action', 'dataset', 'event_key', 'vendor_id', 'search', 'page', 'page_size', 'operator_identity', 'contact_status');
@@ -1357,6 +1384,7 @@ if (!function_exists('ww_qrbs_escape')) {
 
         $responseBody = '';
         $responseLimit = isset($payload['action']) && $payload['action'] === 'data_export' ? 8388608 : 262144;
+        if (isset($payload['action']) && $payload['action'] === 'master_contacts_export_page') $responseLimit = 2097152;
         if (isset($payload['action']) && $payload['action'] === 'card_reset_cutoffs') $responseLimit = 2097152;
         $responseTooLarge = false;
         $handle = curl_init('https://pszcjoyabwvzsxxjtkhs.supabase.co/functions/v1/bd-qr-bingo-admin');
@@ -1377,7 +1405,7 @@ if (!function_exists('ww_qrbs_escape')) {
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_MAXREDIRS => 0,
             CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => 15,
+            CURLOPT_TIMEOUT => isset($payload['action']) && $payload['action'] === 'master_contacts_export_start' ? 30 : 15,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_USERAGENT => 'WeddingWin-BD-QR-Admin/1.0',
@@ -1680,6 +1708,32 @@ if ($ww_qrbs_method === 'POST') {
         }
     }
     /* WW_QR_ADMIN_DRAW_RESET_REQUEST_END */
+
+    /* WW_QR_MASTER_EXPORT_REQUEST_START */
+    if (in_array($ww_qrbs_post_action, array('master_contacts_export_start', 'master_contacts_export_page', 'master_contacts_export_complete'), true)) {
+        $masterRequestValidated = false;
+        try {
+            $origin = isset($_SERVER['HTTP_ORIGIN']) ? strtolower((string)$_SERVER['HTTP_ORIGIN']) : '';
+            $host = isset($_SERVER['HTTP_HOST']) ? strtolower((string)$_SERVER['HTTP_HOST']) : '';
+            if (!in_array($host, array('www.weddingwin.ca', 'weddingwin.ca', 'ww2.managemydirectory.com'), true) || $origin !== 'https://' . $host) throw new Exception('Open this download in the signed-in WeddingWin admin.');
+            $payload = ww_qrbs_master_export_request($_POST);
+            $masterRequestValidated = true;
+            $result = ww_qrbs_edge_call($ww_qrbs_database, $payload);
+            if (!ww_qrbs_response_succeeded($result)) {
+                $code = isset($result['http_status']) ? (int)$result['http_status'] : 503;
+                if (!in_array($code, array(400, 401, 403, 409, 410, 413, 429, 503), true)) $code = 503;
+                $reply = isset($result['payload']) && is_array($result['payload']) ? $result['payload'] : array();
+                $message = isset($reply['error']) && is_string($reply['error']) && ww_qrbs_is_plain_text($reply['error'], 1, 500, false) ? $reply['error'] : 'The master spreadsheet could not be prepared. Please retry.';
+                ww_qrbs_data_json(array('ok' => false, 'error' => $message), $code);
+            }
+            $reply = $result['payload'];
+            if (!isset($reply['action'], $reply['dataset']) || $reply['action'] !== $payload['action'] || $reply['dataset'] !== 'master_contacts') throw new Exception('The master download response could not be verified.');
+            ww_qrbs_data_json($reply, 200);
+        } catch (Exception $error) {
+            ww_qrbs_data_json(array('ok' => false, 'error' => $error->getMessage()), $masterRequestValidated ? 503 : 400);
+        }
+    }
+    /* WW_QR_MASTER_EXPORT_REQUEST_END */
 
     /* WW_QR_ADMIN_DATA_REQUEST_START */
     if ($ww_qrbs_post_action === 'data_list' || $ww_qrbs_post_action === 'data_export') {
@@ -2194,20 +2248,29 @@ $ww_qrbs_vendor_ready = $ww_qrbs_local_vendor_count !== null
 
   <details class="ww-qrbs-data" id="wwQrData">
     <summary>QR Bingo data &amp; downloads</summary>
-    <p class="ww-qrbs-data-note">View saved QR contact details, booth scans, opted-in draw entries, and winners. Use Winners to reset a vendor draw so they can choose and send again. Downloads use the selected filters and are recorded in the admin audit. Nothing here sends an email or enters a draw.</p>
+    <p class="ww-qrbs-data-note">Download the master list of couples who agreed to QR Bingo, or view contact details, booth scans, draw entries, and winners below. Use Winners to reset a vendor draw so they can choose and send again.</p>
+    <form id="wwQrDataForm" action="<?php echo ww_qrbs_escape($ww_qrbs_action_url); ?>" method="post" autocomplete="off">
+      <input class="ww-qrbs-form-token" type="text" name="ww_qrbs_csrf_token" readonly tabindex="-1" aria-hidden="true" value="<?php echo ww_qrbs_escape($ww_qrbs_csrf); ?>">
+      <section class="ww-qrbs-master-export" aria-labelledby="wwQrMasterHeading">
+        <h3 id="wwQrMasterHeading">Master couples spreadsheet</h3>
+        <p class="ww-qrbs-data-note">All couples with a recorded QR Bingo agreement, across all events. Includes contact details and agreement information, with one row per couple account. Scanning or completing a card is not required.</p>
+        <div class="ww-qrbs-data-fields">
+        <div><label for="wwQrDataOperator">Your admin name (for changes &amp; downloads)</label><input id="wwQrDataOperator" name="operator_identity" maxlength="160" autocomplete="name" placeholder="Name or work email"></div>
+        </div>
+        <button class="ww-qrbs-button" id="wwQrMasterExport" type="button">Download master couples spreadsheet (CSV)</button>
+        <p class="ww-qrbs-data-note">Opens in Excel, Numbers, or Google Sheets. The list filters below do not limit this download.</p>
+        <p class="ww-qrbs-data-status" id="wwQrMasterStatus" role="status" aria-live="polite"></p>
+      </section>
     <div class="ww-qrbs-data-tabs" role="tablist" aria-label="QR Bingo data lists">
       <button type="button" role="tab" data-dataset="contacts" aria-selected="true">Contacts</button>
       <button type="button" role="tab" data-dataset="scans" aria-selected="false">Scans</button>
       <button type="button" role="tab" data-dataset="entries" aria-selected="false">Draw entries</button>
       <button type="button" role="tab" data-dataset="winners" aria-selected="false">Winners</button>
     </div>
-    <form id="wwQrDataForm" action="<?php echo ww_qrbs_escape($ww_qrbs_action_url); ?>" method="post" autocomplete="off">
-      <input class="ww-qrbs-form-token" type="text" name="ww_qrbs_csrf_token" readonly tabindex="-1" aria-hidden="true" value="<?php echo ww_qrbs_escape($ww_qrbs_csrf); ?>">
       <div class="ww-qrbs-data-fields">
         <div><label for="wwQrDataEvent">Event</label><input id="wwQrDataEvent" name="event_key" required maxlength="100" value="<?php echo ww_qrbs_escape($ww_qrbs_event_key); ?>"></div>
         <div><label for="wwQrDataVendor">Vendor (all if blank)</label><input id="wwQrDataVendor" name="vendor_id" list="wwQrDataVendors" inputmode="numeric" maxlength="19" placeholder="Vendor ID"><datalist id="wwQrDataVendors"><?php foreach ($ww_qrbs_reconciliation_vendor_options as $option): ?><option value="<?php echo ww_qrbs_escape($option['id']); ?>"><?php echo ww_qrbs_escape($option['label']); ?></option><?php endforeach; ?></datalist></div>
         <div><label for="wwQrDataSearch">Search</label><input id="wwQrDataSearch" name="search" maxlength="120" placeholder="Name, email, or member ID"></div>
-        <div><label for="wwQrDataOperator">Your admin name (for changes &amp; downloads)</label><input id="wwQrDataOperator" name="operator_identity" maxlength="160" autocomplete="name" placeholder="Name or work email"></div>
         <div id="wwQrDataContactStatusGroup"><label for="wwQrDataContactStatus">Contact list</label><select id="wwQrDataContactStatus" name="contact_status"><option value="active">Active contacts</option><option value="removed">Removed contacts</option><option value="all">All contacts</option></select></div>
       </div>
       <div class="ww-qrbs-data-actions"><button class="ww-qrbs-button" type="submit">Show list</button><button class="ww-qrbs-button" id="wwQrDataExport" type="button">Download CSV</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrContactAddOpen" type="button" aria-expanded="false" aria-controls="wwQrContactPanel">Add contact</button><button class="ww-qrbs-button ww-qrbs-data-secondary" id="wwQrCardResetOpen" type="button" aria-expanded="false" aria-controls="wwQrCardResetPanel">Reset Bingo card</button></div>

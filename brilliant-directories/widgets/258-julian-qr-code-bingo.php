@@ -356,7 +356,7 @@ if (!function_exists('ww_qr_bingo_vendor_draw_request')) {
             || !in_array((string)$member['subscription_id'], array('4', '18'), true)) {
             return ww_qrb_request_error(403, 'Sign in with a couple account to use QR Bingo.');
         }
-        if (!in_array($action, array('fixture_context', 'contact_profile_get', 'contact_profile_save', 'scan', 'raffle_offer', 'raffle_opt_in'), true)) {
+        if (!in_array($action, array('fixture_context', 'contact_profile_get', 'contact_profile_save', 'participation_accept', 'scan', 'raffle_offer', 'raffle_opt_in'), true)) {
             return ww_qrb_request_error(400, 'This couple action is not available.');
         }
         if ($action !== 'fixture_context' && $action !== 'contact_profile_get') {
@@ -469,10 +469,29 @@ if (!function_exists('ww_qr_bingo_contact_profile')) {
             'profile_edit_url' => '/qr#qrContactGate',
             'event_key' => isset($body['event_key']) && is_string($body['event_key']) ? $body['event_key'] : '',
             'contact_profile' => $fields,
-            'card_state' => isset($body['card_state']) && is_array($body['card_state']) ? $body['card_state'] : null
+            'card_state' => isset($body['card_state']) && is_array($body['card_state']) ? $body['card_state'] : null,
+            'participation_agreement' => isset($body['participation_agreement']) && is_array($body['participation_agreement']) ? $body['participation_agreement'] : null
         );
     }
 }
+
+/* WW_QR_PARTICIPATION_AGREEMENT_START */
+if (!function_exists('ww_qr_bingo_participation_agreement')) {
+    function ww_qr_bingo_participation_agreement($value, $couple, $event, $profileEvent, $rules, $notice) {
+        if (!is_array($value) || !isset($value['recorded'], $value['couple_id'], $value['event_key'], $value['profile_event_key'],
+            $value['rules_version'], $value['participation_notice_version'], $value['accepted_at'], $value['acceptance_id'], $value['excluded_from_master'])
+            || $value['recorded'] !== true || $value['couple_id'] !== (string)$couple || $value['event_key'] !== (string)$event
+            || $value['profile_event_key'] !== (string)$profileEvent || $value['rules_version'] !== (string)$rules
+            || $value['participation_notice_version'] !== (string)$notice || !is_bool($value['excluded_from_master'])
+            || !is_string($value['acceptance_id']) || preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $value['acceptance_id']) !== 1
+            || !ww_qr_bingo_is_rfc3339_timestamp($value['accepted_at'])) return null;
+        return array('recorded' => true, 'couple_id' => $value['couple_id'], 'event_key' => $value['event_key'],
+            'profile_event_key' => $value['profile_event_key'], 'rules_version' => $value['rules_version'],
+            'participation_notice_version' => $value['participation_notice_version'], 'accepted_at' => $value['accepted_at'],
+            'acceptance_id' => $value['acceptance_id'], 'excluded_from_master' => $value['excluded_from_master']);
+    }
+}
+/* WW_QR_PARTICIPATION_AGREEMENT_END */
 
 /* WW_QR_COUPLE_CARD_STATE_START */
 if (!function_exists('ww_qr_bingo_card_state')) {
@@ -882,7 +901,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                 exit();
             }
 
-            if (in_array($_POST['action'], array('scan_vendor', 'raffle_offer', 'raffle_opt_in'), true)
+            if (in_array($_POST['action'], array('participation_accept', 'scan_vendor', 'raffle_offer', 'raffle_opt_in'), true)
                 && !$qrContactComplete) {
                 http_response_code(422);
                 echo json_encode(array(
@@ -896,7 +915,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                 exit();
             }
 
-            if (in_array($_POST['action'], array('scan_vendor', 'raffle_offer', 'raffle_opt_in'), true)) {
+            if (in_array($_POST['action'], array('participation_accept', 'scan_vendor', 'raffle_offer', 'raffle_opt_in'), true)) {
                 $submittedNoticeVersion = isset($_POST['participation_notice_version']) && is_string($_POST['participation_notice_version'])
                     ? trim($_POST['participation_notice_version'])
                     : '';
@@ -919,6 +938,31 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
                     ));
                     exit();
                 }
+            }
+
+            if ($_POST['action'] === 'participation_accept') {
+                $rules = isset($_POST['rules_version']) && is_string($_POST['rules_version']) ? $_POST['rules_version'] : '';
+                $source = isset($_POST['acceptance_source']) && is_string($_POST['acceptance_source']) ? $_POST['acceptance_source'] : '';
+                if (!isset($_POST['accepted']) || $_POST['accepted'] !== '1' || !hash_equals((string)$eventConfig['rules_version'], $rules)
+                    || !in_array($source, array('explicit', 'cached'), true)) {
+                    http_response_code(400);
+                    echo json_encode(array('ok' => false, 'error' => 'Review your QR Bingo acknowledgement and try again.')); exit();
+                }
+                $agreementResponse = ww_qr_bingo_vendor_draw_request('participation_accept', array(
+                    'accepted' => true, 'expected_event_key' => (string)$eventConfig['event_key'],
+                    'expected_config_revision' => $eventConfigRevision, 'rules_version' => $rules,
+                    'participation_notice_version' => $submittedNoticeVersion, 'acceptance_source' => $source
+                ));
+                $agreementBody = isset($agreementResponse['body']) && is_array($agreementResponse['body']) ? $agreementResponse['body'] : array();
+                if ((int)$agreementResponse['status_code'] === 200) {
+                    $receipt = ww_qr_bingo_participation_agreement(isset($agreementBody['participation_agreement']) ? $agreementBody['participation_agreement'] : null,
+                        $userId, $eventConfig['event_key'], $qrCardEventKey, $rules, $submittedNoticeVersion);
+                    if (!isset($agreementBody['ok']) || $agreementBody['ok'] !== true || !$receipt) {
+                        http_response_code(502); echo json_encode(array('ok' => false, 'error' => 'Your acknowledgement could not be confirmed. Please try again.')); exit();
+                    }
+                    http_response_code(200); echo json_encode(array('ok' => true, 'participation_agreement' => $receipt)); exit();
+                }
+                http_response_code((int)$agreementResponse['status_code']); echo json_encode($agreementBody); exit();
             }
 
             if ($_POST['action'] === 'raffle_offer' || $_POST['action'] === 'raffle_opt_in') {
@@ -1857,6 +1901,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 	        </label>
 	      </div>
 	      <p class="qr-rules-notice-links"><a href="/about/privacy" target="_blank" rel="noopener">Privacy Policy</a></p>
+          <p id="qrRulesNoticeStatus" role="status" aria-live="polite"></p>
+          <button id="qrRulesNoticeRetry" type="button" hidden>Retry saving acknowledgement</button>
 	    </section>
 
     <?php if ($fixtureContext && $qrContactComplete && !empty($eventConfig['scan_enabled']) && $showScanWindowOpen) { ?>
@@ -1994,6 +2040,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const CONTACT_PROFILE_COMPLETE = <?php echo $qrContactComplete ? 'true' : 'false'; ?>;
     const QR_CONTACT_PROFILE = <?php echo json_encode(array('event_key' => $qrContactProfile['event_key'], 'version' => $qrContactFields['version'], 'name' => $qrContactFields['name'], 'email' => $qrContactFields['email'], 'phone' => $qrContactFields['phone'], 'wedding_date' => $qrContactFields['wedding_date'], 'wedding_venue' => $qrContactFields['wedding_venue']), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const PARTICIPATION_NOTICE_VERSION = <?php echo json_encode($participationNoticeVersion, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
+    const QR_PARTICIPATION_AGREEMENT = <?php echo json_encode(ww_qr_bingo_participation_agreement(isset($qrContactProfile['participation_agreement']) ? $qrContactProfile['participation_agreement'] : null, $userId, $eventConfig['event_key'], $qrCardEventKey, $eventConfig['rules_version'], $participationNoticeVersion), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_HEX_APOS); ?>;
     const VENDORS = <?php
     // Retrieve the exact private fixture roster only when the authenticated Edge
     // response passed the strict fixture validator. Every other account uses the
@@ -2121,12 +2168,16 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     let vendorDrawReturnFocus = null;
     let qrRulesNoticeAccepted = false;
     let qrRulesNoticeAcceptedScope = '';
+    let qrRulesNoticeRequest = null;
+    let qrRulesNoticeRequestId = 0;
     let appInitialized = false;
     let eventConfigRefreshStarted = false;
     let qrFixtureScanInFlight = false;
 
     const qrRulesNotice = document.getElementById('qrRulesNotice');
     const qrRulesNoticeAcknowledged = document.getElementById('qrRulesNoticeAcknowledged');
+    const qrRulesNoticeStatus = document.getElementById('qrRulesNoticeStatus');
+    const qrRulesNoticeRetry = document.getElementById('qrRulesNoticeRetry');
     // Only the authenticated fixture response renders this control and its ID.
     // The server revalidates that same fixture on the ordinary scan request.
     const qrFixtureScanButton = document.getElementById('qrFixtureScanButton');
@@ -2161,27 +2212,98 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         scope && qrRulesNoticeAccepted && qrRulesNoticeAcceptedScope === scope);
     }
 
+    function currentParticipationRequestScope() {
+      return JSON.stringify([currentParticipationNoticeScope(), EVENT_CONFIG.revision,
+        typeof QR_AUTHENTICATED_MEMBER_ID === 'undefined' ? '' : QR_AUTHENTICATED_MEMBER_ID]);
+    }
+
+    function validParticipationReceipt(receipt) {
+      return Boolean(receipt && receipt.recorded === true &&
+        typeof QR_AUTHENTICATED_MEMBER_ID !== 'undefined' && receipt.couple_id === QR_AUTHENTICATED_MEMBER_ID &&
+        receipt.event_key === EVENT_CONFIG.event_key && receipt.rules_version === EVENT_CONFIG.rules_version &&
+        receipt.participation_notice_version === PARTICIPATION_NOTICE_VERSION &&
+        typeof QR_CONTACT_PROFILE !== 'undefined' && receipt.profile_event_key === QR_CONTACT_PROFILE.event_key &&
+        typeof receipt.acceptance_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(receipt.acceptance_id) &&
+        typeof receipt.accepted_at === 'string' && /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$/.test(receipt.accepted_at) && Number.isFinite(Date.parse(receipt.accepted_at)) &&
+        typeof receipt.excluded_from_master === 'boolean');
+    }
+
+    function applyParticipationReceipt(scope) {
+      qrRulesNoticeAccepted = true;
+      qrRulesNoticeAcceptedScope = scope;
+      qrRulesNoticeAcknowledged.checked = true;
+      qrRulesNotice.hidden = true;
+      if (qrRulesNoticeStatus) qrRulesNoticeStatus.textContent = '';
+      if (qrRulesNoticeRetry) qrRulesNoticeRetry.hidden = true;
+      try { window.localStorage.setItem(qrRulesNotice.dataset.storageKey, scope); } catch (error) {}
+      updateVendorDrawEntryButton();
+      initApp();
+    }
+
+    function saveParticipationNotice(source) {
+      const acceptedScope = currentParticipationNoticeScope();
+      if (!acceptedScope || !CONTACT_PROFILE_COMPLETE || eventConfigRefreshStarted) return Promise.resolve(false);
+      const requestScope = currentParticipationRequestScope();
+      if (qrRulesNoticeRequest && qrRulesNoticeRequest.scope === requestScope) return qrRulesNoticeRequest.promise;
+      const requestId = ++qrRulesNoticeRequestId;
+      const stillCurrent = () => requestId === qrRulesNoticeRequestId && !eventConfigRefreshStarted &&
+        acceptedScope === currentParticipationNoticeScope() && requestScope === currentParticipationRequestScope();
+      qrRulesNoticeAcknowledged.disabled = true;
+      if (qrRulesNoticeRetry) qrRulesNoticeRetry.hidden = true;
+      if (qrRulesNoticeStatus) qrRulesNoticeStatus.textContent = 'Saving your acknowledgement...';
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 15000);
+      const request = { scope: requestScope, promise: null };
+      qrRulesNoticeRequest = request;
+      request.promise = (async () => {
+        try {
+          const payload = new URLSearchParams({ qr_csrf: QR_WEBSITE_CSRF, action: 'participation_accept',
+            accepted: '1', expected_event_key: EVENT_CONFIG.event_key,
+            expected_config_revision: String(EVENT_CONFIG.revision), rules_version: EVENT_CONFIG.rules_version,
+            participation_notice_version: PARTICIPATION_NOTICE_VERSION, acceptance_source: source });
+          const response = await fetch(window.location.href, { method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: payload.toString(), signal: controller.signal });
+          const data = await response.json();
+          if (!stillCurrent()) return false;
+          if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Your acknowledgement could not be confirmed. Please try again.');
+          if (!response.ok || data.ok !== true || !validParticipationReceipt(data.participation_agreement)) {
+            throw new Error(data.error || data.message || 'Your acknowledgement could not be saved. Please try again.');
+          }
+          applyParticipationReceipt(acceptedScope);
+          return true;
+        } catch (error) {
+          if (stillCurrent()) {
+            qrRulesNoticeAccepted = false;
+            qrRulesNoticeAcceptedScope = '';
+            qrRulesNotice.hidden = false;
+            qrRulesNoticeAcknowledged.checked = source === 'cached';
+            if (qrRulesNoticeStatus) qrRulesNoticeStatus.textContent = error.name === 'AbortError'
+              ? 'Saving your acknowledgement took too long. Please try again.'
+              : error.name === 'SyntaxError' ? 'Your acknowledgement could not be confirmed. Please try again.'
+              : error.message || 'Your acknowledgement could not be saved. Please try again.';
+            if (qrRulesNoticeRetry) qrRulesNoticeRetry.hidden = source !== 'cached';
+          }
+          return false;
+        } finally {
+          window.clearTimeout(timeout);
+          if (qrRulesNoticeRequest === request) qrRulesNoticeRequest = null;
+          if (stillCurrent()) qrRulesNoticeAcknowledged.disabled = source === 'cached' && !qrRulesNoticeAccepted;
+        }
+      })();
+      return request.promise;
+    }
+
     function initializeRulesNotice() {
       if (!qrRulesNotice || !qrRulesNoticeAcknowledged) return;
       const storageKey = qrRulesNotice.dataset.storageKey || '';
       const scope = currentParticipationNoticeScope();
       let alreadyAcknowledged = false;
       if (storageKey && scope) {
-        try {
-          alreadyAcknowledged = window.localStorage.getItem(storageKey) === scope;
-        } catch (error) {
-          alreadyAcknowledged = false;
-        }
-      }
-      if (alreadyAcknowledged) {
-        qrRulesNoticeAccepted = true;
-        qrRulesNoticeAcceptedScope = scope;
-        qrRulesNoticeAcknowledged.checked = true;
-        qrRulesNotice.hidden = true;
+        try { alreadyAcknowledged = window.localStorage.getItem(storageKey) === scope; } catch (error) {}
       }
       qrRulesNoticeAcknowledged.addEventListener('change', () => {
-        const acceptedScope = currentParticipationNoticeScope();
-        if (!qrRulesNoticeAcknowledged.checked || !acceptedScope || !CONTACT_PROFILE_COMPLETE) {
+        if (!qrRulesNoticeAcknowledged.checked || !currentParticipationNoticeScope() || !CONTACT_PROFILE_COMPLETE) {
+          qrRulesNoticeRequestId += 1;
           qrRulesNoticeAccepted = false;
           qrRulesNoticeAcceptedScope = '';
           qrRulesNotice.hidden = false;
@@ -2192,19 +2314,21 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
           updateFixtureScanButton();
           return;
         }
-        qrRulesNoticeAccepted = true;
-        qrRulesNoticeAcceptedScope = acceptedScope;
-        if (storageKey) {
-          try {
-            window.localStorage.setItem(storageKey, acceptedScope);
-          } catch (error) {
-            // The notice still dismisses for this page when storage is unavailable.
-          }
-        }
-        qrRulesNotice.hidden = true;
-        updateVendorDrawEntryButton();
-        initApp();
+        if (hasCurrentParticipationNotice()) return;
+        return saveParticipationNotice('explicit');
       });
+      if (qrRulesNoticeRetry) qrRulesNoticeRetry.addEventListener('click', () => saveParticipationNotice('cached'));
+      if (scope && CONTACT_PROFILE_COMPLETE && typeof QR_PARTICIPATION_AGREEMENT !== 'undefined' && validParticipationReceipt(QR_PARTICIPATION_AGREEMENT)) {
+        // Schedule after the rest of the scanner script has initialized its controls.
+        const restoredRequestScope = currentParticipationRequestScope();
+        Promise.resolve().then(() => {
+          if (!eventConfigRefreshStarted && scope === currentParticipationNoticeScope() &&
+              restoredRequestScope === currentParticipationRequestScope() && validParticipationReceipt(QR_PARTICIPATION_AGREEMENT)) applyParticipationReceipt(scope);
+        });
+      } else if (alreadyAcknowledged) {
+        qrRulesNoticeAcknowledged.checked = true;
+        void saveParticipationNotice('cached');
+      }
     }
 
     initializeRulesNotice();

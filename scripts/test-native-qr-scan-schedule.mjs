@@ -261,14 +261,16 @@ test('qualified entry proof is independent of ordinary progress and malformed me
   assert.deepEqual([...api.normalizeQrVendorDrawScannedIds(['901', '902', '901'], [])], ['901', '902']);
   assert.deepEqual([...api.normalizeQrVendorDrawScannedIds(undefined, ['901'])], ['901']);
   assert.deepEqual([...api.normalizeQrVendorDrawScannedIds(null, ['901'])], []);
-  const cleared = [];
+  const cleared = [], clearedAgreements = [];
   const { clearBingoCardState } = loadAppDeclarations(['clearBingoCardState'], { useCallback: fn => fn,
     bingoCardStateKeyRef: { current: 'previous-card' },
+    setServerParticipationAgreement: value => clearedAgreements.push(value),
+    setParticipationProfileEventKey: value => clearedAgreements.push(value),
     setEventConfig() {}, setAppReviewFixture() {}, setEmailTestFixture() {}, setVendors() {}, setBingoTotalCount() {},
     setScannerConfigVerified() {},
     setScannedVendorIds: value => cleared.push([...value]), setVendorDrawScannedVendorIds: value => cleared.push([...value]),
   });
-  clearBingoCardState(); assert.deepEqual(cleared, [[], []]);
+  clearBingoCardState(); assert.deepEqual(cleared, [[], []]); assert.deepEqual(clearedAgreements, [null, '']);
 });
 
 function proofResponseFixture(data, overrides = {}) {
@@ -283,10 +285,11 @@ function proofResponseFixture(data, overrides = {}) {
     QR_BINGO_SYNC_FUNCTION_URL: 'https://offline.invalid/sync', APP_BACKEND_PUBLISHABLE_KEY: 'offline',
     QR_BINGO_PARTICIPATION_NOTICE_VERSION: 'offline',
     fetchQrBingoJsonWithTimeout: async (_url, options) => { requests.push(JSON.parse(options.body).action); return { response: { ok: true }, data }; },
-    normalizeQrContactProfile: () => ({ saved: true, complete: true }),
+    normalizeQrContactProfile: () => ({ saved: true, complete: true, event_key: 'offline-event' }),
     normalizeQrBingoEventConfig: api.normalizeQrBingoEventConfig, normalizeQrVendorDrawScannedIds: api.normalizeQrVendorDrawScannedIds,
     setScannedVendorIds: value => progress.push([...value]), setVendorDrawScannedVendorIds: value => proof.push([...value]),
     clearBingoCardState() {}, setLoadingBingo() {}, setBingoError() {}, setSavingBingo() {}, setServerMissingContactFields() {},
+    setServerParticipationAgreement() {}, setParticipationProfileEventKey() {},
     setEventConfig() {}, setAppReviewFixture() {}, setEmailTestFixture() {}, setVendors() {}, setBingoTotalCount() {},
     setScannerConfigVerified() {},
     showScanFeedback() {}, setRaffleOffer: value => offers.push(value), setRaffleOfferAlreadyScanned() {}, vendors: [],

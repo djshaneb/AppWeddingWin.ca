@@ -818,3 +818,18 @@ Deno.test("website Vault failure or malformed value stays sanitized at the verif
   );
   equal(observations.consumed.length, 0);
 });
+
+
+Deno.test("participation acceptance requires an authenticated couple proof bound to exact consent payload", async () => {
+  const body = { action: "participation_accept", website_member_id: "90001", client_platform: "website",
+    accepted: true, expected_event_key: "offline-event", rules_version: "rules-v1",
+    participation_notice_version: "rules-v1|2026-09-04-pre-scan-draw-consent", acceptance_source: "explicit" };
+  const signed = await vector({ action: body.action, member: body.website_member_id, scope: COUPLE_SCOPE, body });
+  const valid = dependencies();
+  const principal = await verifyQrBingoWebsiteRequest(request(signed.headers, signed.rawBody), signed.rawBody, body, valid.deps);
+  equal(principal.kind, "couple"); equal(principal.userId, "90001"); equal(valid.observations.consumed.length, 1);
+  const changed = { ...body, acceptance_source: "cached" }, changedRaw = JSON.stringify(changed);
+  await denied(() => verifyQrBingoWebsiteRequest(request(signed.headers, changedRaw), changedRaw, changed, dependencies().deps));
+  const vendor = await vector({ action: body.action, member: body.website_member_id, scope: SCOPE, body });
+  await denied(() => verifyQrBingoWebsiteRequest(request(vendor.headers, vendor.rawBody), vendor.rawBody, body, dependencies().deps));
+});
