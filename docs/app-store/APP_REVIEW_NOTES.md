@@ -1,56 +1,40 @@
-# App Review notes
+# App Review notes — ready for review, not submission
 
-Status: **FINAL TEMPLATE — release gates remain open.**
+Updated September 14, 2026. The Apple-facing draft below is under 4,000 UTF-8 bytes. Do not paste it until the gates below are resolved and the exact processed build and credentials have been verified. Credentials and the owner's review-contact details belong in App Store Connect's secure review fields, not this file.
 
-The paste block is under Apple's 4,000-byte limit. Put the primary couple credentials in App Store Connect's sign-in fields. This file contains no password.
+## Apple-facing draft
 
-Do not paste until:
+WeddingWin helps couples plan their wedding and connect with wedding professionals. It includes private messaging, camera-based QR Bingo, optional vendor draws and account controls, alongside vendor search, profiles and wedding-website tools. Internet access is required for account and website features.
 
-- [ ] Replace only `[[PRIVATE_VENDOR_CREDENTIALS]]` from the password manager; never save the completed text.
-- [ ] Both accounts and non-expiring pair access pass on processed TestFlight.
-- [ ] Reset couple `38971`/isolated event; attach `sample-qr-review-vendor-38970.png`.
-- [ ] Physical Apple/Google, printed QR, push, and iPad gates pass.
-- [ ] On the processed TestFlight build, the iOS system picker selects/cancels correctly without a broad photo-library permission prompt, and attachment upload, app↔website persistence, report/block, and deletion/retention behavior pass on a physical iPhone.
-- [ ] Final privacy policy, free-app/paid-admission boundary, vendor-draw rules, and role disclosures are published and verified.
-- [ ] Vendor `38970` has reviewed and accepted Official Rules version `2026-09-01-in-person-entry`, including the named-vendor contact-use and marketing responsibilities; the isolated fixture is enabled, reset, contains only fictional contact/profile data, and still suppresses outbound email and any real prize.
+The supplied fictional accounts have distinct roles: John and Jane for the couple walkthrough, Cedar & Light Photography for the ordinary vendor walkthrough, and Willow & Bloom Floral Studio for the isolated draw walkthrough. Credentials are supplied separately in App Store Connect's review information.
 
-```text
-WeddingWin connects couples with wedding vendors. App/account features are free with no subscriptions or IAP. Advance general admission is free while allocated tickets remain; VIP is paid; without an advance general ticket, admission must be purchased at the door.
+1. Sign in as John and Jane. From Home, open Vendor Search and Wedding Website Builder. Open Private Messages to view the sample conversation with Cedar & Light. The conversation menu contains report/block controls.
+2. Open QR Bingo. Review the participation agreement and contact information. Display the attached weddingwin-review-vendor-qr.png on another screen or print it, then scan it. The named vendor question offers Yes or No. No keeps scan progress; Yes enters that vendor's draw. Scanning alone never enters a draw, and repeat scans do not create duplicate entries.
+3. Sign out and sign in as Cedar & Light to inspect the vendor home, profile tools and sample conversation. Use Willow & Bloom separately to inspect the isolated vendor-draw dashboard.
+4. About contains support, privacy, privacy requests, terms, Official Rules and Delete Account. A separate disposable account can be used for completed deletion testing without removing the walkthrough accounts.
 
-ACCOUNTS
-Use the couple account in App Store Connect's sign-in fields. It is member 38971 and displays the fictional name “App Review.”
+The isolated draw example uses fictional data in a separate event, awards no real prize and suppresses external winner delivery. Its test notices are intentional. Production entry availability follows the organizer's scanning period, the vendor's enabled status and the closing time. Winner selection and notice sending are separate vendor actions after the required checks.
 
-Additional private vendor account:
-[[PRIVATE_VENDOR_CREDENTIALS]]
-This is member 38970. Its listing is nonpublic; the account can use its dashboard, draw tools, and private text chat.
+Notification permission is optional. Notifications can open the relevant message or verified draw-result screen. Official Rules and Apple's non-sponsor disclaimer are available through About and the QR workflow.
 
-COUPLE FLOW
-1. Launch WeddingWin, choose Couple, and sign in with the primary account.
-2. Use the home screen's vendor-search, message, website, and QR Bingo tools.
-3. In Private Messages, open the prepared review-vendor conversation. Tap Attach, use the iOS system picker to choose a fictional photo, and send it. No broad photo-library prompt should appear. The app resizes/re-encodes the image; the server rejects invalid or oversized files. Reporting and retention apply.
-4. In QR Bingo, scan the attached QR for vendor 38970. The scan records an isolated booth visit and cannot change production event data. Camera frames are not uploaded.
-5. A separate offer appears. Open rules 2026-09-01-in-person-entry; confirm eligibility and explicitly agree that vendor 38970 may receive the fictional name, email, provided phone/wedding date, and consent evidence for this draw and its wedding-related offers or promotions; then Enter. Scanning alone never enters, and declining leaves only the booth-visit record. In production, this in-show QR entry is the digital replacement for a paper ballot and is available only after the eligible couple visits and scans the named vendor's booth. One entry is allowed per eligible couple for that vendor draw. The isolated fixture emulates the booth scan for review, awards no real prize, and sends no email.
+Support: https://www.weddingwin.ca/about/contact
+Privacy: https://www.weddingwin.ca/about/privacy
+Privacy requests: https://www.weddingwin.ca/privacy-request
+Terms: https://www.weddingwin.ca/about/terms
+Draw rules: https://www.weddingwin.ca/qr-bingo-vendor-draw-rules
 
-VENDOR FLOW
-1. Sign out, choose Vendor, and use the additional account above.
-2. Open Vendor Dashboard, Private Messages, and Draw.
-3. Draw shows settings, count, named-vendor entrant CSV, and potential-winner flow. Accept rules 2026-09-01-in-person-entry if asked. The CSV is exact-vendor/event scoped, uses fictional name/contact/wedding data and consent evidence, and marks the named-vendor marketing consent as included. Legacy entries without fresh current-version consent must be absent. Before confirm/disqualify, independently verify eligibility, attest that the declaration/release was obtained, enter the math answer, and add a dated non-sensitive method/reference note. Wedding Win records the attestation but does not perform that vendor work. Review-fixture notices stay blocked; production verified-winner notices are not suppressed.
-4. The prepared conversation mirrors WeddingWin.ca text chat. The active couple can reply from the website and the reply appears in the vendor app.
+## Internal pre-submission gates — never paste
 
-MESSAGING SAFETY
-Use Report last: it closes the conversation, keeps read-only history, removes the composer, and suppresses the member. An external website thread may exist until app sync closes it.
+- **Functionality:** native sending to Cedar still has the documented receiving-flag failure. Saved conversation screenshots prove reading, not sending. The [separate fix proposal](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/native-message-permission-fix.md) is not approved or implemented.
+- **Three distinct accounts:** verify John/Jane couple and Cedar ordinary vendor credentials on the exact processed build. Willow remains a separate private fixture; the named nonbinding preview is captured, but full vendor login and functional review access still need verification. Do not present the pending `willowandbloom.demo` inbox address as a verified account login. Enter only verified credentials in secure review fields.
+- **Draw access:** the [approved nonbinding preview](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/screenshots/demo-draw-capture-scope.md) now supplies the captured named question and No flow, with zero entries. Scene06 is a nonbinding, display/scan-only synthetic fixture: the actual named Yes/No question was captured on both devices, No was used, and live checks confirmed zero entries, draws and deliveries. It does not establish functional Yes/entry/winner acceptance for App Review. The fresh fixture expires 2026-09-21T20:47:37.829Z (at most seven days); verify or provision appropriately authorized review access for Apple's later review and follow-up. Native app code was unchanged for these captures. A genuinely working isolated review walkthrough, including authorized Yes and later review steps, remains a separate gate. Attach the tested [sample QR](../../assets/app-store/sample-qr-review-vendor-38970.png) only after that final candidate walkthrough is verified; preserve historical offers and acceptance records.
+- **Sponsorship and disclosures:** resolve the substantive Apple 5.3.1 sponsorship conflict and the missing pre-entry vendor-specific facts described in the [compliance audit](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/package-review/reviewer-compliance-audit.md). Do not repair either with reviewer wording alone.
+- **Notifications:** approved repairs are deployed. Natural cron and one direct phone transport test passed; actual new-event dispatch, visible presentation/taps and production TestFlight acceptance remain open. See [current push evidence](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/push-test-2026-09-14/TEST-RESULTS.md). Remove the old claim that notifications are unimplemented.
+- **Build:** choose the exact newly processed Store distribution build. The development-signed build labelled 1.0.0 (3), and the older EAS Store build with the same label, are different artifacts. Do not substitute simulator or development evidence for TestFlight acceptance.
+- **Moderation/deletion:** confirm report/block behavior, report handling, the image rollout and the lawful shared-content retention/deletion policy on the final candidate. Test complete deletion with disposable email and Apple accounts; preserve supplied review access.
+- **Payments:** verify any reachable vendor upgrade, membership or digital-service checkout before making a no-paid-features claim. Free download/base profiles do not establish that every account feature is free. Event tickets and physical services are a separate payment question.
+- **Package:** fourteen branded scenes are prepared; scene06 is complete as a display-only capture, not full App Review entry validation. Final Store previews, owner review-contact details and exact fixture expiry/access must be checked. See [readiness checklist](RELEASE_READINESS.md) and [demo setup](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/demo-account-setup.md).
 
-ACCOUNT DELETION
-For a disposable account, choose About > Delete Account. Account-owned data is removed and conversations close; approved shared history may remain read-only. Do not delete standing accounts; request one from support.
+After these gates pass, confirm the verified fixture route and attach the tested QR as `weddingwin-review-vendor-qr.png`, then recheck the Apple-facing block against the selected build and its 4,000-byte limit. No submission is authorized by this draft.
 
-NOTIFICATIONS AND PERMISSIONS
-Notifications are optional and generic. Camera is for QR scanning. Attach uses the iOS selected-item system picker without requesting broad photo-library access. Microphone and background location are unused.
-
-QR BINGO AND VENDOR DRAWS
-A scan records progress only; entry is separate and limited to one per eligible couple/vendor across methods. The named vendor sponsors, operates, and fulfils its prize. Wedding Win supplies the technical workflow and remains responsible for its own technology/privacy duties. Apple is not a sponsor.
-
-QR Bingo notice: https://www.weddingwin.ca/qr-bingo-vendor-draw-rules
-Support/reset contact: info@weddingwin.ca
-```
-
-Photo attachments are controlled by an explicit backend rollout gate. Accepted uploads must pass declared type, strict base64 and full-decode checks, decoded-size and image-dimension limits, and the rollout cutoff. The client re-encodes the selected asset as a resized JPEG before upload. This is not a claim of automated semantic image moderation; the documented report, block, closure, and retention controls still apply.
+Canonical package source: [review-notes-draft.md](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/review-notes-draft.md). Repository links above are adapted for this location.

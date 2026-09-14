@@ -1,70 +1,56 @@
-# App Store screenshot and icon inventory
+# Seven branded App Store screenshots
 
-Status: **CODE-OWNED INVENTORY FINAL — no complete upload-ready iPhone/iPad set is recorded.**
+Updated September 14, 2026. **Fourteen branded drafts prepared; all seven planned scenes captured per device class.** The images remain preparation assets pending final submitted-build, rights and Store-preview approval.
 
-Because `supportsTablet` is enabled, supply both iPhone and iPad screenshots. Apple accepts one to ten images per required device class. Relevant portrait sizes are:
+## Deliverables
 
-- iPhone 6.9-inch: `1260×2736`, `1290×2796`, or `1320×2868`.
-- iPhone 6.3-inch: `1206×2622`.
-- iPad 13-inch: `2064×2752` or `2048×2732`.
-- PNG or JPEG, opaque/no alpha.
+Create the same seven-scene story separately for iPhone and iPad: fourteen final images. Default portrait sizes: **1320×2868** for 6.9-inch iPhone and **2064×2752** for 13-inch iPad. Apple accepts 1–10 opaque PNG/JPEG images per required class. Both device families remain configured. Do not stretch an iPhone screen into an iPad image. [Apple specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications)
 
-Dimensions make a file eligible, not approved. Final screenshots must show the exact release UI, contain no private/test/debug/stale content, and pass App Store Connect preview inspection.
+Use WeddingWin coral/pink, a light background, short headlines, consistent typography and a large readable actual app capture. Use approved artwork. Frames must not conceal errors or suggest unavailable features. This proposal does not authorize app changes to stage images.
 
-## Current inventory
-
-All screenshot files are under `assets/app-store/screenshots/`.
-
-| Files | Technical result | Content/release result |
-| --- | --- | --- |
-| `pro-max-01-couple-menu.png`, `pro-max-02-about.png` | Both `1320×2868`, opaque RGB PNG; accepted 6.9-inch dimensions | **Candidates only.** No credentials or permission prompt were observed, but they use the fictional `App Review` fixture and are not captures from a processed TestFlight build. Recheck every visible string and recapture if the test identity makes them look like review/QA material. |
-| `iphone-01-*` through `iphone-09-*` | Nine `1206×2622` opaque PNG files; accepted 6.3-inch dimensions | **Internal QA, not an approved marketing set.** See the exclusions below. |
-| `ipad-01-couple-menu.png` | `2064×2752`, opaque RGB PNG; accepted 13-inch dimensions | **Do not upload.** The current capture shows a narrow phone-like centered layout and a partial gray spinner/overlay-like artifact near the lower-right edge. Capture a replacement after full iPad layout testing. |
-| `qa-final-release-*.jpg` | Fifteen `368×800` opaque JPEGs | **Do not upload.** Dimensions are not accepted App Store screenshot sizes; files are QA evidence. |
-| `qa-website-*.png` | Twenty-six website/browser QA captures at varied desktop/mobile sizes; several `.png` filenames contain JPEG-encoded data | **Do not upload.** They are browser/cross-client evidence, not iOS product-page assets, and may expose controlled conversation or browser context. |
-
-## Explicit do-not-upload list
-
-- `iphone-03-chat-blocked-list.png` and `iphone-04-chat-blocked-thread.png`: moderation/blocked QA state, not a normal marketing conversation.
-- `iphone-05-qr-url-emulation.png`: visibly contains the removed **Simulate QR scan** QA control and does not represent production.
-- `iphone-06-vendor-menu.png`: obvious review/test fixture state; recapture with a marketing-safe fictional fixture.
-- `iphone-07-vendor-draw.png`: stale pre-restoration/disabled-state capture. Never upload it; recapture the truthful restored vendor-draw UI from the final build if that feature is shown in marketing.
-- `iphone-08-account-deletion-confirm.png`: stale deletion text says entire conversations, including the other participant's messages, are deleted. Current behavior preserves the surviving participant's read-only shared history under the retention policy.
-- `ipad-01-couple-menu.png`: dimensionally valid but visually not final, as described above.
-- Every `qa-final-release-*` and `qa-website-*` file: internal evidence only.
-
-`iphone-01-couple-menu.png`, `iphone-02-qr-bingo.png`, and `iphone-09-account-deleted.png` are not hard-excluded for a false/debug control, but they are still QA captures. Do not promote them without exact-TestFlight consistency, privacy, marketing, and visual review.
-
-## Required final capture set
-
-Use a short truthful sequence; four to six scenes per class is enough if each adds value:
-
-| Order | Screen | Suggested message | Capture requirements |
+| # | Headline draft | Actual screen | Requirements |
 | --- | --- | --- | --- |
-| 1 | Native couple home | Plan your wedding in one place | Show core cards, not login/splash. Use neutral fictional data. |
-| 2 | Vendor search/results | Find wedding vendors across Canada | Use content WeddingWin has marketing rights to show; no CAPTCHA, browser chrome, or loading/error state. |
-| 3 | Native private chat | Keep conversations together | Normal unreported conversation with fictional names/text and, if shown, one marketing-safe fictional photo attachment. Do not show real contact data, IDs, a notification banner, a permission prompt, report state, or attachment metadata. Capture only after the physical TestFlight photo-permission/upload/persistence pass. |
-| 4 | QR Bingo progress or optional draw offer | Visit the booth, scan, then choose whether to enter | Show truthful in-show post-scan progress and, if used, the separate optional offer with Official Rules version `2026-09-01-in-person-entry` and the clear named-vendor draw-and-wedding-related-marketing disclosure that must be affirmatively accepted before entry. Describe QR entry as the digital replacement for a paper ballot, never imply that scanning automatically enters, and state that one entry is allowed per eligible couple for that vendor draw. Do not show a blank camera or simulation control. Capture only after printed-camera and entry-flow testing. |
-| 5 | Native About/privacy controls | Your privacy and account controls | Show privacy, support, notification settings, and Delete Account without opening a destructive confirmation. |
-| 6 | Vendor dashboard or draw settings | Manage your free profile and booth draw | Use a marketing-safe fictional vendor; show no payment/upgrade flow, entrant identity/contact data, selected-winner personal data, test fixture label, or outbound-email result. If draw controls are shown, the prize/rules/consent state must match version `2026-09-01-in-person-entry` and public rules; a percentage-off example must show its maximum savings and material restrictions. A report scene may explain that current-version entrant details are shared only with the named vendor for draw administration and that vendor's wedding-related marketing, with consent marked included, but must never show the CSV contents or any real/fake person-level values. A verification scene must show the eligibility, math-answer, rules/release, and confirm/disqualify gate without personal data. |
+| 1 | Your wedding, together | Couple home | Current cards, approved fictional name, no App Review label. |
+| 2 | Find your wedding team | Vendor search/results | Useful results and licensed images; no CAPTCHA, loading or browser account chrome. |
+| 3 | Make your wedding website | Website builder | Finished-looking fictional example using current tools; no private details or upgrade screen. |
+| 4 | Keep conversations close | Private Messages | Approved fictional conversation; no moderation test state. Text only unless final-build photo availability is verified. |
+| 5 | Scan. Explore. Play. | QR Bingo progress | Several participating tiles and truthful progress; avoid a blank camera as the main image. No simulation or contact data. |
+| 6 | Your choice to enter | Named vendor Yes/No | Actual named question from the approved nonbinding fixture; test labels remain. No only, zero entries. This image is not proof of a working App Review entry or winner flow. |
+| 7 | Get ready for the wedding show | Vendor home | Cedar & Light Photography's actual vendor home with account, message and draw tools. This follows the original vendor-dashboard scene without claiming an enabled draw. |
 
-An About/privacy/account-controls scene can replace a weaker scene. Use the current deletion wording: account-owned data is deleted, conversations close, and shared history may remain read-only for the other participant under the retention policy.
+About/privacy is a reserve scene. Unimplemented notification screens are excluded.
 
-## Capture checklist
+## Current material pass
 
-- [ ] Capture from the processed TestFlight build or an immutable release build proven identical to it; record build number and source revision.
-- [ ] Capture actual iPhone and iPad layouts separately in portrait; do not stretch, crop, or frame an iPhone capture as iPad.
-- [ ] Complete full iPad testing first: WebViews, keyboard/chat, modals, scanner, navigation, Dynamic Type, VoiceOver, rotation/window behavior, and overlay/spinner cleanup.
-- [ ] Use consistent status bar, appearance, text size, and fixture names across each set.
-- [ ] Remove debug overlays, test IDs, keyboards, loading spinners, alerts, permission prompts, simulator controls, and test/review wording unless the screen specifically requires it.
-- [ ] Confirm no email, phone, member ID, token, browser account, real wedding date, message, entrant, or notification content is visible.
-- [ ] Confirm product claims, rules, privacy wording, availability, and feature state match the submitted build and metadata.
-- [ ] If a chat attachment is shown, confirm the submitted build exposes Attach only under the backend rollout gate; physical iPhone system-picker cancel/selection, no-broad-permission-prompt, and upload checks passed; and App Privacy discloses Photos or Videos. A screenshot must not imply automated semantic image moderation.
-- [ ] Export opaque sRGB at exact accepted dimensions; independently inspect format, pixel size, color space, and alpha.
-- [ ] Upload at least one and no more than ten per required class, then inspect every scaled App Store Connect preview.
+Fourteen branded drafts are prepared and checked against raw-source hashes: iPhone and iPad scenes01–07. Scenes06 and07 use existing build3 simulator captures; scenes01–05 retain their build2 provenance. Scene07 shows Cedar & Light Photography's ordinary vendor home, without claiming an enabled draw. Corrected iPad03 shows the confirmed demo email. Final TestFlight and Store-preview acceptance remain pending.
 
-## App icon
+Both scene06 slots are complete: John and Jane see the genuine named Willow & Bloom question, with existing test labels preserved. The [approved demo-only scope](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/screenshots/demo-draw-capture-scope.md) was implemented without changing native UI or rewriting old offers. Scene06 is a nonbinding, display/scan-only synthetic fixture: the actual named Yes/No question was captured on both devices, No was used, and live checks confirmed zero entries, draws and deliveries. It does not establish functional Yes/entry/winner acceptance for App Review. The fresh fixture expires 2026-09-21T20:47:37.829Z (at most seven days); verify or provision appropriately authorized review access for Apple's later review and follow-up. Native app code was unchanged for these captures. Eight photographer messages were saved through normal website forms and verified by native reading; iPad scene04 shows all eight and iPhone shows the latest five with canonical photos. Native SEND still returns HTTP403 and remains a separately scoped release blocker.
 
-`assets/images/app-icon.png` is a `1024×1024` opaque RGB PNG and is referenced by `app.json`. It is technically suitable as the source icon. Before upload, inspect the icon from the signed archive and App Store Connect rendering for unintended transparency, masking, clipping, debug branding, and consistency with screenshots.
+## Existing asset audit
 
-Reference: [Apple screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/).
+All 53 files under `assets/app-store/screenshots` have August 28, 2026 filesystem dates:
+
+| Files | Measured size | Decision |
+| --- | --- | --- |
+| Two `pro-max-*` PNGs | 1320×2868, opaque | Valid-size references; home visibly names a review fixture. |
+| Nine `iphone-*` PNGs | 1206×2622, opaque | QA only; includes emulation, blocked chat, old deletion copy and review content. |
+| `ipad-01-couple-menu.png` | 2064×2752, opaque | Replace: narrow centered layout and lower-right spinner artifact. |
+| Fifteen `qa-final-release-*.jpg` | 368×800 | Internal QA only. |
+| Twenty-six `qa-website-*.png` | Browser sizes | Internal QA; some filenames do not match encoded format. |
+
+Six September 14 native-feedback images in the task workspace are also 368×800 QA JPEGs. Recent does not mean upload-ready. QR illustrations in `assets/images/qr-bingo` are not screenshots.
+
+`assets/images/app-icon.png` is the configured 1024×1024 opaque PNG. Inspect its sharpness, masking and archive rendering before approval. No icon change is included.
+
+## Checklist
+
+- [ ] Record final source revision and processed build.
+- [ ] Verify iPad layout, keyboards, modals, web views and overlay cleanup first.
+- [ ] Use marketing-safe fictional content and establish rights for all visible images. Do not edit away review-fixture warnings.
+- [ ] Verify the scenes reflect prior agreement, authorized early entry, simple Yes/No, named repeat scans and saved draw feedback.
+- [ ] Capture full-resolution clean originals with consistent appearance, status bar and text size.
+- [ ] Add approved branding; inspect readability at Store preview size.
+- [x] Validate format, pixels, opacity, seven images per class and order against actual files and source provenance.
+- [ ] Review the artwork, upload and inspect Store previews, and include the finished set in the completed package.
+
+Canonical package source: [screenshot-shot-list.md](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/screenshot-shot-list.md). Repository links above are adapted for this location.
