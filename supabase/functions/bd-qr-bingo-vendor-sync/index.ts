@@ -1,3 +1,4 @@
+import { syntheticFixtureContextMatches, syntheticFixtureOfferMatches, syntheticFixtureActionIsBlocked, SYNTHETIC_FIXTURE_DISCLOSURE, SYNTHETIC_FIXTURE_DISPLAY_ONLY_MESSAGE, type SyntheticFixtureSetup } from "../_shared/qr_bingo_synthetic_fixture.ts";
 import { loadQrBingoDrawResult, QrBingoDrawResultError } from "../_shared/qr_bingo_draw_result.ts";
 import { loadQrParticipationReceipt, recordQrParticipation, validateQrParticipationRequest, shouldRecordQrParticipationOnUse, QrParticipationError } from "../_shared/qr_bingo_participation.ts";
 import { loadQrBingoCardState, assertQrBingoCardGeneration, QrBingoCardStateError, type QrBingoCardState } from "../_shared/qr_bingo_card_state.ts";
@@ -218,6 +219,8 @@ type QrPage = {
   requestCsrf?: string;
 };
 type AppReviewRaffleFixture = {
+  synthetic_fixture_setup_id?: string | null;
+  synthetic_setup?: SyntheticFixtureSetup;
   id: string;
   event_key: string;
   couple_bd_user_id: string;
@@ -241,6 +244,7 @@ type EmailTestRaffleFixture =
   };
 type IsolatedRaffleFixture = AppReviewRaffleFixture | EmailTestRaffleFixture;
 type RaffleSettings = {
+  synthetic_fixture_setup_id?: string | null;
   id?: string;
   event_key: string;
   vendor_bingo_id: string;
@@ -278,6 +282,7 @@ type RaffleSettings = {
   updated_at?: string | null;
 };
 type VendorOfferSnapshot = {
+  synthetic_fixture_setup_id?: string | null;
   event_key: string;
   vendor_bingo_id: string;
   vendor_offer_version: string;
@@ -505,13 +510,40 @@ async function collectExactPostgrestRows<T>(
   );
 }
 
+async function bindSyntheticFixtureContext(fixture: AppReviewRaffleFixture, userId: string) {
+  if (fixture.synthetic_fixture_setup_id == null) return fixture;
+  const { data: setup, error } = await requireAdmin()
+    .from("qr_bingo_synthetic_fixture_setups").select("*")
+    .eq("id", fixture.synthetic_fixture_setup_id).maybeSingle();
+  if (error) throw error;
+  if (!syntheticFixtureContextMatches(fixture, setup, userId, qrBingoConfig())) {
+    throw new Error("Synthetic fixture context is unavailable.");
+  }
+  return { ...fixture, synthetic_setup: setup as SyntheticFixtureSetup };
+}
+
 async function loadAppReviewRaffleFixture(userIdValue: unknown) {
   const userId = String(userIdValue || "").trim();
   if (!/^\d+$/.test(userId)) return null;
   const db = requireAdmin();
+  if (["38971", "38970"].includes(userId)) {
+    // A superseded/disabled/expired synthetic binding must stay unavailable rather
+    // than silently becoming an ordinary production scan or promotion.
+    const { data: syntheticFixture, error: syntheticError } = await db
+      .from("app_review_raffle_fixtures").select("*")
+      .not("synthetic_fixture_setup_id", "is", null)
+      .or(`couple_bd_user_id.eq.${userId},vendor_bd_user_id.eq.${userId}`)
+      .limit(1).maybeSingle();
+    if (syntheticError) throw syntheticError;
+    if (syntheticFixture) {
+      const fixture = await bindSyntheticFixtureContext(syntheticFixture as AppReviewRaffleFixture, userId);
+      return { ...fixture!, authenticated_couple_bd_user_id: userId === "38971" ? userId : undefined };
+    }
+  }
   const { data, error } = await db
     .from("app_review_raffle_fixtures")
     .select("*")
+    .is("primary_superseded_at", null)
     .eq("enabled", true)
     .gt("expires_at", new Date().toISOString())
     .or(`couple_bd_user_id.eq.${userId},vendor_bd_user_id.eq.${userId}`)
@@ -524,8 +556,10 @@ async function loadAppReviewRaffleFixture(userIdValue: unknown) {
     throw error;
   }
   if (data) {
+    const fixture = await bindSyntheticFixtureContext(data as AppReviewRaffleFixture, userId);
+    if (!fixture) return null;
     return {
-      ...(data as AppReviewRaffleFixture),
+      ...fixture,
       authenticated_couple_bd_user_id:
         String(data.couple_bd_user_id || "") === userId ? userId : undefined,
     };
@@ -560,9 +594,11 @@ async function loadAppReviewRaffleFixture(userIdValue: unknown) {
     .limit(1)
     .maybeSingle();
   if (participantFixtureError) throw participantFixtureError;
-  return participantFixture
+  const fixture = participantFixture
+    ? await bindSyntheticFixtureContext(participantFixture as AppReviewRaffleFixture, userId) : null;
+  return fixture
     ? {
-      ...(participantFixture as AppReviewRaffleFixture),
+      ...fixture,
       authenticated_couple_bd_user_id: userId,
     }
     : null;
@@ -1302,6 +1338,7 @@ async function loadCurrentVendorOfferSnapshot(settings: RaffleSettings | null) {
 }
 
 function offerSnapshotHasAcceptedTerms(snapshot: VendorOfferSnapshot | null) {
+  if (snapshot?.synthetic_fixture_setup_id != null) return false;
   return Boolean(
     snapshot?.enabled &&
       snapshot.offer_enterable &&
@@ -1605,6 +1642,7 @@ function isSettingsEnterable(
   settings: RaffleSettings | null,
   isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
+  if (settings?.synthetic_fixture_setup_id != null || isolatedFixture?.synthetic_fixture_setup_id != null) return false;
   const config = qrBingoConfig();
   const fixtureTerms = isolatedFixtureMatchesSettings(
     settings,
@@ -2328,10 +2366,19 @@ async function buildRaffleOffer(
   isolatedFixture?: IsolatedRaffleFixture | null,
 ) {
   const settings = await getSettings(vendor, eventKey).catch(() => null);
-  if (!isSettingsEnterable(settings, isolatedFixture)) return null;
+  const synthetic = settings?.synthetic_fixture_setup_id != null || isolatedFixture?.synthetic_fixture_setup_id != null;
+  if (!synthetic) {
+    if (!isSettingsEnterable(settings, isolatedFixture)) return null;
+  }
   const snapshot = await loadCurrentVendorOfferSnapshot(settings);
-  if (!offerSnapshotIsEnterable(snapshot)) return null;
-  const effectiveDisclosure = qrBingoEffectiveEntryDisclosure(snapshot!.participant_responsibility_disclosure_text);
+  if (synthetic) {
+    // This immutable administrative setup allows the existing question to be
+    // previewed, but never satisfies either party's legal acceptance.
+    if (!syntheticFixtureOfferMatches(settings, snapshot, isolatedFixture, isolatedFixture?.synthetic_setup,
+      String(user?.user_id || ""), qrBingoConfig()) || vendor.id !== "38970" || eventKey !== isolatedFixture?.event_key) return null;
+  } else if (!offerSnapshotIsEnterable(snapshot)) return null;
+  const effectiveDisclosure = synthetic ? SYNTHETIC_FIXTURE_DISCLOSURE
+    : qrBingoEffectiveEntryDisclosure(snapshot!.participant_responsibility_disclosure_text);
   if (!effectiveDisclosure) return null;
 
   const db = requireAdmin();
@@ -2343,6 +2390,7 @@ async function buildRaffleOffer(
     .eq("couple_bd_user_id", String(user?.user_id || ""))
     .maybeSingle();
   if (error) throw error;
+  if (synthetic && existing) return null;
   if (existing?.id) {
     const archivedIds = await archivedLegacyEntryIds(eventKey, vendor.id);
     if (archivedIds.has(String(existing.id))) return null;
@@ -2356,6 +2404,9 @@ async function buildRaffleOffer(
   return {
     app_review_fixture: appReviewFixture,
     email_test_fixture: emailTestFixture,
+    ...(synthetic ? { synthetic_fixture_setup_id: isolatedFixture!.synthetic_fixture_setup_id,
+      provenance: "synthetic_fixture_setup", display_only: true, legal_acceptance: false,
+      entry_allowed: false } : {}),
     outbound_email_suppressed: appReviewFixture,
     vendor_id: vendor.id,
     vendor_name: snapshot!.vendor_name,
@@ -2369,7 +2420,7 @@ async function buildRaffleOffer(
     exclude_previous_winners: true,
     prize_title: snapshot!.prize_title,
     prize_description: snapshot!.prize_description,
-    prize_approx_value_cad: positiveCadValue(snapshot!.prize_approx_value_cad),
+    prize_approx_value_cad: synthetic ? 0 : positiveCadValue(snapshot!.prize_approx_value_cad),
     eligibility_region: snapshot!.eligibility_region,
     entry_opens_at: qrBingoEntryOpensAt(qrBingoConfig()),
     entry_closes_at: snapshot!.entry_closes_at,
@@ -2436,6 +2487,9 @@ async function optInToRaffle(
     };
   }
   const settings = await getSettings(vendor, eventKey);
+  if (settings?.synthetic_fixture_setup_id != null || isolatedFixture?.synthetic_fixture_setup_id != null) {
+    return { entered: false, code: "synthetic_fixture_display_only", message: SYNTHETIC_FIXTURE_DISPLAY_ONLY_MESSAGE };
+  }
   const currentSnapshot = await loadCurrentVendorOfferSnapshot(settings);
   const db = requireAdmin();
   const { data: existing, error: existingError } = await db
@@ -4073,6 +4127,10 @@ Deno.serve(async (request) => {
           ["4", "18"].includes(String(user.subscription_id)))) {
         return jsonResponse({ ok: false, error: "Sign in with a participating vendor account." }, 403);
       }
+      if (reviewFixture?.synthetic_fixture_setup_id != null && syntheticFixtureActionIsBlocked(action)) {
+        return jsonResponse({ ok: false, entered: false, code: "synthetic_fixture_display_only",
+          error: SYNTHETIC_FIXTURE_DISPLAY_ONLY_MESSAGE }, 403);
+      }
       if (action === "draw_result_get") {
         if (String(user.active) !== "2") {
           return jsonResponse({ ok: false, code: "draw_result_unavailable", error: "This draw result is no longer available." }, 404, false);
@@ -4440,8 +4498,9 @@ Deno.serve(async (request) => {
           card_state: cardState, card_generation: cardState?.generation,
           vendor_draw_scanned: vendorDrawScanned,
           in_show_scanned: inShowScanned,
-          message: raffleOffer
-            ? "This vendor draw is available. Entry remains optional."
+          message: raffleOffer && "display_only" in raffleOffer && raffleOffer.display_only
+            ? SYNTHETIC_FIXTURE_DISPLAY_ONLY_MESSAGE
+            : raffleOffer ? "This vendor draw is available. Entry remains optional."
             : "You are already entered, or this vendor draw is not currently open.",
         });
       }
