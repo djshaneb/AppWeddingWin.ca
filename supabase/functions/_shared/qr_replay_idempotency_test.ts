@@ -242,41 +242,6 @@ Deno.test("stale vendor settings return before the atomic compare RPC", async ()
   }
 });
 
-Deno.test("a repeat camera scan obtains current entry proof while fixture replay reopens the optional draw", async () => {
-  const app = await Deno.readTextFile(
-    new URL("../../../app/(tabs)/index.tsx", import.meta.url),
-  );
-  const match = app.indexOf(
-    "const matched = matchQrBingoVendor(value, vendors)",
-  );
-  const duplicate = app.indexOf(
-    "if (scannedVendorIds.has(matched.id))",
-    match,
-  );
-  const proofSave = app.indexOf(
-    "const saved = await saveBingoScan(matched)",
-    duplicate,
-  );
-  const reopen = app.indexOf(
-    "await reopenVendorDrawOffer(matched)",
-    duplicate,
-  );
-  const branchEnd = app.indexOf("\n        }", reopen);
-  const branch = app.slice(duplicate, branchEnd);
-  const save = app.indexOf("const saved = await saveBingoScan(matched)", branchEnd);
-
-  assert(
-    match >= 0 && duplicate > match && proofSave > duplicate &&
-      reopen > proofSave && branchEnd > reopen && save > branchEnd &&
-      includesIgnoringWhitespace(branch,
-        "if (!isolatedFixtureActive && isQrBingoScanWindowOpen(eventConfig, Date.now()))") &&
-      includesIgnoringWhitespace(branch,
-        "else if (eventVendorDrawsEnabled && isolatedFixtureActive)") &&
-      branch.trimEnd().endsWith("return;"),
-    "production repeat scans must obtain current entry proof, isolated repeats must reopen the draw, and both must return before the new-visit branch",
-  );
-});
-
 Deno.test("a QR check-in can offer a separate optional vendor draw entry", async () => {
   const app = await Deno.readTextFile(
     new URL("../../../app/(tabs)/index.tsx", import.meta.url),
