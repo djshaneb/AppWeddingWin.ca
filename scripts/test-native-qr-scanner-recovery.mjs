@@ -6,7 +6,7 @@ import { appSource, loadAppDeclarations } from './native-app-source-fixture.mjs'
 
 // Execute current app callbacks/effects with isolated native, network and timer
 // dependencies. These tests never invoke a camera, backend or real account.
-const api = loadAppDeclarations(['validQrScanTimestamp', 'normalizeQrBingoEventConfig', 'normalizeQrInShowScannedIds', 'normalizeQrVendorDrawScannedIds']);
+const api = loadAppDeclarations(['validQrScanTimestamp', 'normalizeQrBingoEventConfig', 'normalizeQrInShowScannedIds', 'normalizeQrVendorDrawScannedIds', 'qrBingoCardStateKey']);
 const event = Object.freeze({ event_key: 'offline-show', revision: 14,
   event_name: 'Offline show', venue_name: 'Offline venue', vendor_tag_id: 30,
   app_card_enabled: true, scan_enabled: true, scan_open_early: true,
@@ -14,11 +14,12 @@ const event = Object.freeze({ event_key: 'offline-show', revision: 14,
   entry_closes_at: '2026-10-18T19:00:00Z', vendor_draws_enabled: true,
   rules_version: 'offline-rules', official_rules_url: 'https://www.weddingwin.ca/qr-bingo-official-rules', email_delivery_mode: 'disabled' });
 const vendor = Object.freeze({ id: '901', name: 'Offline vendor' });
+const cardState = Object.freeze({ event_key: event.event_key, couple_id: '701', generation: 0, scan_reset_after: null });
 const barcode = Object.freeze({ data: 'https://www.weddingwin.ca/qr?vendor_id=901' });
 const flush = async () => { await new Promise(resolve => setImmediate(resolve)); };
 
 function cameraFixture({ parserFailure = false, saveFailure = false, cueFailure = false,
-  asyncCueFailure = false, saveCallback, saved = true, held = false, duplicate = false, verified = true } = {}) {
+  asyncCueFailure = false, saveCallback, saved = true, held = false, duplicate = false, verified = true, isolated = false } = {}) {
   const timers = [], locks = [], errors = [], feedback = [], saves = [], cues = [];
   const generation = { current: 1 }, inFlight = { current: false };
   let release;
@@ -26,15 +27,15 @@ function cameraFixture({ parserFailure = false, saveFailure = false, cueFailure 
   const globals = { useCallback: fn => fn, reviewingParticipationNoticeRef: { current: false },
     accountDeletionIsInFlight: () => false, qrInteractionGenerationRef: generation,
     contactProfileComplete: true, participationNoticeAccepted: true, scannerConfigVerified: verified,
-    eventScanEnabled: true, eventConfig: event, eventVendorDrawsEnabled: true, isolatedFixtureActive: false,
+    eventScanEnabled: true, eventConfig: event, eventVendorDrawsEnabled: true, isolatedFixtureActive: isolated,
     isQrBingoScanWindowOpen: () => true,
     scanLocked: false, scanInFlightRef: inFlight, scanUnlockTimerRef: { current: null }, raffleOffer: null,
     setBingoError: value => errors.push(value), setScanLocked: value => locks.push(value),
     vendors: [vendor], scannedVendorIds: new Set(duplicate ? [vendor.id] : []),
     matchQrBingoVendor: () => { if (parserFailure) throw Error('offline parser failure'); return vendor; },
     showScanFeedback: (...args) => feedback.push(args),
-    saveBingoScan: async () => { saves.push(vendor.id); await pending; if (saveCallback) return saveCallback(vendor); if (saveFailure) throw Error('offline save failure'); return saved; },
-    reopenVendorDrawOffer: () => assert.fail('Production camera rescan must use scan endpoint'),
+    saveBingoScan: async (matched, alreadyScanned) => { saves.push(matched.id); await pending; if (saveCallback) return saveCallback(matched, alreadyScanned); if (saveFailure) throw Error('offline save failure'); return saved; },
+    reopenVendorDrawOffer: () => assert.fail('Every camera rescan must use the scan endpoint'),
     onScan: () => { cues.push(vendor.id); if (cueFailure) throw Error('offline cue failure'); if (asyncCueFailure) return Promise.reject(Error('offline async cue failure')); },
     setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; }, clearTimeout() {},
     Haptics: { impactAsync: async () => {}, ImpactFeedbackStyle: { Light: 'light' } },
@@ -90,15 +91,15 @@ test('unverified settings refuse camera frames before any lock or save', async (
   assert.deepEqual(f.saves, []); assert.deepEqual(f.locks, []); assert.equal(f.timers.length, 0);
 });
 
-function saveFixture({ response = { ok: false }, data = { ok: false, error: 'The scan service is temporarily unavailable.' }, held = false, verified = true, transport } = {}) {
-  const configs = [], verifications = [], errors = [], progress = [], offers = [], requests = [], feedback = [];
-  const generation = { current: 1 }; let currentAccount = true, release;
+function saveFixture({ response = { ok: false }, data = { ok: false, error: 'The scan service is temporarily unavailable.' }, held = false, verified = true, transport, previousCard = cardState, isolated = false } = {}) {
+  const configs = [], verifications = [], errors = [], progress = [], offers = [], requests = [], feedback = [], offerNotices = [];
+  const generation = { current: 1 }, cardKey = { current: api.qrBingoCardStateKey(previousCard) }; let currentAccount = true, release;
   const pending = held ? new Promise(resolve => { release = resolve; }) : Promise.resolve();
   const globals = { Error, useCallback: fn => fn, accountDeletionIsInFlight: () => false,
     getAccountDeletionGeneration: () => 1, accountMutationIsCurrent: () => currentAccount,
-    qrInteractionGenerationRef: generation, nativeSession: { user_id: 'offline', token: 'offline' },
+    qrInteractionGenerationRef: generation, bingoCardStateKeyRef: cardKey, qrBingoCardStateKey: api.qrBingoCardStateKey, nativeSession: { user_id: 'offline', token: 'offline' },
     contactProfileComplete: true, participationNoticeAccepted: true, scannerConfigVerified: verified,
-    eventScanEnabled: true, eventConfig: event, isolatedFixtureActive: false,
+    eventScanEnabled: true, eventConfig: event, isolatedFixtureActive: isolated,
     isQrBingoScanWindowOpen: () => true,
     clearBingoCardState: () => assert.fail('A failed save must not erase a loaded card'), setSavingBingo() {},
     setBingoError: value => errors.push(value), setEventConfig: value => configs.push(value),
@@ -108,10 +109,10 @@ function saveFixture({ response = { ok: false }, data = { ok: false, error: 'The
     normalizeQrBingoEventConfig: api.normalizeQrBingoEventConfig, normalizeQrVendorDrawScannedIds: api.normalizeQrVendorDrawScannedIds,
     vendors: [vendor], setVendors() {}, setBingoTotalCount() {}, showScanFeedback: (...args) => feedback.push(args),
     setScannedVendorIds: value => progress.push([...value]), setVendorDrawScannedVendorIds() {},
-    setRaffleOffer: value => offers.push(value),
+    setRaffleOffer: value => offers.push(value), setRaffleOfferAlreadyScanned: value => offerNotices.push(value),
   };
-  return { ...loadAppDeclarations(['saveBingoScan'], globals), configs, verifications, errors, progress, offers, requests, feedback,
-    generation, release: () => release?.(), retireAccount: () => { currentAccount = false; } };
+  return { ...loadAppDeclarations(['saveBingoScan'], globals), configs, verifications, errors, progress, offers, requests, feedback, offerNotices,
+    generation, cardKey, release: () => release?.(), retireAccount: () => { currentAccount = false; } };
 }
 
 const completionMessage = 'Congratulations! You’ve completed Vendor Bingo. You’re now entered in the grand prize draw.';
@@ -125,9 +126,13 @@ test('confirmed native completion shows the exact clean grand-prize message', as
 });
 
 test('an incomplete native scan never claims grand-prize completion', async () => {
-  const f = saveFixture({ response: { ok: true }, data: { ok: true, completed: false, event_config: event, scanned: ['901'] } });
+  const offer = { vendor_id: vendor.id, vendor_name: vendor.name };
+  const f = saveFixture({ response: { ok: true }, data: { ok: true, completed: false, event_config: event,
+    card_state: cardState, scanned: ['901'], vendor_draw_scanned: ['901'], raffle_offer: offer } });
   assert.equal(await f.saveBingoScan(vendor), true);
   assert.deepEqual(f.feedback[0], [`Scanned: ${vendor.name}`, 'success', 5000]);
+  assert.deepEqual(f.offers, [offer]);
+  assert.deepEqual(f.offerNotices, [false]);
   assert(!f.feedback.some(([message]) => message === completionMessage));
 });
 
@@ -290,4 +295,144 @@ test('closed or retired refresh and rapid poll retries cannot change a newer ses
     assert.equal(f.requests.length, 1); if (retire === 'close') f.cleanup(); else f.generation.current += 1;
     f.release(); await flush(); assert.deepEqual(f.changes, []); f.cleanup();
   }
+});
+
+for (const isolated of [false, true]) test(`a repeat ${isolated ? 'fixture' : 'production'} scan confirms progress and still offers an unentered draw`, async () => {
+  const offer = { vendor_id: vendor.id, vendor_name: vendor.name };
+  const save = saveFixture({ isolated, response: { ok: true }, data: {
+    ok: true, completed: false, event_config: event, card_state: cardState,
+    scanned: [vendor.id], vendor_draw_scanned: [vendor.id], raffle_offer: offer,
+  } });
+  const camera = cameraFixture({ isolated, duplicate: true, saveCallback: save.saveBingoScan });
+  await camera.handleBarcodeScanned(barcode);
+  assert.deepEqual(save.requests, ['scan']);
+  assert.deepEqual(save.feedback, [[`${vendor.name} has already been scanned.`, 'duplicate', 3000]]);
+  assert.deepEqual(save.progress, [[vendor.id]]);
+  assert.deepEqual(save.offers, [offer]);
+  assert.deepEqual(save.offerNotices, [true]);
+  assert.deepEqual(camera.errors.filter(Boolean), []);
+  assert.deepEqual(camera.feedback, []);
+  assert.equal(camera.timers.length, 1);
+});
+
+test('a repeat scan with no available offer never submits an entry or repeats grand-prize completion', async () => {
+  const f = saveFixture({ response: { ok: true }, data: {
+    ok: true, completed: true, event_config: event, card_state: cardState,
+    scanned: [vendor.id], vendor_draw_scanned: [vendor.id], raffle_offer: null,
+  } });
+  assert.equal(await f.saveBingoScan(vendor, true), true);
+  assert.deepEqual(f.requests, ['scan']);
+  assert.deepEqual(f.feedback, [[`${vendor.name} has already been scanned.`, 'duplicate', 3000]]);
+  assert.deepEqual(f.offers, [null]);
+});
+
+test('the first confirmed scan after an administrator reset is fresh despite cached scanned progress', async () => {
+  const nextCard = { ...cardState, generation: 1, scan_reset_after: '2026-09-14T12:00:00Z' };
+  const offer = { vendor_id: vendor.id, vendor_name: vendor.name };
+  const f = saveFixture({ response: { ok: true }, data: {
+    ok: true, completed: false, event_config: event, card_state: nextCard,
+    scanned: [vendor.id], vendor_draw_scanned: [vendor.id], raffle_offer: offer,
+  } });
+  assert.equal(await f.saveBingoScan(vendor, true), true);
+  assert.deepEqual(f.feedback, [[`Scanned: ${vendor.name}`, 'success', 5000]]);
+  assert.deepEqual(f.offers, [offer]);
+  assert.deepEqual(f.offerNotices, [false]);
+  assert.deepEqual(f.progress, [[vendor.id]]);
+  assert.equal(await f.saveBingoScan(vendor, true), true);
+  assert.deepEqual(f.feedback[1], [`${vendor.name} has already been scanned.`, 'duplicate', 3000]);
+  assert.deepEqual(f.offerNotices, [false, true]);
+});
+
+test('missing or changed account/event identity never produces a false duplicate confirmation', async () => {
+  for (const supplied of [undefined, {}, { ...cardState, generation: '0' }, { ...cardState, generation: -1 },
+    { ...cardState, generation: Number.MAX_SAFE_INTEGER + 1 }, { ...cardState, event_key: 'another-event' }, { ...cardState, couple_id: '702' }]) {
+    const f = saveFixture({ response: { ok: true }, data: {
+      ok: true, completed: false, event_config: event, card_state: supplied, scanned: [vendor.id],
+    } });
+    assert.equal(await f.saveBingoScan(vendor, true), true);
+    assert.deepEqual(f.feedback, [[`Scanned: ${vendor.name}`, 'success', 5000]]);
+  }
+  const unknownPrior = saveFixture({ previousCard: null, response: { ok: true }, data: {
+    ok: true, completed: false, event_config: event, card_state: cardState, scanned: [vendor.id],
+  } });
+  assert.equal(await unknownPrior.saveBingoScan(vendor, true), true);
+  assert.deepEqual(unknownPrior.feedback, [[`Scanned: ${vendor.name}`, 'success', 5000]]);
+});
+
+test('failed and retired repeat scans cannot report a duplicate or change the remembered card', async () => {
+  const rejected = saveFixture();
+  const oldKey = rejected.cardKey.current;
+  assert.equal(await rejected.saveBingoScan(vendor, true), false);
+  assert.deepEqual(rejected.feedback, []); assert.equal(rejected.cardKey.current, oldKey);
+  const stale = saveFixture({ held: true, response: { ok: true }, data: {
+    ok: true, completed: false, event_config: event, card_state: { ...cardState, generation: 1 }, scanned: [vendor.id],
+  } });
+  const initialKey = stale.cardKey.current;
+  const pending = stale.saveBingoScan(vendor, true); stale.generation.current += 1;
+  stale.release(); assert.equal(await pending, false);
+  assert.deepEqual(stale.feedback, []); assert.equal(stale.cardKey.current, initialKey);
+});
+
+function feedbackFixture() {
+  let now = 0, nextId = 0, label = '', tone = 'idle';
+  const timers = new Map(), changes = [], announcements = [];
+  const globals = { useCallback: fn => fn, scanFeedbackClearTimerRef: { current: null },
+    setLastScanLabel: value => { label = value; changes.push(['label', value]); },
+    setLastScanTone: value => { tone = value; changes.push(['tone', value]); },
+    AccessibilityInfo: { announceForAccessibility: value => announcements.push(value) },
+    setTimeout: (fn, delay) => { const id = ++nextId; timers.set(id, { fn, at: now + delay }); return id; },
+    clearTimeout: id => timers.delete(id),
+  };
+  const api = loadAppDeclarations(['clearScanFeedbackTimer', 'showScanFeedback'], globals);
+  const ast = ts.createSourceFile('index.tsx', appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let effect;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useEffect' &&
+      ts.isArrowFunction(node.arguments[0]) && node.arguments[0].body.getText(ast) === 'clearScanFeedbackTimer') effect = node.arguments[0];
+    ts.forEachChild(node, visit);
+  }
+  visit(ast); assert(effect, 'Scanner must register feedback timer cleanup');
+  const context = { clearScanFeedbackTimer: api.clearScanFeedbackTimer };
+  vm.runInNewContext(ts.transpileModule('globalThis.mount = ' + effect.getText(ast), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText, context);
+  const unmount = context.mount();
+  return { ...api, timers, changes, announcements, unmount, state: () => ({ label, tone }),
+    advance(ms) {
+      const until = now + ms; let next;
+      while ((next = [...timers].filter(([, timer]) => timer.at <= until).sort((a, b) => a[1].at - b[1].at)[0])) {
+        timers.delete(next[0]); now = next[1].at; next[1].fn();
+      }
+      now = until;
+    },
+  };
+}
+
+test('short entry feedback expires at two seconds and announces its named result once', () => {
+  const f = feedbackFixture();
+  f.showScanFeedback('Entered: Offline vendor draw', 'success', 2000);
+  f.advance(1999); assert.equal(f.state().label, 'Entered: Offline vendor draw');
+  f.advance(1); assert.deepEqual(f.state(), { label: '', tone: 'idle' });
+  assert.deepEqual(f.announcements, ['QR scan result: Entered: Offline vendor draw']);
+  assert.equal(f.timers.size, 0);
+});
+
+test('replacement feedback cancels the earlier expiry and stays visible for its own duration', () => {
+  const f = feedbackFixture();
+  f.showScanFeedback('Entered: Offline vendor draw', 'success', 2000);
+  f.advance(1000);
+  f.showScanFeedback('Second vendor has already been scanned.', 'duplicate', 3000);
+  assert.equal(f.timers.size, 1);
+  f.advance(1000); assert.equal(f.state().label, 'Second vendor has already been scanned.');
+  f.advance(1999); assert.equal(f.state().tone, 'duplicate');
+  f.advance(1); assert.deepEqual(f.state(), { label: '', tone: 'idle' });
+});
+
+test('scanner unmount cancels feedback expiry without later state updates', () => {
+  const f = feedbackFixture();
+  f.showScanFeedback('Offline vendor has already been scanned.', 'duplicate', 3000);
+  f.advance(1000); f.unmount();
+  const before = [...f.changes];
+  assert.equal(f.timers.size, 0); f.advance(60_000);
+  assert.deepEqual(f.changes, before);
 });

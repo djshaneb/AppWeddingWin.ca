@@ -228,7 +228,7 @@ test('vendor entry invitation availability follows scanner access without rewrit
 });
 
 test('an actual duplicate camera scan refreshes early entry proof with rapid-tap protection', async () => {
-  for (const [isolated, expected] of [[false, 'save'], [true, 'preview']]) {
+  for (const isolated of [false, true]) {
     const writes = [], previews = [], feedback = [], vendor = { id: '901', name: 'Offline vendor' };
     let release;
     const pending = new Promise(resolve => { release = resolve; });
@@ -240,7 +240,7 @@ test('an actual duplicate camera scan refreshes early entry proof with rapid-tap
       scanLocked: false, scanInFlightRef: { current: false }, scanUnlockTimerRef: { current: null },
       raffleOffer: null, vendors: [vendor], scannedVendorIds: new Set(['901']),
       matchQrBingoVendor: () => vendor, setBingoError() {}, setScanLocked() {},
-      saveBingoScan: async value => { writes.push(value.id); await pending; return true; },
+      saveBingoScan: async (value, repeated) => { writes.push([value.id, repeated]); await pending; return true; },
       reopenVendorDrawOffer: async value => { previews.push(value.id); return true; },
       showScanFeedback: (...args) => feedback.push(args), onScan() {},
       setTimeout: () => 1, clearTimeout() {}, Haptics: { impactAsync: async () => {}, ImpactFeedbackStyle: { Light: 'light' } },
@@ -249,8 +249,8 @@ test('an actual duplicate camera scan refreshes early entry proof with rapid-tap
     const first = handleBarcodeScanned({ data: 'https://www.weddingwin.ca/qr?vendor_id=901' });
     const second = handleBarcodeScanned({ data: 'https://www.weddingwin.ca/qr?vendor_id=901' });
     release(); await Promise.all([first, second]);
-    assert.deepEqual(writes, expected === 'save' ? ['901'] : []);
-    assert.deepEqual(previews, expected === 'preview' ? ['901'] : []);
+    assert.deepEqual(writes, [['901', true]]);
+    assert.deepEqual(previews, []);
   }
 });
 
@@ -263,6 +263,7 @@ test('qualified entry proof is independent of ordinary progress and malformed me
   assert.deepEqual([...api.normalizeQrVendorDrawScannedIds(null, ['901'])], []);
   const cleared = [];
   const { clearBingoCardState } = loadAppDeclarations(['clearBingoCardState'], { useCallback: fn => fn,
+    bingoCardStateKeyRef: { current: 'previous-card' },
     setEventConfig() {}, setAppReviewFixture() {}, setEmailTestFixture() {}, setVendors() {}, setBingoTotalCount() {},
     setScannerConfigVerified() {},
     setScannedVendorIds: value => cleared.push([...value]), setVendorDrawScannedVendorIds: value => cleared.push([...value]),
@@ -274,6 +275,8 @@ function proofResponseFixture(data, overrides = {}) {
   const progress = [], proof = [], offers = [], requests = [];
   const globals = { useCallback: fn => fn, nativeSession: { user_id: 'offline', token: 'offline' },
     bingoCardRequestIdRef: { current: 0 }, qrInteractionGenerationRef: { current: 1 },
+    bingoCardStateKeyRef: { current: null },
+    ...loadAppDeclarations(['qrBingoCardStateKey']),
     accountDeletionIsInFlight: () => false, getAccountDeletionGeneration: () => 1, accountMutationIsCurrent: () => true,
     contactProfileComplete: true, participationNoticeAccepted: true, scannerConfigVerified: true, eventScanEnabled: true, eventConfig: config(),
     isolatedFixtureActive: false, isQrBingoScanWindowOpen: () => true,
@@ -286,7 +289,7 @@ function proofResponseFixture(data, overrides = {}) {
     clearBingoCardState() {}, setLoadingBingo() {}, setBingoError() {}, setSavingBingo() {}, setServerMissingContactFields() {},
     setEventConfig() {}, setAppReviewFixture() {}, setEmailTestFixture() {}, setVendors() {}, setBingoTotalCount() {},
     setScannerConfigVerified() {},
-    showScanFeedback() {}, setRaffleOffer: value => offers.push(value), vendors: [],
+    showScanFeedback() {}, setRaffleOffer: value => offers.push(value), setRaffleOfferAlreadyScanned() {}, vendors: [],
     ...overrides,
   };
   return { ...loadAppDeclarations(['loadBingoCard', 'saveBingoScan'], globals), progress, proof, offers, requests };

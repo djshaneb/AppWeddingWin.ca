@@ -300,6 +300,7 @@ type QrBingoSyncResponse = {
   scanned_count?: number;
   total_count?: number;
   matched_vendor?: QrBingoVendor;
+  card_state?: unknown;
   raffle_offer?: QrBingoRaffleOffer | null;
   completed?: boolean;
 };
@@ -506,6 +507,15 @@ function isCompleteVendorRaffleDashboard(
 }
 type VendorRaffleWizardStep = 1 | 2 | 3 | 4;
 type QrScanFeedbackTone = 'idle' | 'success' | 'duplicate' | 'error';
+
+function qrBingoCardStateKey(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const state = value as { event_key?: unknown; couple_id?: unknown; generation?: unknown };
+  if (typeof state.event_key !== 'string' || !state.event_key ||
+    typeof state.couple_id !== 'string' || !state.couple_id ||
+    typeof state.generation !== 'number' || !Number.isSafeInteger(state.generation) || state.generation < 0) return null;
+  return JSON.stringify([state.event_key, state.couple_id, state.generation]);
+}
 
 const TARGET_URL = 'https://www.weddingwin.ca';
 const WEBSITE_LOGOUT_URL = `${TARGET_URL}/account/logout`;
@@ -1852,6 +1862,7 @@ function NativeQrScanner({
   const [raffleOffer, setRaffleOffer] = useState<QrBingoRaffleOffer | null>(
     null,
   );
+  const [raffleOfferAlreadyScanned, setRaffleOfferAlreadyScanned] = useState(false);
   const [raffleSaving, setRaffleSaving] = useState(false);
   const [acceptedParticipationNoticeKey, setAcceptedParticipationNoticeKey] =
     useState('');
@@ -1873,6 +1884,7 @@ function NativeQrScanner({
   const raffleEntryInFlightRef = useRef(false);
   const qrInteractionGenerationRef = useRef(0);
   const bingoCardRequestIdRef = useRef(0);
+  const bingoCardStateKeyRef = useRef<string | null>(null);
   const eventConfigRevision = eventConfig?.revision;
   const eventScanEnabled = eventConfig?.scan_enabled;
   const eventVendorDrawsEnabled = eventConfig?.vendor_draws_enabled;
@@ -1960,6 +1972,7 @@ function NativeQrScanner({
   ]);
 
   const clearBingoCardState = useCallback(() => {
+    bingoCardStateKeyRef.current = null;
     setEventConfig(null);
     setScannerConfigVerified(false);
     setAppReviewFixture(false);
@@ -2066,6 +2079,7 @@ function NativeQrScanner({
           : data.vendors?.length || 0,
       );
       setScannedVendorIds(new Set((data.scanned || []).map(String)));
+      bingoCardStateKeyRef.current = qrBingoCardStateKey(data.card_state);
       setVendorDrawScannedVendorIds(normalizeQrVendorDrawScannedIds(data.vendor_draw_scanned, data.in_show_scanned));
     } catch (error) {
       if (requestId !== bingoCardRequestIdRef.current) return;
@@ -2253,7 +2267,7 @@ function NativeQrScanner({
   );
 
   const saveBingoScan = useCallback(
-    async (vendor: QrBingoVendor) => {
+    async (vendor: QrBingoVendor, alreadyScanned = false) => {
       if (accountDeletionIsInFlight()) return false;
       const deletionGeneration = getAccountDeletionGeneration();
       const interactionGeneration = qrInteractionGenerationRef.current;
@@ -2293,6 +2307,7 @@ function NativeQrScanner({
 
       setSavingBingo(true);
       setBingoError(null);
+      const previousCardStateKey = bingoCardStateKeyRef.current;
 
       try {
         const { response, data } =
@@ -2346,16 +2361,25 @@ function NativeQrScanner({
         setScannedVendorIds(new Set((data.scanned || [vendor.id]).map(String)));
         const nextVendorDrawScannedIds = normalizeQrVendorDrawScannedIds(data.vendor_draw_scanned, data.in_show_scanned);
         setVendorDrawScannedVendorIds(nextVendorDrawScannedIds);
+        const nextCardStateKey = qrBingoCardStateKey(data.card_state);
+        // A cached tile may predate an admin reset. Only announce a repeat when
+        // the confirmed scan still belongs to that same account/event/card.
+        const confirmedRepeat = alreadyScanned && previousCardStateKey !== null &&
+          previousCardStateKey === nextCardStateKey;
+        bingoCardStateKeyRef.current = nextCardStateKey;
         showScanFeedback(
-          data.completed
+          confirmedRepeat
+            ? `${vendor.name} has already been scanned.`
+            : data.completed
             ? 'Congratulations! You’ve completed Vendor Bingo. You’re now entered in the grand prize draw.'
             : `Scanned: ${vendor.name}`,
-          'success',
-          data.completed ? undefined : 5000,
+          confirmedRepeat ? 'duplicate' : 'success',
+          confirmedRepeat ? 3000 : data.completed ? undefined : 5000,
         );
         if (nextEventConfig?.vendor_draws_enabled &&
           (isolatedFixtureActive || (isQrBingoScanWindowOpen(nextEventConfig, Date.now()) &&
             nextVendorDrawScannedIds.has(vendor.id))) && data.raffle_offer) {
+          setRaffleOfferAlreadyScanned(confirmedRepeat);
           setRaffleOffer(data.raffle_offer);
         } else {
           setRaffleOffer(null);
@@ -2416,7 +2440,7 @@ function NativeQrScanner({
       }
       if (eventVendorDrawsEnabled !== true) {
         showScanFeedback(
-          `Already scanned: ${vendor.name}. Optional vendor draws are temporarily unavailable.`,
+          `${vendor.name} has already been scanned. Optional vendor draws are temporarily unavailable.`,
           'duplicate',
           5000,
         );
@@ -2499,11 +2523,12 @@ function NativeQrScanner({
           );
           return false;
         }
+        setRaffleOfferAlreadyScanned(true);
         setRaffleOffer(data.raffle_offer);
         showScanFeedback(
-          `Booth already visited. ${vendor.name} draw available.`,
+          `${vendor.name} has already been scanned.`,
           'duplicate',
-          5000,
+          3000,
         );
         return true;
       } catch (error) {
@@ -2593,21 +2618,10 @@ function NativeQrScanner({
         if (scannedVendorIds.has(matched.id)) {
           unlockDelay = 1200;
           setBingoError(null);
-          if (!isolatedFixtureActive && isQrBingoScanWindowOpen(eventConfig, Date.now())) {
-            // Rescanning asks the server for current entry proof and the latest vendor offer.
-            const saved = await saveBingoScan(matched);
-            if (interactionGeneration !== qrInteractionGenerationRef.current) return;
-            if (!saved) showScanFeedback('We could not confirm this scan. Please scan again to check your progress.', 'error', 5000);
-          } else if (eventVendorDrawsEnabled && isolatedFixtureActive) {
-            await reopenVendorDrawOffer(matched);
-          } else {
-            showScanFeedback(
-              `Already scanned: ${matched.name}. ${eventVendorDrawsEnabled ? 'Optional vendor draws are available while QR scanning is open.' : 'Optional vendor draws are temporarily unavailable.'}`,
-              'duplicate',
-              5000,
-            );
-          }
+          // Rescanning rechecks current card progress and the latest draw offer.
+          const saved = await saveBingoScan(matched, true);
           if (interactionGeneration !== qrInteractionGenerationRef.current) return;
+          if (!saved) showScanFeedback('We could not confirm this scan. Please scan again to check your progress.', 'error', 5000);
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
           return;
         }
@@ -2639,7 +2653,6 @@ function NativeQrScanner({
       participationNoticeAccepted,
       scannerConfigVerified,
       raffleOffer,
-      reopenVendorDrawOffer,
       saveBingoScan,
       scanLocked,
       scannedVendorIds,
@@ -2801,9 +2814,10 @@ function NativeQrScanner({
       }
       showScanFeedback(
         data.already_entered
-          ? 'You are already entered for this vendor draw.'
+          ? `You are already entered in ${raffleOffer.vendor_name}’s draw.`
           : `Entered: ${raffleOffer.vendor_name} draw`,
         'success',
+        2000,
       );
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
         () => {},
@@ -3415,6 +3429,11 @@ function NativeQrScanner({
               <Text style={styles.raffleModalTitle}>
                 Enter {raffleOffer?.vendor_name || 'this vendor'}’s draw?
               </Text>
+              {raffleOfferAlreadyScanned ? (
+                <Text style={styles.raffleModalText}>
+                  {raffleOffer?.vendor_name || 'This vendor'} has already been scanned.
+                </Text>
+              ) : null}
               {bingoError ? (
                 <Text style={styles.qrErrorText} accessibilityRole="alert" accessibilityLiveRegion="assertive">
                   {bingoError}

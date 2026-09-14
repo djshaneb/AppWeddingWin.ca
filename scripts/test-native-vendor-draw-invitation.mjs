@@ -78,13 +78,16 @@ test('the named invitation keeps Yes as the only entry action and No only dismis
   assert.deepEqual(cleared, [['offer', null], ['error', null]]);
 });
 
-function entryFixture(patch = {}) {
-  const requests = [], errors = [], offers = [], feedback = [];
+function entryFixture({ response = { ok: true }, data = { ok: true, event_config: {} }, held = false, transportError = null, ...patch } = {}) {
+  const requests = [], errors = [], offers = [], feedback = [], busy = [], offerNotices = [];
+  const generation = { current: 1 };
+  let release, currentAccount = true;
+  const pending = held ? new Promise(resolve => { release = resolve; }) : Promise.resolve();
   const offer = { vendor_id: '901', vendor_name: 'Fictional Test Vendor',
     vendor_offer_version: '2026-09-11T12:00:00Z', consent_version: 'current-test-rules',
     participant_responsibility_disclosure: 'Exact current participant disclosure' };
-  const globals = { useCallback: fn => fn, accountDeletionIsInFlight: () => false, getAccountDeletionGeneration: () => 1,
-    accountMutationIsCurrent: () => true, qrInteractionGenerationRef: { current: 1 },
+  const globals = { Error, useCallback: fn => fn, accountDeletionIsInFlight: () => false, getAccountDeletionGeneration: () => 1,
+    accountMutationIsCurrent: () => currentAccount, qrInteractionGenerationRef: generation,
     nativeSession: { user_id: 'offline', token: 'offline' }, clearBingoCardState() {},
     scannerConfigVerified: true, participationNoticeAccepted: true, eventVendorDrawsEnabled: true, eventConfig: { rules_version: offer.consent_version },
     isolatedFixtureActive: false, isQrBingoScanWindowOpen: () => true, vendorDrawScannedVendorIds: new Set(['901']),
@@ -92,17 +95,19 @@ function entryFixture(patch = {}) {
     ageOfMajorityAttested: true, residencyAttested: true, exclusionsAttested: true,
     promotionResponsibilityAccepted: true, raffleRulesViewedVersion: offer.consent_version,
     reopenVendorDrawOffer: () => assert.fail('Current offer should not need a refresh'),
-    setBingoError: value => errors.push(value), setRaffleSaving() {}, setAcceptedParticipationNoticeKey() {},
-    setRaffleOffer: value => offers.push(value), setEventConfig() {}, normalizeQrBingoEventConfig: value => value,
+    setBingoError: value => errors.push(value), setRaffleSaving: value => busy.push(value), setAcceptedParticipationNoticeKey() {},
+    setRaffleOffer: value => offers.push(value), setRaffleOfferAlreadyScanned: value => offerNotices.push(value), setEventConfig() {}, normalizeQrBingoEventConfig: value => value,
     showScanFeedback: (...args) => feedback.push(args),
     QR_BINGO_SYNC_FUNCTION_URL: 'https://offline.invalid', APP_BACKEND_PUBLISHABLE_KEY: 'offline', QR_BINGO_PARTICIPATION_NOTICE_VERSION: 'offline',
     Haptics: { notificationAsync: async () => {}, NotificationFeedbackType: { Success: 'success' } },
     fetchQrBingoJsonWithTimeout: async (_url, options) => {
       requests.push(JSON.parse(options.body));
-      return { response: { ok: true }, data: { ok: true, event_config: {} } };
+      await pending;
+      if (transportError) throw transportError;
+      return { response, data };
     }, ...patch,
   };
-  return { ...loadAppDeclarations(['enterRaffle'], globals), requests, errors, offers, feedback, globals };
+  return { ...loadAppDeclarations(['enterRaffle'], globals), requests, errors, offers, feedback, globals, busy, offerNotices, generation, release: () => release?.(), retireAccount: () => { currentAccount = false; } };
 }
 
 test('explicit Yes enters once under the existing pre-scan agreement and exact vendor offer', async () => {
@@ -121,7 +126,9 @@ test('explicit Yes enters once under the existing pre-scan agreement and exact v
     'Yes must not claim a hidden policy amendment was displayed or newly accepted');
   assert.equal(body.participant_responsibility_disclosure, f.globals.raffleOffer.participant_responsibility_disclosure);
   assert.equal('in_show_scanned' in body, false, 'The client must not fabricate show proof');
-  assert.match(f.feedback[0][0], /Entered: Fictional Test Vendor draw/);
+  assert.deepEqual(f.feedback, [['Entered: Fictional Test Vendor draw', 'success', 2000]]);
+  assert.deepEqual(f.errors.filter(Boolean), []);
+  assert.deepEqual(f.offers, [null]);
 });
 
 test('Yes cannot bypass paused scanning, missing proof, disabled draws or missing prior agreement', async () => {
@@ -133,4 +140,89 @@ test('Yes cannot bypass paused scanning, missing proof, disabled draws or missin
   ]) {
     const f = entryFixture(patch); await f.enterRaffle(); assert.deepEqual(f.requests, []);
   }
+});
+
+test('an existing entry closes the invitation with a short named confirmation', async () => {
+  const f = entryFixture({ data: { ok: true, already_entered: true, event_config: {} } });
+  await f.enterRaffle();
+  assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.feedback, [['You are already entered in Fictional Test Vendor’s draw.', 'success', 2000]]);
+  assert.deepEqual(f.offers, [null]);
+  assert.deepEqual(f.errors.filter(Boolean), []);
+});
+
+test('rapid Yes taps share one pending entry request and one confirmation', async () => {
+  const f = entryFixture({ held: true });
+  const first = f.enterRaffle();
+  await f.enterRaffle();
+  assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.feedback, []);
+  assert.equal(f.globals.raffleEntryInFlightRef.current, true);
+  f.release(); await first;
+  assert.equal(f.feedback.length, 1);
+  assert.deepEqual(f.offers, [null]);
+  assert.deepEqual(f.busy, [true, false]);
+  assert.equal(f.globals.raffleEntryInFlightRef.current, false);
+});
+
+test('failed or timed-out entry retains the invitation and never claims success', async () => {
+  for (const failure of [
+    { response: { ok: false }, data: { ok: false, error: 'Entry was rejected.' } },
+    { data: { ok: false, already_entered: true, error: 'Entry was not confirmed.' } },
+    { transportError: Error('Entry confirmation timed out.') },
+  ]) {
+    const f = entryFixture(failure); await f.enterRaffle();
+    assert.equal(f.requests.length, 1);
+    assert.deepEqual(f.feedback, []);
+    assert.deepEqual(f.offers, []);
+    assert.equal(f.errors.filter(Boolean).length, 1);
+    assert.equal(f.globals.raffleEntryInFlightRef.current, false);
+    assert.equal(f.busy.at(-1), false);
+  }
+});
+
+test('a stale offer refresh requires another explicit Yes and emits no entry confirmation', async () => {
+  const refreshed = [];
+  const f = entryFixture({ response: { ok: false }, data: { ok: false, code: 'stale_vendor_offer' },
+    reopenVendorDrawOffer: async vendor => { refreshed.push(vendor); return true; } });
+  await f.enterRaffle();
+  assert.equal(f.requests.length, 1, 'Refreshing must not submit another entry');
+  assert.equal(refreshed.length, 1); assert.equal(refreshed[0].id, '901');
+  assert.deepEqual(f.feedback, []);
+  assert.match(f.errors.at(-1), /Review the refreshed/);
+});
+
+test('retired scanner or account ignores a late successful entry response', async () => {
+  for (const retire of ['scanner', 'account']) {
+    const f = entryFixture({ held: true });
+    const pending = f.enterRaffle();
+    if (retire === 'scanner') f.generation.current += 1; else f.retireAccount();
+    f.release(); await pending;
+    assert.deepEqual(f.feedback, []);
+    assert.deepEqual(f.offers, []);
+    assert.deepEqual(f.errors.filter(Boolean), []);
+  }
+});
+
+
+test('the draw popup shows the named repeat notice only for a confirmed repeated scan', () => {
+  const ast = ts.createSourceFile('index.tsx', appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let expression;
+  function visit(node) {
+    if (ts.isJsxExpression(node) && node.expression && ts.isConditionalExpression(node.expression) &&
+      node.expression.condition.getText(ast) === 'raffleOfferAlreadyScanned') expression = node.expression;
+    ts.forEachChild(node, visit);
+  }
+  visit(ast); assert(expression, 'The repeat notice must be inside the invitation');
+  const context = { Text: 'Text', styles: { raffleModalText: {} },
+    React: { createElement: (type, props, ...children) => ({ type, props, children }) } };
+  vm.runInNewContext(ts.transpileModule(
+    'globalThis.renderNote = (raffleOfferAlreadyScanned, raffleOffer) => (' + expression.getText(ast) + ');',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } },
+  ).outputText, context);
+  const vendor = { vendor_name: 'Fictional Test Vendor' };
+  assert.equal(context.renderNote(false, vendor), null);
+  const notice = context.renderNote(true, vendor);
+  assert.equal(notice.type, 'Text');
+  assert.equal(notice.children.join('').trim(), 'Fictional Test Vendor has already been scanned.');
 });
