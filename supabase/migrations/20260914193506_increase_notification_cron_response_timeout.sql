@@ -13,8 +13,10 @@ begin
   or to_regprocedure('cron.alter_job(bigint,text,text,text,text,boolean)') is null then
   raise exception 'Expected notification scheduler signatures are unavailable';
  end if;
+ -- Extension catalogs intentionally grant SELECT only; cron.alter_job owns
+ -- the supported write and checks job ownership. Do not grant catalog UPDATE.
  select jobid,jobname,schedule,active,command into target from cron.job
- where jobname='weddingwin-chat-push-sweep' for update;
+ where jobname='weddingwin-chat-push-sweep';
  if not found or target.jobid<>2 or target.schedule<>'* * * * *' or target.active is not true then
   raise exception 'Unexpected notification cron job baseline';
  end if;
