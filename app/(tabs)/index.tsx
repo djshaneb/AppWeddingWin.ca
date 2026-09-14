@@ -35,6 +35,7 @@ import {
   subscribeToAccountDeleted,
 } from '@/lib/account_deletion_state';
 import { getNativeSessionStorageGeneration, mutateNativeSessionStorage, readNativeSessionStorage } from '@/lib/native_session_storage';
+import { createNotificationIntentStore, type NotificationIntent, type NotificationRouteOutcome } from '@/lib/notification_intent';
 import { useFocusEffect } from '@react-navigation/native';
 import { useNavigation } from 'expo-router';
 import { WebView, type WebViewNavigation } from 'react-native-webview';
@@ -154,6 +155,61 @@ type NativeBridgeSession = {
   cookie?: string;
 };
 
+type NotificationDrawResult = {
+  draw_id: string;
+  event_key: string;
+  viewer_role: 'couple' | 'vendor';
+  vendor_id: string;
+  vendor_name: string;
+  prize_title: string;
+  prize_description: string;
+  prize_approx_value_cad: number | null;
+  claim_instructions: string;
+  official_rules_url: string;
+  drawn_at: string;
+  notice_sent_at: string;
+  apple_non_sponsor_disclaimer: string;
+};
+
+function isNotificationDrawResult(value: unknown, drawId: string, role: 'couple' | 'vendor'): value is NotificationDrawResult {
+  if (!value || typeof value !== 'object') return false;
+  const result = value as NotificationDrawResult;
+  return result.draw_id === drawId && result.viewer_role === role &&
+    ['vendor_id', 'vendor_name', 'prize_title', 'prize_description', 'claim_instructions',
+      'official_rules_url', 'drawn_at', 'notice_sent_at', 'apple_non_sponsor_disclaimer', 'event_key']
+      .every(key => typeof (result as unknown as Record<string, unknown>)[key] === 'string') &&
+    !!result.vendor_id && !!result.vendor_name && !!result.event_key &&
+    Number.isFinite(Date.parse(result.notice_sent_at));
+}
+
+function clearNotificationResponseIfMatching(intentId: string) {
+  const response = Notifications.getLastNotificationResponse();
+  if (!response) return;
+  const data = response.notification.request.content.data;
+  const eventId = typeof data?.event_id === 'string' ? `event:${data.event_id.toLowerCase()}` : '';
+  const legacyId = `legacy:${response.notification.request.identifier}`;
+  if (intentId === eventId || intentId === legacyId) Notifications.clearLastNotificationResponse();
+}
+
+function parsePendingPushRollover(raw: string | null): {
+  native_session: NativeBridgeSession;
+  expo_push_token: string;
+  previous_expo_push_token: string;
+} | null {
+  if (!raw || raw.length > 1900) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const session = parsed.native_session;
+    const validToken = (token: unknown) => typeof token === 'string' && token.length <= 256 &&
+      /^(?:ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/.test(token);
+    if (!session || !/^[1-9][0-9]{0,19}$/.test(String(session.user_id || '')) ||
+      typeof session.token !== 'string' || !session.token || session.token.length > 1024 ||
+      !validToken(parsed.expo_push_token) || !validToken(parsed.previous_expo_push_token)) return null;
+    return { native_session: { user_id: String(session.user_id), token: session.token },
+      expo_push_token: parsed.expo_push_token, previous_expo_push_token: parsed.previous_expo_push_token };
+  } catch { return null; }
+}
+
 function hasNativeBridgeSession(session?: NativeBridgeSession | null) {
   return !!session?.user_id && (!!session.token || !!session.cookie);
 }
@@ -195,6 +251,7 @@ type NativeChatMessage = {
   delivery_error?: string;
 };
 type NativeChatSyncResponse = {
+  notification_target?: { requested_thread_token: string; resolved_thread_token: string };
   ok?: boolean;
   code?: string;
   email_confirmation_required?: boolean;
@@ -554,6 +611,7 @@ const NATIVE_BRIDGE_SESSION_KEY = 'weddingwin.nativeBridgeSession.v1';
 const CHAT_UNREAD_SESSION_KEY = 'weddingwin.chatUnread.v1';
 const PUSH_TOKEN_SESSION_KEY = 'weddingwin.expoPushToken.v1';
 const PENDING_PUSH_UNREGISTER_KEY = 'weddingwin.pendingPushUnregister.v1';
+const PENDING_PUSH_ROLLOVER_KEY = 'weddingwin.pendingPushRollover.v1';
 const ACCOUNT_DELETED_EVENT_KEY = 'weddingwin.accountDeleted.v1';
 const QR_BINGO_PARTICIPATION_NOTICE_VERSION = '2026-09-04-pre-scan-draw-consent';
 const VENDOR_RAFFLE_WIZARD_STEPS = [
@@ -3797,6 +3855,7 @@ function NativeHome({
   onSignOut,
   nativeSession,
   vendorDrawOpenRequestId,
+  vendorDrawFocusId,
   onVendorDrawOpenRequestHandled,
 }: {
   onOpenUrl: (path: string) => void;
@@ -3828,6 +3887,7 @@ function NativeHome({
   onSignOut: () => void | Promise<void>;
   nativeSession: NativeBridgeSession | null;
   vendorDrawOpenRequestId: number;
+  vendorDrawFocusId?: string;
   onVendorDrawOpenRequestHandled: (requestId: number) => void;
 }) {
   const { width: viewportWidth, height: viewportHeight, fontScale } =
@@ -4311,7 +4371,7 @@ function NativeHome({
         currentRulesAccepted ? data.rules_version || '' : '',
       );
       if (!options.preserveWizardContext) {
-        setVendorRaffleWizardStep(recommendedVendorRaffleWizardStep(data));
+        setVendorRaffleWizardStep(vendorDrawFocusId ? 4 : recommendedVendorRaffleWizardStep(data));
         setVendorRaffleRulesExpanded(false);
       }
       vendorRaffleLastSavedRef.current = vendorRaffleSignature(
@@ -4332,7 +4392,7 @@ function NativeHome({
       );
       finishVendorRaffleHydration();
     },
-    [finishVendorRaffleHydration, vendorRaffleSignature],
+    [finishVendorRaffleHydration, vendorRaffleSignature, vendorDrawFocusId],
   );
 
   const fetchVendorRaffle = useCallback(
@@ -8678,6 +8738,7 @@ function NativeHome({
                             </Text>
                           )}
                           {[...(vendorRaffle?.draws || [])].sort((left, right) =>
+                            Number(right.id === vendorDrawFocusId) - Number(left.id === vendorDrawFocusId) ||
                             Number(right.selection_status === 'potential') -
                             Number(left.selection_status === 'potential'),
                           ).map((draw) => {
@@ -8703,7 +8764,8 @@ function NativeHome({
                             return (
                               <View
                                 key={draw.id}
-                                style={styles.vendorRaffleWinnerCard}
+                                style={[styles.vendorRaffleWinnerCard, draw.id === vendorDrawFocusId && { borderColor: BRAND_COLOR, borderWidth: 2 }]}
+                                testID={draw.id === vendorDrawFocusId ? "notification-vendor-focused-draw" : undefined}
                               >
                                 <Text style={styles.vendorRaffleWinnerTitle}
                                   testID={`vendor-draw-selection-status-${draw.draw_number}`}
@@ -10037,7 +10099,14 @@ export default function HomeScreen() {
     Promise.resolve(),
   );
   const expoPushTokenRef = useRef('');
-  const handledNotificationResponseIdsRef = useRef(new Set<string>());
+  const notificationIntentStoreRef = useRef<ReturnType<typeof createNotificationIntentStore> | null>(null);
+  if (!notificationIntentStoreRef.current) notificationIntentStoreRef.current = createNotificationIntentStore(SecureStore);
+  const notificationRouteGenerationRef = useRef(0);
+  const notificationSignInRequestRef = useRef('');
+  const [notificationIntentRevision, setNotificationIntentRevision] = useState(0);
+  const [notificationRetryVisible, setNotificationRetryVisible] = useState(false);
+  const [notificationDrawResult, setNotificationDrawResult] = useState<NotificationDrawResult | null>(null);
+  const [vendorDrawFocusId, setVendorDrawFocusId] = useState('');
   const vendorConnectNativeUrlRef = useRef('');
   const vendorDrawCloserRef = useRef<(() => Promise<boolean>) | null>(null);
   const vendorConnectNativeTimerRef = useRef<ReturnType<
@@ -10260,15 +10329,18 @@ true;
   }, [nativeMember]);
 
   const registerPushNotifications = useCallback(
-    async (session: NativeBridgeSession | null) => {
-      if (Platform.OS === 'web' || !session?.user_id || !session?.token) return;
+    async (session: NativeBridgeSession | null, options: { force?: boolean; devicePushToken?: Notifications.DevicePushToken } = {}): Promise<void> => {
+      if (Platform.OS === 'web' || !session?.user_id || !session?.token || logoutInFlightRef.current ||
+        String(nativeBridgeSessionRef.current?.user_id || '') !== String(session.user_id) ||
+        nativeBridgeSessionRef.current?.token !== session.token) return;
 
       const registrationKey = `${session.user_id}:${session.token}`;
-      if (pushRegistrationKeyRef.current === registrationKey) return;
+      if (!options.force && pushRegistrationKeyRef.current === registrationKey) return;
       const existingRegistration =
         pushRegistrationPromisesRef.current.get(registrationKey);
       if (existingRegistration) {
         await existingRegistration;
+        if (options.force) await registerPushNotifications(session, options);
         return;
       }
       let releaseRegistration = () => {};
@@ -10301,6 +10373,7 @@ true;
 
       await previousPushOperation.catch(() => {});
       try {
+        if (!registrationIsCurrent()) return;
         const existingPermission = await Notifications.getPermissionsAsync();
         if (!registrationIsCurrent()) return;
         let finalStatus = existingPermission.status;
@@ -10325,10 +10398,38 @@ true;
           return;
         }
         const tokenResult = projectId
-          ? await Notifications.getExpoPushTokenAsync({ projectId })
-          : await Notifications.getExpoPushTokenAsync();
+          ? await Notifications.getExpoPushTokenAsync({ projectId, devicePushToken: options.devicePushToken })
+          : await Notifications.getExpoPushTokenAsync({ devicePushToken: options.devicePushToken });
         const expoPushToken = tokenResult.data;
         if (!expoPushToken || !registrationIsCurrent()) return;
+
+        // Recover an ambiguous earlier A→B replacement before a later B→C.
+        // Only encrypted storage carries this retry record across app launches.
+        let previousExpoPushToken = expoPushTokenRef.current ||
+          await SecureStore.getItemAsync(PUSH_TOKEN_SESSION_KEY) || '';
+        const pendingRolloverRaw = await SecureStore.getItemAsync(PENDING_PUSH_ROLLOVER_KEY);
+        const pendingRollover = parsePendingPushRollover(pendingRolloverRaw);
+        const pendingBelongsToSession = pendingRollover &&
+          String(pendingRollover.native_session.user_id) === String(session.user_id) &&
+          pendingRollover.native_session.token === session.token;
+        if (pendingBelongsToSession) {
+          if (pendingRollover.expo_push_token !== expoPushToken) {
+            const recovered = await fetchAppJsonWithTimeout<{ ok?: boolean }>(
+              `${APP_BACKEND_URL}/functions/v1/bd-register-push-token`, {
+                method: 'POST', headers: { Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+                  apikey: APP_BACKEND_PUBLISHABLE_KEY, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...pendingRollover, platform: Platform.OS }),
+              }, 'Push registration timed out.', 12000);
+            if (!recovered.response.ok || recovered.data?.ok !== true) throw new Error('Push rollover is pending.');
+            previousExpoPushToken = pendingRollover.expo_push_token;
+          } else previousExpoPushToken = pendingRollover.previous_expo_push_token;
+        }
+        if (!registrationIsCurrent()) return;
+        const rolloverRaw = previousExpoPushToken && previousExpoPushToken !== expoPushToken
+          ? JSON.stringify({ native_session: { user_id: String(session.user_id), token: session.token }, expo_push_token: expoPushToken,
+              previous_expo_push_token: previousExpoPushToken }) : '';
+        if (rolloverRaw) await SecureStore.setItemAsync(PENDING_PUSH_ROLLOVER_KEY, rolloverRaw);
+        if (!registrationIsCurrent()) return;
 
         // Keep the token available before the server call starts. If the user
         // signs out after the server accepts the call but before its response
@@ -10361,6 +10462,7 @@ true;
               body: JSON.stringify({
                 native_session: session,
                 expo_push_token: expoPushToken,
+                previous_expo_push_token: previousExpoPushToken && previousExpoPushToken !== expoPushToken ? previousExpoPushToken : undefined,
                 platform: Platform.OS,
               }),
             },
@@ -10419,7 +10521,10 @@ true;
           return;
         }
 
-        pushRegistrationKeyRef.current = registrationKey;
+        if (rolloverRaw && await SecureStore.getItemAsync(PENDING_PUSH_ROLLOVER_KEY) === rolloverRaw) {
+          await SecureStore.deleteItemAsync(PENDING_PUSH_ROLLOVER_KEY);
+        }
+        if (registrationIsCurrent()) pushRegistrationKeyRef.current = registrationKey;
       } catch {
         // Push is helpful, but chat should keep working even if registration fails.
       } finally {
@@ -10435,6 +10540,17 @@ true;
     },
     [deletePendingPushUnregisterIfCurrent, savePendingPushUnregister],
   );
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const subscription = Notifications.addPushTokenListener((devicePushToken) => {
+      const session = nativeBridgeSessionRef.current;
+      if (!session || logoutInFlightRef.current) return;
+      pushRegistrationKeyRef.current = '';
+      void registerPushNotifications(session, { force: true, devicePushToken });
+    });
+    return () => subscription.remove();
+  }, [registerPushNotifications]);
 
   const unregisterPushNotifications = useCallback(
     async (
@@ -10466,6 +10582,14 @@ true;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       try {
+        const pendingRolloverRaw = await SecureStore.getItemAsync(PENDING_PUSH_ROLLOVER_KEY).catch(() => null);
+        const pendingRollover = parsePendingPushRollover(pendingRolloverRaw);
+        const ownsPending = pendingRollover &&
+          String(pendingRollover.native_session.user_id) === String(session.user_id) &&
+          pendingRollover.native_session.token === session.token;
+        const tokens = [...new Set([expoPushToken, ...(ownsPending ?
+          [pendingRollover.expo_push_token, pendingRollover.previous_expo_push_token] : [])])];
+        for (const tokenToRetire of tokens) {
         const response = await fetch(
           `${APP_BACKEND_URL}/functions/v1/bd-register-push-token`,
           {
@@ -10479,12 +10603,16 @@ true;
             body: JSON.stringify({
               action: 'unregister',
               native_session: session,
-              expo_push_token: expoPushToken,
+              expo_push_token: tokenToRetire,
             }),
           },
         );
         const body = await response.json().catch(() => null);
         if (!response.ok || body?.ok !== true) return false;
+        }
+        if (ownsPending && await SecureStore.getItemAsync(PENDING_PUSH_ROLLOVER_KEY) === pendingRolloverRaw) {
+          await SecureStore.deleteItemAsync(PENDING_PUSH_ROLLOVER_KEY);
+        }
         if (
           nativeSessionGenerationRef.current === sessionGeneration &&
           !nativeBridgeSessionRef.current
@@ -10607,6 +10735,28 @@ true;
     playWebChatDing();
   }, []);
 
+  const updateChatUnreadAlert = useCallback((unreadCount: number, suppressAlert = false) => {
+    const previous = chatUnreadSnapshotRef.current;
+    chatUnreadSnapshotRef.current = unreadCount;
+    // The first response establishes this session's baseline, including any
+    // messages that arrived while signed out. Only subsequent increases alert.
+    if (previous === null || unreadCount <= previous || suppressAlert) return;
+    const generation = nativeSessionGenerationRef.current;
+    const session = nativeBridgeSessionRef.current;
+    const sessionKey = session?.user_id && session.token ? `${session.user_id}:${session.token}` : '';
+    const isCurrent = () => generation === nativeSessionGenerationRef.current &&
+      !logoutInFlightRef.current && !nativeChatThreadOpenRef.current;
+    void (async () => {
+      if (Platform.OS !== 'web' && sessionKey && pushRegistrationKeyRef.current === sessionKey) {
+        // Expo presents the real remote notification once. Polling updates the
+        // badge without adding another sound or vibration for that same message.
+        const permission = await Notifications.getPermissionsAsync().catch(() => null);
+        if (!permission || permission.status === 'granted') return;
+      }
+      if (isCurrent()) playChatNotificationCue();
+    })();
+  }, [playChatNotificationCue]);
+
   const openNativeQrScanner = useCallback(() => {
     invalidateNavigationIntent();
     setShowNativeChat(false);
@@ -10683,6 +10833,9 @@ true;
     setNativeChatDraft('');
     nativeChatDraftsRef.current.clear();
     chatUnreadSnapshotRef.current = null;
+    notificationRouteGenerationRef.current += 1;
+    setNotificationDrawResult(null);
+    setVendorDrawFocusId('');
     pushRegistrationGenerationRef.current += 1;
     pushRegistrationPromisesRef.current.clear();
     pushRegistrationKeyRef.current = '';
@@ -11917,6 +12070,8 @@ true;
         sessionRetryAttempted?: boolean;
         quiet?: boolean;
         fallbackToWebsite?: boolean;
+        notificationIsCurrent?: () => boolean;
+        onNotificationResponse?: (status: number, data: NativeChatSyncResponse) => void;
       } = {},
     ) => {
       if (accountDeletionIsInFlight()) return null;
@@ -11963,7 +12118,8 @@ true;
           requestSessionUserId &&
         String(nativeBridgeSessionRef.current?.token || '') ===
           requestSessionToken &&
-        accountMutationIsCurrent(deletionGeneration);
+        accountMutationIsCurrent(deletionGeneration) &&
+        (!options.notificationIsCurrent || options.notificationIsCurrent());
       requestWebsiteSessionBridge();
 
       if (!hasNativeBridgeSession(activeNativeSession)) {
@@ -12008,6 +12164,7 @@ true;
               },
               body: JSON.stringify({
                 action,
+                notification_target: action === 'read' && !!options.notificationIsCurrent,
                 native_session: activeNativeSession,
                 thread_token: requestThreadToken,
                 selected_thread_id: options.threadId,
@@ -12051,6 +12208,7 @@ true;
           );
         }
 
+        options.onNotificationResponse?.(response.status, data);
         if (!response.ok || data?.ok === false) {
           if (data.code === 'email_confirmation_required') {
             if (!options.quiet) {
@@ -12113,13 +12271,7 @@ true;
             !!selectedChatThreadTokenRef.current &&
             (options.threadToken || selectedChatThreadToken) ===
               selectedChatThreadTokenRef.current);
-        if (
-          !shouldSuppressAlert &&
-          chatUnreadSnapshotRef.current !== null &&
-          unreadCount > chatUnreadSnapshotRef.current
-        ) {
-          playChatNotificationCue();
-        }
+        updateChatUnreadAlert(Number.isFinite(unreadCount) ? unreadCount : 0, shouldSuppressAlert);
         chatUnreadSnapshotRef.current = Number.isFinite(unreadCount)
           ? unreadCount
           : 0;
@@ -12215,7 +12367,7 @@ true;
     },
     [
       addDebugLine,
-      playChatNotificationCue,
+      updateChatUnreadAlert,
       refreshNativeBridgeSession,
       requestWebsiteSessionBridge,
       selectedChatThreadToken,
@@ -12272,34 +12424,6 @@ true;
     ],
   );
 
-  useEffect(() => {
-    if (!nativeSessionHydrated || !lastNotificationResponse) return;
-    if (
-      lastNotificationResponse.actionIdentifier !==
-        Notifications.DEFAULT_ACTION_IDENTIFIER ||
-      lastNotificationResponse.notification.request.content.data?.screen !==
-        'chat'
-    ) {
-      return;
-    }
-
-    const responseId = lastNotificationResponse.notification.request.identifier;
-    if (handledNotificationResponseIdsRef.current.has(responseId)) {
-      Notifications.clearLastNotificationResponse();
-      return;
-    }
-
-    handledNotificationResponseIdsRef.current.add(responseId);
-    Notifications.clearLastNotificationResponse();
-    if (hasNativeBridgeSession(nativeBridgeSessionRef.current)) {
-      openChatWithBridge();
-    }
-  }, [
-    lastNotificationResponse,
-    nativeBridgeSession,
-    nativeSessionHydrated,
-    openChatWithBridge,
-  ]);
 
   useEffect(() => {
     if (Platform.OS === 'web' || !nativeSessionHydrated) return;
@@ -12972,25 +13096,7 @@ true;
 
         const nextUnread = Number(data.unread_count || 0);
         const unreadCount = Number.isFinite(nextUnread) ? nextUnread : 0;
-        const storedUnread = await SecureStore.getItemAsync(
-          CHAT_UNREAD_SESSION_KEY,
-        );
-        if (!requestIsCurrent()) return;
-        const storedSnapshot =
-          storedUnread !== null && Number.isFinite(Number(storedUnread))
-            ? Number(storedUnread)
-            : null;
-
-        if (chatUnreadSnapshotRef.current === null) {
-          chatUnreadSnapshotRef.current = storedSnapshot ?? unreadCount;
-        }
-
-        if (
-          !nativeChatThreadOpenRef.current &&
-          unreadCount > chatUnreadSnapshotRef.current
-        ) {
-          playChatNotificationCue();
-        }
+        updateChatUnreadAlert(unreadCount, nativeChatThreadOpenRef.current);
 
         chatUnreadSnapshotRef.current = unreadCount;
         SecureStore.setItemAsync(
@@ -13015,7 +13121,7 @@ true;
     });
     chatStatusInFlightRef.current = request;
     return request;
-  }, [playChatNotificationCue, refreshNativeBridgeSession, updateAppBadge]);
+  }, [updateChatUnreadAlert, refreshNativeBridgeSession, updateAppBadge]);
 
   useEffect(() => {
     chatStatusRequestGenerationRef.current += 1;
@@ -13521,7 +13627,8 @@ true;
 `);
   }, []);
 
-  const openVendorDrawSettings = useCallback(() => {
+  const openVendorDrawSettings = useCallback((focusDrawId = '') => {
+    setVendorDrawFocusId(focusDrawId);
     // Cancel older browser/dashboard work before retiring this WebView. Its
     // synchronous generation change also makes repeated link taps inert.
     invalidateNavigationIntent();
@@ -14297,7 +14404,7 @@ true;
   }, [openNativeQrScanner, runBottomNavigationAction]);
 
   const openVendorDrawFromBottomNav = useCallback(() => {
-    runBottomNavigationAction(openVendorDrawSettings);
+    runBottomNavigationAction(() => openVendorDrawSettings());
   }, [openVendorDrawSettings, runBottomNavigationAction]);
 
   const renderLoading = useCallback(function renderLoading() {
@@ -14321,6 +14428,172 @@ true;
     setNativeChatThreadOpen(false);
     setShowNativeChat(false);
   }, []);
+
+  const routeNotificationIntent = useCallback(async (intent: NotificationIntent): Promise<NotificationRouteOutcome> => {
+    const session = nativeBridgeSessionRef.current;
+    const member = nativeMemberRef.current;
+    if (!hasNativeTokenSession(session) || !member || String(member.user_id) !== String(session?.user_id)) return 'retry';
+    const sessionGeneration = nativeSessionGenerationRef.current;
+    const routeGeneration = notificationRouteGenerationRef.current;
+    const isCurrent = () => nativeSessionGenerationRef.current === sessionGeneration &&
+      notificationRouteGenerationRef.current === routeGeneration && !logoutInFlightRef.current &&
+      !pendingAppLogoutRef.current && !accountDeletionIsInFlight() &&
+      nativeBridgeSessionRef.current?.token === session?.token &&
+      String(nativeBridgeSessionRef.current?.user_id) === String(session?.user_id);
+    if (intent.recipientMemberId && intent.recipientMemberId !== String(session?.user_id)) return 'unavailable';
+    if (intent.screen === 'chat') {
+      const navigationIntent = await beginNavigationIntent();
+      if (navigationIntent === null || !isCurrent()) return 'retry';
+      let status = 0;
+      let responseCode = '';
+      selectedChatThreadTokenRef.current = intent.threadToken || '';
+      setSelectedChatThreadToken(intent.threadToken || '');
+      const data = await syncNativeChat(intent.threadToken ? 'read' : 'list', {
+        threadToken: intent.threadToken, quiet: true, fallbackToWebsite: false,
+        notificationIsCurrent: isCurrent,
+        onNotificationResponse: (value, body) => { status = value; responseCode = body.code || ''; },
+      });
+      if (!isCurrent()) return 'retry';
+      if (!data) return [400, 404, 410].includes(status) ||
+        (status === 403 && responseCode !== 'email_confirmation_required') ? 'unavailable' : 'retry';
+      if (intent.threadToken && (data.notification_target?.requested_thread_token !== intent.threadToken ||
+        data.notification_target.resolved_thread_token !== data.selected_thread_token ||
+        !data.threads?.some(thread => thread.token === data.selected_thread_token))) return 'unavailable';
+      dismissAnyKeyboard();
+      hideWebsiteBrowser();
+      setNotificationDrawResult(null);
+      setShowNativeQrScanner(false);
+      setNativeChatThreadOpen(!!intent.threadToken);
+      setNativeChatOpenRequestId(intent.threadToken ? Date.now() : 0);
+      setShowNativeChat(true);
+      return 'handled';
+    }
+    const role = intent.screen === 'vendor_draw_result' ? 'vendor' : 'couple';
+    if (memberAccountRole(member) !== role || !intent.drawId) return 'unavailable';
+    const { response, data } = await fetchQrBingoJsonWithTimeout<{ ok?: boolean; result?: NotificationDrawResult }>(
+      QR_BINGO_SYNC_FUNCTION_URL, {
+        method: 'POST', headers: { Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+          apikey: APP_BACKEND_PUBLISHABLE_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'draw_result_get', native_session: session, draw_id: intent.drawId }),
+      }, 'Draw result took too long to load. Please try again.');
+    if (!isCurrent()) return 'retry';
+    if (!response.ok || data?.ok !== true) return [400, 403, 404, 410].includes(response.status) ? 'unavailable' : 'retry';
+    if (!isNotificationDrawResult(data.result, intent.drawId, role)) return 'retry';
+    const navigationIntent = await beginNavigationIntent();
+    if (navigationIntent === null || !isCurrent()) return 'retry';
+    dismissAnyKeyboard();
+    setShowNativeQrScanner(false);
+    setShowNativeChat(false);
+    if (role === 'vendor') openVendorDrawSettings(intent.drawId);
+    else {
+      hideWebsiteBrowser();
+      setNotificationDrawResult(data.result);
+    }
+    return 'handled';
+  }, [beginNavigationIntent, dismissAnyKeyboard, hideWebsiteBrowser, openVendorDrawSettings, syncNativeChat]);
+
+  const processPendingNotification = useCallback(async () => {
+    const session = nativeBridgeSessionRef.current;
+    const member = nativeMemberRef.current;
+    const generation = nativeSessionGenerationRef.current;
+    const routeGeneration = notificationRouteGenerationRef.current;
+    const isCurrent = () => generation === nativeSessionGenerationRef.current &&
+      routeGeneration === notificationRouteGenerationRef.current && !logoutInFlightRef.current && !accountDeletionIsInFlight();
+    const memberId = hasNativeTokenSession(session) && member && String(member.user_id) === String(session?.user_id)
+      ? String(session?.user_id) : null;
+    try {
+      const pendingBeforeProcess = await notificationIntentStoreRef.current!.peek();
+      const outcome = await notificationIntentStoreRef.current!.process(memberId, isCurrent, routeNotificationIntent);
+      if (!isCurrent()) return;
+      if (outcome === 'waiting') {
+        const pending = await notificationIntentStoreRef.current!.peek();
+        if (pending && isCurrent() && notificationSignInRequestRef.current !== pending.id) {
+          notificationSignInRequestRef.current = pending.id;
+          hideWebsiteBrowser();
+          setExpiredSessionLoginRequest({ id: Date.now(), role: pending.screen === 'vendor_draw_result' ? 'vendor' : 'couple' });
+        }
+      }
+      setNotificationRetryVisible(outcome === 'retry');
+      if (pendingBeforeProcess && ['handled', 'unavailable', 'wrong_account', 'expired'].includes(outcome)) {
+        clearNotificationResponseIfMatching(pendingBeforeProcess.id);
+      }
+      if (outcome === 'wrong_account') Alert.alert('Notification unavailable', 'This notification belongs to a different account.');
+      if (outcome === 'unavailable' || outcome === 'expired') Alert.alert('Notification unavailable', 'This item is no longer available.');
+    } catch { if (isCurrent()) setNotificationRetryVisible(true); }
+  }, [hideWebsiteBrowser, routeNotificationIntent]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || !lastNotificationResponse ||
+      lastNotificationResponse.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
+    const response = lastNotificationResponse;
+    notificationRouteGenerationRef.current += 1;
+    let cancelled = false;
+    void notificationIntentStoreRef.current!.receive(response.notification.request.content.data,
+      response.notification.request.identifier).then(outcome => {
+      if (cancelled) return;
+      if (outcome === 'invalid' || outcome === 'duplicate') {
+        if (Notifications.getLastNotificationResponse()?.notification.request.identifier === response.notification.request.identifier) {
+          Notifications.clearLastNotificationResponse();
+        }
+      }
+      else setNotificationIntentRevision(value => value + 1);
+    }).catch(() => { if (!cancelled) setNotificationRetryVisible(true); });
+    return () => { cancelled = true; };
+  }, [lastNotificationResponse]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || !nativeSessionHydrated) return;
+    void processPendingNotification();
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') void processPendingNotification();
+    });
+    return () => subscription.remove();
+  }, [nativeSessionHydrated, nativeBridgeSession?.user_id, nativeBridgeSession?.token,
+    nativeMember?.user_id, notificationIntentRevision, processPendingNotification]);
+
+  useEffect(() => { setNotificationDrawResult(null); }, [nativeBridgeSession?.user_id, nativeBridgeSession?.token]);
+
+  const notificationOverlay = (
+    <>
+      {notificationRetryVisible ? <View style={styles.notificationRetry} accessibilityRole="alert">
+        <Text style={styles.vendorRaffleInfoText}>The notification could not open. Check your connection and try again.</Text>
+        <TouchableOpacity testID="notification-retry" accessibilityRole="button" accessibilityLabel="Retry notification"
+          onPress={() => {
+            if (lastNotificationResponse) {
+              void notificationIntentStoreRef.current!.receive(lastNotificationResponse.notification.request.content.data,
+                lastNotificationResponse.notification.request.identifier).then(() => processPendingNotification()).catch(() => setNotificationRetryVisible(true));
+            } else void processPendingNotification();
+          }}><Text style={styles.vendorRaffleRulesLink}>Try again</Text></TouchableOpacity>
+      </View> : null}
+      <Modal visible={!!notificationDrawResult} animationType="slide" onRequestClose={() => setNotificationDrawResult(null)}>
+        <SafeAreaView style={styles.nativeShell}>
+          <View style={styles.chatNativeHeader}>
+            <Text style={styles.chatScreenTitle}>Your draw result</Text>
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="Close draw result" onPress={() => setNotificationDrawResult(null)}>
+              <X size={24} color={BRAND_COLOR} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.notificationResultContent}>
+            {notificationDrawResult ? <>
+              <Text style={styles.vendorRaffleWinnerName}>{notificationDrawResult.vendor_name}</Text>
+              <Text style={styles.vendorRaffleWinnerTitle}>{notificationDrawResult.prize_title}</Text>
+              <Text style={styles.vendorRaffleInfoText}>{notificationDrawResult.prize_description}</Text>
+              {notificationDrawResult.prize_approx_value_cad !== null ? <Text style={styles.vendorRaffleInfoText}>
+                Approximate value: ${notificationDrawResult.prize_approx_value_cad} CAD
+              </Text> : null}
+              <Text style={styles.vendorRaffleInfoTitle}>Next steps</Text>
+              <Text style={styles.vendorRaffleInfoText}>{notificationDrawResult.claim_instructions}</Text>
+              {/^https:\/\/(?:www\.)?weddingwin\.ca\//i.test(notificationDrawResult.official_rules_url) ?
+                <TouchableOpacity accessibilityRole="link" accessibilityLabel="Open draw rules" onPress={() => {
+                  void Linking.openURL(notificationDrawResult.official_rules_url).catch(() => Alert.alert('Unable to open rules', 'Please try again.'));
+                }}><Text style={styles.vendorRaffleRulesLink}>Draw rules</Text></TouchableOpacity> : null}
+              <Text style={styles.vendorRaffleHint}>{notificationDrawResult.apple_non_sponsor_disclaimer}</Text>
+            </> : null}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+    </>
+  );
 
   const renderNativeChatOverlay = () =>
     showNativeChat ? (
@@ -14427,6 +14700,7 @@ true;
             onSignOut={signOutEverywhere}
             nativeSession={nativeBridgeSession}
             vendorDrawOpenRequestId={vendorDrawOpenRequestId}
+            vendorDrawFocusId={vendorDrawFocusId}
             onVendorDrawOpenRequestHandled={acknowledgeVendorDrawOpenRequest}
           />
         </View>
@@ -14439,6 +14713,7 @@ true;
           member={nativeMember}
           onCompleteContact={openQrContactCompletion}
         />
+        {notificationOverlay}
         {logoutProgressOverlay}
       </View>
     );
@@ -14664,6 +14939,7 @@ true;
           member={nativeMember}
           onCompleteContact={openQrContactCompletion}
         />
+        {notificationOverlay}
         {logoutProgressOverlay}
       </View>
     </SafeAreaView>
@@ -14671,6 +14947,8 @@ true;
 }
 
 const styles = StyleSheet.create({
+  notificationResultContent: { padding: 24, gap: 16 },
+  notificationRetry: { position: 'absolute', top: 60, left: 16, right: 16, padding: 16, backgroundColor: '#FFF8F5', borderWidth: 1, borderColor: '#D4B2AA', borderRadius: 12, zIndex: 1000, gap: 8 },
   nativeContainer: {
     flex: 1,
     backgroundColor: '#FFF8F5',

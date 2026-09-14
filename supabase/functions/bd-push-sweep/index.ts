@@ -1,11 +1,15 @@
+import { completeDatabaseRows } from "../_shared/notification_snapshot.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { listBdRowsPaginated } from "../_shared/bd_push_pagination.ts";
 import {
-  activeChatBlocksForMember,
-  cachedUsersByIds,
-  otherMemberIdFromBlock,
-  rowHasToken,
-  threadHasParticipant,
-} from "../_shared/bd_chat.ts";
+  buildMessageSnapshot,
+  buildNotificationPayload,
+} from "../_shared/notification_events.ts";
+import {
+  type PushOutcome,
+  requestExpoPush,
+  requestExpoReceipt,
+} from "../_shared/notification_delivery.ts";
 import {
   EXPO_RECEIPT_EXPIRY_MS,
   EXPO_RECEIPT_INITIAL_DELAY_MS,
@@ -21,6 +25,15 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
+  global: {
+    fetch: (input, init) =>
+      fetch(input, {
+        ...init,
+        signal: init?.signal
+          ? AbortSignal.any([init.signal, AbortSignal.timeout(20_000)])
+          : AbortSignal.timeout(20_000),
+      }),
+  },
 });
 
 const corsHeaders = {
@@ -36,6 +49,7 @@ type BdEnvelope = {
   current_page?: string | number;
   total_pages?: string | number;
   next_page?: string | number | null;
+  total?: string | number;
 };
 type BdRow = Record<string, unknown>;
 type PushTokenRow = {
@@ -52,22 +66,6 @@ type PushTokenRow = {
   push_claim_token?: string | null;
   push_registration_generation: number;
 };
-type ExpoDelivery = {
-  row: PushTokenRow;
-  accepted: boolean;
-  ticketId?: string;
-  errorCode?: string;
-  errorMessage?: string;
-  ambiguous?: boolean;
-  retryable?: boolean;
-  retryAfterMs?: number;
-};
-type AppChatThreadReport = {
-  thread_token: string;
-  app_thread_token?: string | null;
-  bd_thread_token?: string | null;
-};
-
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -79,39 +77,11 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function rowsFromMessage(message: unknown): BdRow[] {
-  return Array.isArray(message)
-    ? message.filter((row): row is BdRow =>
-      row !== null && typeof row === "object"
-    )
-    : [];
-}
-
-function firstRow(message: unknown): BdRow | undefined {
-  if (Array.isArray(message)) {
-    const first = message[0];
-    return first && typeof first === "object" ? (first as BdRow) : undefined;
-  }
-  return message && typeof message === "object"
-    ? (message as BdRow)
-    : undefined;
-}
-
-function buildListPath(model: string, params: Record<string, string | number>) {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) =>
-    search.set(key, String(value))
-  );
-  return `/api/v2/${model}/get?${search.toString()}`;
-}
-
-const BD_PAGE_SIZE = 100;
-const BD_MAX_PAGES_PER_LIST = 250;
-
 async function callBd(path: string) {
   if (!BD_API_KEY) throw new Error("BD_API_KEY is not configured");
   const response = await fetch(`${BD_API_BASE_URL}${path}`, {
     headers: { "X-Api-Key": BD_API_KEY },
+    signal: AbortSignal.timeout(20_000),
   });
   const text = await response.text();
   let body: BdEnvelope;
@@ -121,207 +91,6 @@ async function callBd(path: string) {
     body = { status: "error", message: text };
   }
   return { response, body };
-}
-
-async function listBdRowsPaginated(
-  model: string,
-  baseParams: Record<string, string | number>,
-) {
-  const collected: BdRow[] = [];
-  const seenPages = new Set<string>();
-  let page = "";
-
-  for (let index = 0; index < BD_MAX_PAGES_PER_LIST; index += 1) {
-    const params: Record<string, string | number> = {
-      ...baseParams,
-      limit: BD_PAGE_SIZE,
-    };
-    if (page) params.page = page;
-    const result = await callBd(buildListPath(model, params));
-    if (!result.response.ok || result.body.status !== "success") {
-      throw new Error(
-        `BD ${model} page failed (${result.response.status})`,
-      );
-    }
-    collected.push(...rowsFromMessage(result.body.message));
-
-    const currentPage = Number(result.body.current_page || index + 1);
-    const hasExplicitTotal = result.body.total_pages !== undefined &&
-      result.body.total_pages !== null &&
-      String(result.body.total_pages).trim() !== "";
-    const totalPages = Number(result.body.total_pages);
-    const nextPage = String(result.body.next_page || "").trim();
-    if (
-      hasExplicitTotal &&
-      (!Number.isFinite(currentPage) || !Number.isFinite(totalPages))
-    ) {
-      throw new Error(`BD ${model} pagination returned invalid page metadata`);
-    }
-    if (!nextPage) {
-      if (hasExplicitTotal && currentPage < totalPages) {
-        throw new Error(
-          `BD ${model} pagination omitted next_page before its final page`,
-        );
-      }
-      return collected;
-    }
-    if (hasExplicitTotal && currentPage >= totalPages) {
-      throw new Error(
-        `BD ${model} pagination returned next_page after its final page`,
-      );
-    }
-    if (seenPages.has(nextPage)) {
-      throw new Error(`BD ${model} pagination repeated page ${nextPage}`);
-    }
-    seenPages.add(nextPage);
-    page = nextPage;
-  }
-
-  // Never turn a truncated result into a lower unread baseline. A later sweep
-  // can retry after the dependency recovers or the page volume falls.
-  throw new Error(
-    `BD ${model} exceeded the safe pagination limit (${BD_MAX_PAGES_PER_LIST} pages)`,
-  );
-}
-
-async function fetchFullBdUserById(userId: string) {
-  const fullUser = await callBd(
-    `/api/v2/user/get/${encodeURIComponent(userId)}`,
-  );
-  if (fullUser.response.ok && fullUser.body.status === "success") {
-    return firstRow(fullUser.body.message);
-  }
-  return undefined;
-}
-
-function participantTokens(
-  user: BdRow,
-  bdMemberId: string,
-  bdMemberToken: string,
-) {
-  return [
-    ...new Set(
-      [
-        user.user_id,
-        bdMemberId,
-        user.email,
-        user.token,
-        bdMemberToken,
-        user.cookie,
-      ]
-        .map((value) => String(value || "").trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-
-function threadBelongsToUser(thread: BdRow, tokens: string[]) {
-  return threadHasParticipant(thread, tokens);
-}
-
-function threadToken(thread: BdRow) {
-  return String(thread.thread_token || "").trim();
-}
-
-function threadIsClosed(thread: BdRow) {
-  const status = String(thread.thread_status ?? "").trim().toLowerCase();
-  return status === "0" || status === "closed";
-}
-
-async function listThreadReportsByTokens(tokens: string[]) {
-  const uniqueTokens = [
-    ...new Set(tokens.map((token) => token.trim()).filter(Boolean)),
-  ];
-  const reported = new Set<string>();
-  if (!uniqueTokens.length) return reported;
-  const { data, error } = await admin
-    .from("app_chat_thread_reports")
-    .select("thread_token, app_thread_token, bd_thread_token")
-    .in("thread_token", uniqueTokens)
-    .neq("status", "resolved");
-  if (error) throw new Error(`Chat report lookup failed: ${error.message}`);
-  for (const report of (data || []) as AppChatThreadReport[]) {
-    for (
-      const alias of [
-        report.thread_token,
-        report.app_thread_token,
-        report.bd_thread_token,
-      ]
-    ) {
-      const clean = String(alias || "").trim();
-      if (clean) reported.add(clean);
-    }
-  }
-  return reported;
-}
-
-async function listAllChatThreads() {
-  const byToken = new Map<string, BdRow>();
-  const rows = await listBdRowsPaginated("chat_message_threads", {
-    order_column: "updated_at",
-    order_type: "DESC",
-  });
-  for (const thread of rows) {
-    const key = String(thread.thread_token || thread.thread_id || "");
-    if (key) byToken.set(key, thread);
-  }
-  return [...byToken.values()];
-}
-
-function chatThreadsForUser(allThreads: BdRow[], tokens: string[]) {
-  return allThreads.filter((thread) => threadBelongsToUser(thread, tokens));
-}
-
-async function listUnreadMessages() {
-  const rows = await listBdRowsPaginated("chat_message_items", {
-    property: "message_status",
-    property_value: 0,
-    property_operator: "eq",
-    order_column: "created_at",
-    order_type: "DESC",
-  });
-  const byId = new Map<string, BdRow>();
-  rows.forEach((message, index) => {
-    const key = String(message.message_id || "").trim() ||
-      `${String(message.thread_token || "")}:${
-        String(message.created_at || "")
-      }:${index}`;
-    byId.set(key, message);
-  });
-  return [...byId.values()];
-}
-
-function countUnreadMessages(
-  threads: BdRow[],
-  tokens: string[],
-  unreadMessages: BdRow[],
-) {
-  const threadTokens = new Set(
-    threads.map((thread) => String(thread.thread_token || "").trim()).filter(
-      Boolean,
-    ),
-  );
-  if (threadTokens.size === 0) return 0;
-
-  return unreadMessages.filter((message) => {
-    const threadToken = String(message.thread_token || "").trim();
-    const owner = String(message.message_owner || "");
-    const mine = rowHasToken(owner, tokens);
-    return threadTokens.has(threadToken) && !mine;
-  }).length;
-}
-
-async function countUnsyncedNativeUnread(bdMemberId: string) {
-  const { data, error } = await admin.rpc(
-    "count_weddingwin_unsynced_native_unread",
-    { p_bd_member_id: bdMemberId },
-  );
-  if (error) throw new Error(`Native unread lookup failed: ${error.message}`);
-  const count = Number(data || 0);
-  if (!Number.isFinite(count) || count < 0) {
-    throw new Error("Native unread lookup returned an invalid count");
-  }
-  return Math.floor(count);
 }
 
 async function renewPushClaim(claimToken: string) {
@@ -444,93 +213,6 @@ function expoHeaders() {
   const accessToken = Deno.env.get("EXPO_ACCESS_TOKEN") || "";
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   return headers;
-}
-
-async function sendExpoPushNotifications(
-  rows: PushTokenRow[],
-  unreadCount: number,
-): Promise<ExpoDelivery[]> {
-  if (!rows.length || unreadCount <= 0) return [];
-
-  let response: Response;
-  try {
-    response = await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: expoHeaders(),
-      body: JSON.stringify(rows.map((row) => ({
-        to: row.expo_push_token,
-        sound: "default",
-        badge: unreadCount,
-        title: "New WeddingWin message",
-        body: unreadCount === 1
-          ? "You have a new message."
-          : `You have ${unreadCount} new messages.`,
-        data: { screen: "chat" },
-      }))),
-    });
-  } catch (error) {
-    const message = error instanceof Error
-      ? error.message
-      : "Expo request failed";
-    return rows.map((row) => ({
-      row,
-      accepted: false,
-      errorCode: "ExpoRequestAmbiguous",
-      errorMessage: message,
-      ambiguous: true,
-      retryable: true,
-    }));
-  }
-
-  if (!response.ok) {
-    const message = `Expo push service returned HTTP ${response.status}`;
-    const retryable = expoHttpStatusIsRetryable(response.status);
-    const retryAfterMs = retryable
-      ? parseRetryAfterMs(response.headers.get("Retry-After"))
-      : undefined;
-    return rows.map((row) => ({
-      row,
-      accepted: false,
-      errorCode: `ExpoHttp${response.status}`,
-      errorMessage: message,
-      ambiguous: retryable,
-      retryable,
-      retryAfterMs,
-    }));
-  }
-
-  const body = await response.json().catch(() => ({})) as {
-    data?: Array<
-      {
-        status?: string;
-        id?: string;
-        message?: string;
-        details?: { error?: string };
-      }
-    >;
-  };
-  const tickets = Array.isArray(body.data) ? body.data : [];
-  return rows.map((row, index) => {
-    const ticket = tickets[index];
-    const accepted = ticket?.status === "ok" && typeof ticket.id === "string";
-    const rejected = ticket?.status === "error";
-    const ambiguous = !accepted && !rejected;
-    return {
-      row,
-      accepted,
-      ticketId: accepted ? ticket.id : undefined,
-      errorCode: accepted
-        ? undefined
-        : ambiguous
-        ? "ExpoTicketResponseAmbiguous"
-        : String(ticket?.details?.error || "ExpoTicketRejected"),
-      errorMessage: accepted ? undefined : String(
-        ticket?.message || "Expo returned an incomplete push ticket response",
-      ),
-      ambiguous,
-      retryable: ambiguous,
-    };
-  });
 }
 
 async function processExpoReceipts(
@@ -700,6 +382,394 @@ async function processExpoReceipts(
   return handled;
 }
 
+async function cachedMember(id: string): Promise<BdRow> {
+  if (!/^\d+$/.test(id)) {
+    throw new Error("Invalid notification member identity");
+  }
+  const { data, error } = await admin.from("bd_users_cache")
+    .select("user_id,token,cookie,email").eq("user_id", id).maybeSingle();
+  if (error || !data) {
+    throw new Error("Notification member identity unavailable");
+  }
+  return data;
+}
+
+function memberTokens(member: BdRow): string[] {
+  return [member.user_id, member.token, member.cookie, member.email]
+    .map((value) => String(value || "").trim()).filter(Boolean);
+}
+
+async function moderationSnapshot(memberId: string) {
+  const blocks = await completeDatabaseRows(
+    "Chat block",
+    "id",
+    (from, to) =>
+      admin
+        .from("app_chat_member_blocks").select(
+          "id,member_a_bd_user_id,member_b_bd_user_id",
+          { count: "exact" },
+        )
+        .eq("status", "active").or(
+          `member_a_bd_user_id.eq.${memberId},member_b_bd_user_id.eq.${memberId}`,
+        )
+        .order("id").range(from, to),
+  );
+  const blockedMemberIds = blocks.map((row) =>
+    String(row.member_a_bd_user_id) === memberId
+      ? String(row.member_b_bd_user_id)
+      : String(row.member_a_bd_user_id)
+  );
+  const blockedParticipantTokens: string[] = [...blockedMemberIds];
+  for (const id of blockedMemberIds) {
+    blockedParticipantTokens.push(...memberTokens(await cachedMember(id)));
+  }
+  const reports = await completeDatabaseRows(
+    "Chat report",
+    "id",
+    (from, to) =>
+      admin
+        .from("app_chat_thread_reports").select(
+          "id,thread_token,app_thread_token,bd_thread_token",
+          { count: "exact" },
+        )
+        .neq("status", "resolved").order("id").range(from, to),
+  );
+  const reportedThreadTokens = reports.flatMap(
+    (row) => [row.thread_token, row.app_thread_token, row.bd_thread_token],
+  )
+    .map((value) => String(value || "").trim()).filter(Boolean);
+  return { blockedMemberIds, blockedParticipantTokens, reportedThreadTokens };
+}
+
+async function nativeSnapshot(memberId: string) {
+  const nativeThreads = await completeDatabaseRows(
+    "Native chat thread",
+    "id",
+    (from, to) =>
+      admin
+        .from("app_native_chat_threads")
+        .select(
+          "id,thread_token,bd_thread_token,member_a_bd_user_id,member_b_bd_user_id",
+          { count: "exact" },
+        )
+        .or(
+          `member_a_bd_user_id.eq.${memberId},member_b_bd_user_id.eq.${memberId}`,
+        ).order("id").range(from, to),
+  );
+  const nativeMessages: BdRow[] = [];
+  for (let index = 0; index < nativeThreads.length; index += 100) {
+    const tokens = nativeThreads.slice(index, index + 100).map((row) =>
+      String(row.thread_token)
+    );
+    nativeMessages.push(
+      ...await completeDatabaseRows(
+        "Native chat message",
+        "id",
+        (from, to) =>
+          admin
+            .from("app_native_chat_messages")
+            .select(
+              "id,thread_token,sender_bd_user_id,read_at,created_at,bd_message_id,bd_synced_at",
+              { count: "exact" },
+            )
+            .in("thread_token", tokens).order("id").range(from, to),
+      ),
+    );
+    if (nativeMessages.length > 25_000) {
+      throw new Error("Native message snapshot exceeds its bound");
+    }
+  }
+  return { nativeThreads, nativeMessages };
+}
+
+type EventDelivery = {
+  id: string;
+  event_id: string;
+  event_key: string;
+  type: "chat_message" | "draw_result" | "vendor_draw_follow_up";
+  recipient_member_id: string;
+  sender_member_id: string | null;
+  thread_token: string | null;
+  draw_id: string | null;
+  expires_at: string;
+  status: "claimed" | "ticketed";
+  attempt_count: number;
+  expo_ticket_id: string | null;
+  ticket_at: string | null;
+  receipt_expires_at: string | null;
+};
+
+async function refreshEventBdSnapshot(
+  input: Parameters<typeof buildMessageSnapshot>[0],
+  event: ReturnType<typeof buildMessageSnapshot>["events"][number],
+  readBd: typeof callBd,
+) {
+  const prefix = `chat:${input.memberId}:bd:`;
+  const ids = [
+    ...new Set(
+      [event.event_key, ...event.aliases].filter((key) =>
+        key.startsWith(prefix)
+      ).map((key) => key.slice(prefix.length)),
+    ),
+  ];
+  let bdMessages = [...input.bdMessages];
+  let bdThreads = [...input.bdThreads];
+  const nativeThread = input.nativeThreads.find((row) =>
+    String(row.thread_token) === event.thread_token
+  );
+  const knownThreadAliases = new Set([
+    event.thread_token,
+    ...event.thread_aliases,
+    String(nativeThread?.bd_thread_token || ""),
+  ]);
+  const threadTokens = new Set(
+    input.bdThreads.filter((row) =>
+      knownThreadAliases.has(String(row.thread_token))
+    ).map((row) => String(row.thread_token)),
+  );
+  if (!ids.length && !threadTokens.size) return input;
+  for (const id of ids) {
+    const previous = bdMessages.find((row) => String(row.message_id) === id);
+    if (!previous) {
+      throw new Error(
+        "Notification website alias is absent from its complete snapshot",
+      );
+    }
+    const current = await listBdRowsPaginated(readBd, "chat_message_items", {
+      property: "message_id",
+      property_value: id,
+      property_operator: "eq",
+      order_column: "message_id",
+      order_type: "ASC",
+    }, { idField: "message_id" });
+    if (
+      current.length > 1 ||
+      current.some((row) =>
+        String(row.message_id) !== id ||
+        row.thread_token !== previous.thread_token
+      )
+    ) {
+      throw new Error("Notification message identity changed before send");
+    }
+    threadTokens.add(String(previous.thread_token));
+    // A removed website message must not resurrect an unread native mirror.
+    bdMessages = bdMessages.map((row) =>
+      String(row.message_id) === id
+        ? current[0] || { ...previous, message_status: "1" }
+        : row
+    );
+  }
+  for (const token of threadTokens) {
+    const previous = bdThreads.find((row) =>
+      String(row.thread_token) === token
+    );
+    if (!previous) {
+      throw new Error(
+        "Notification thread is absent from its complete snapshot",
+      );
+    }
+    const current = await listBdRowsPaginated(readBd, "chat_message_threads", {
+      property: "thread_token",
+      property_value: token,
+      property_operator: "eq",
+      order_column: "thread_id",
+      order_type: "ASC",
+    }, { idField: "thread_id" });
+    if (
+      current.length > 1 || current.some((row) => row.thread_token !== token)
+    ) throw new Error("Notification thread identity changed before send");
+    bdThreads = bdThreads.map((row) =>
+      String(row.thread_token) === token
+        ? current[0]
+          ? { ...previous, ...current[0] }
+          : { ...previous, thread_status: "closed" }
+        : row
+    );
+  }
+  return { ...input, bdMessages, bdThreads };
+}
+
+async function finalizeDelivery(
+  delivery: EventDelivery,
+  claimToken: string,
+  outcome: PushOutcome | { status: "canceled"; errorCode: string },
+) {
+  const now = Date.now();
+  let nextAttemptAt: string | null = null;
+  let finalStatus = outcome.status;
+  if (finalStatus === "retry" && delivery.attempt_count >= 16) {
+    finalStatus = "failed";
+  }
+  if (finalStatus === "retry" || finalStatus === "ticketed") {
+    const after = "retryAfterMs" in outcome ? outcome.retryAfterMs : undefined;
+    nextAttemptAt = finalStatus === "ticketed" && delivery.status !== "ticketed"
+      ? new Date(now + EXPO_RECEIPT_INITIAL_DELAY_MS).toISOString()
+      : nextPushRetry(delivery.attempt_count, now, after).nextAttemptAt;
+    const deadline = Date.parse(
+      finalStatus === "ticketed"
+        ? delivery.receipt_expires_at ||
+          new Date(now + EXPO_RECEIPT_EXPIRY_MS).toISOString()
+        : delivery.expires_at,
+    );
+    if (Date.parse(nextAttemptAt) > deadline) {
+      nextAttemptAt = new Date(deadline).toISOString();
+    }
+  }
+  const { data, error } = await admin.rpc(
+    "finalize_weddingwin_notification_delivery",
+    {
+      p_delivery_id: delivery.id,
+      p_claim_token: claimToken,
+      p_status: finalStatus,
+      p_expo_ticket_id: "ticketId" in outcome ? outcome.ticketId || null : null,
+      p_error_code: outcome.errorCode || null,
+      p_next_attempt_at: nextAttemptAt,
+    },
+  );
+  if (error) {
+    throw new Error(
+      `Notification delivery finalization failed: ${error.message}`,
+    );
+  }
+  return data === true;
+}
+
+async function dispatchDeviceEvents(
+  row: PushTokenRow,
+  claimToken: string,
+  snapshotInput: Parameters<typeof buildMessageSnapshot>[0],
+  budget: { remaining: number; deadline: number; bdCalls: number },
+  readBd: typeof callBd,
+) {
+  if (budget.remaining <= 0 || Date.now() > budget.deadline - 25_000) {
+    return { notified: 0, deferred: 0, checked: false };
+  }
+  const { data, error } = await admin.rpc(
+    "claim_weddingwin_notification_deliveries",
+    {
+      p_device_id: row.id,
+      p_registration_generation: row.push_registration_generation,
+      p_claim_token: claimToken,
+      p_limit: 1,
+    },
+  );
+  if (error || !Array.isArray(data)) {
+    throw new Error("Notification delivery claim failed");
+  }
+  const snapshot = buildMessageSnapshot(snapshotInput);
+  let notified = 0;
+  let deferred = 0;
+  for (const delivery of data as EventDelivery[]) {
+    budget.remaining -= 1;
+    if (delivery.status === "ticketed") {
+      const expired = !delivery.receipt_expires_at ||
+        Date.parse(delivery.receipt_expires_at) <= Date.now();
+      const outcome: PushOutcome = expired || !delivery.expo_ticket_id
+        ? { status: "ambiguous", errorCode: "ExpoReceiptExpired" }
+        : await requestExpoReceipt(delivery.expo_ticket_id, expoHeaders());
+      await finalizeDelivery(delivery, claimToken, outcome);
+      if (outcome.errorCode === "DeviceNotRegistered") {
+        await updateClaimedPushToken(row, claimToken, {
+          enabled: false,
+          last_push_error: "DeviceNotRegistered",
+        });
+      }
+      if (outcome.status === "ticketed" || outcome.status === "retry") {
+        deferred += 1;
+      }
+      continue;
+    }
+    if (delivery.recipient_member_id !== row.bd_member_id) {
+      throw new Error("Notification recipient mismatch");
+    }
+    if (delivery.type === "chat_message") {
+      const previousEvent = snapshot.events.find((event) =>
+        event.event_key === delivery.event_key ||
+        event.aliases.includes(delivery.event_key)
+      );
+      if (!previousEvent?.eligible) {
+        await finalizeDelivery(delivery, claimToken, {
+          status: "canceled",
+          errorCode: "MessageNoLongerEligible",
+        });
+        continue;
+      }
+      const freshBd = await refreshEventBdSnapshot(
+        snapshotInput,
+        previousEvent,
+        readBd,
+      );
+      const moderation = await moderationSnapshot(row.bd_member_id);
+      const native = await nativeSnapshot(row.bd_member_id);
+      const currentSnapshot = buildMessageSnapshot({
+        ...freshBd,
+        ...moderation,
+        ...native,
+        nowMs: Date.now(),
+      });
+      const currentEvent = currentSnapshot.events.find((event) =>
+        event.event_key === delivery.event_key ||
+        event.aliases.includes(delivery.event_key)
+      );
+      if (!currentEvent?.eligible) {
+        await finalizeDelivery(delivery, claimToken, {
+          status: "canceled",
+          errorCode: "MessageNoLongerEligible",
+        });
+        continue;
+      }
+    }
+    if (
+      await renewPushClaim(claimToken) <= 0 ||
+      !(await currentClaimedRows([row], claimToken)).length
+    ) break;
+    const content = buildNotificationPayload({
+      id: delivery.event_id,
+      type: delivery.type,
+      recipient_member_id: delivery.recipient_member_id,
+      thread_token: delivery.thread_token,
+      draw_id: delivery.draw_id,
+      expires_at: delivery.expires_at,
+    });
+    const { data: begun, error: beginError } = await admin.rpc(
+      "begin_weddingwin_notification_delivery",
+      {
+        p_delivery_id: delivery.id,
+        p_claim_token: claimToken,
+      },
+    );
+    if (beginError) {
+      throw new Error(
+        `Notification send reservation failed: ${beginError.message}`,
+      );
+    }
+    if (begun !== true) continue;
+    delivery.attempt_count += 1;
+    const outcome = await requestExpoPush({
+      to: row.expo_push_token,
+      sound: "default",
+      badge: snapshot.unreadCount,
+      ...content,
+    }, expoHeaders());
+    const finalized = await finalizeDelivery(delivery, claimToken, outcome);
+    if (outcome.status === "ticketed" && finalized) {
+      notified += 1;
+      await updateClaimedPushToken(row, claimToken, {
+        last_notified_at: new Date().toISOString(),
+        last_push_error: null,
+      });
+    }
+    if (outcome.status === "retry") deferred += 1;
+    if (outcome.errorCode === "DeviceNotRegistered") {
+      await updateClaimedPushToken(row, claimToken, {
+        enabled: false,
+        last_push_error: "DeviceNotRegistered",
+      });
+    }
+  }
+  return { notified, deferred, checked: true };
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -707,250 +777,167 @@ Deno.serve(async (request) => {
   if (request.method !== "POST") {
     return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
   }
-  const suppliedCronSecret = request.headers.get("X-WeddingWin-Cron-Secret") ||
-    "";
-  if (suppliedCronSecret.length < 32) {
+  const secret = request.headers.get("X-WeddingWin-Cron-Secret") || "";
+  if (secret.length < 32) {
     return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
   }
-
-  // The random secret remains in Supabase Vault. This service-role-only RPC
-  // lets the function validate the cron header without duplicating the secret
-  // in Edge configuration or exposing a verification function to clients.
-  const { data: cronSecretIsValid, error: cronSecretError } = await admin.rpc(
+  const { data: authorized, error: authorizationError } = await admin.rpc(
     "verify_weddingwin_push_sweep_secret",
-    { p_secret: suppliedCronSecret },
+    { p_secret: secret },
   );
-  if (cronSecretError) {
-    console.error(
-      "Push sweep secret verification failed",
-      cronSecretError.message,
-    );
+  if (authorizationError) {
     return jsonResponse({
       ok: false,
       error: "Push sweep authorization unavailable",
     }, 503);
   }
-  if (cronSecretIsValid !== true) {
+  if (authorized !== true) {
     return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
   }
 
   const claimToken = crypto.randomUUID();
   let claimEstablished = false;
-  const ambiguousRowIds = new Set<string>();
+  const checkedRowIds = new Set<string>();
+  const deadline = Date.now() + 150_000;
   try {
-    const { data: tokenRows, error } = await admin.rpc(
-      "claim_weddingwin_push_tokens",
-      {
-        p_claim_token: claimToken,
-        p_limit: 100,
-        p_lease_seconds: 600,
-      },
-    );
-
-    if (error) throw error;
+    const { data, error } = await admin.rpc("claim_weddingwin_push_tokens", {
+      p_claim_token: claimToken,
+      p_limit: 100,
+      p_lease_seconds: 600,
+    });
+    if (error || !Array.isArray(data)) {
+      throw new Error("Push device claim failed");
+    }
     claimEstablished = true;
-
-    const typedRows = (tokenRows || []) as PushTokenRow[];
+    const typedRows = data as PushTokenRow[];
     const receiptRows = await processExpoReceipts(typedRows, claimToken);
+    for (const id of receiptRows) checkedRowIds.add(id);
     const byMember = new Map<string, PushTokenRow[]>();
     for (const row of typedRows) {
       if (receiptRows.has(row.id)) continue;
-      if (!row.bd_member_id || !row.expo_push_token) continue;
-      const existing = byMember.get(row.bd_member_id) || [];
-      existing.push(row);
-      byMember.set(row.bd_member_id, existing);
+      if (!/^\d+$/.test(row.bd_member_id) || !row.expo_push_token) continue;
+      byMember.set(row.bd_member_id, [
+        ...byMember.get(row.bd_member_id) || [],
+        row,
+      ]);
     }
-    // Every member in this leased batch is evaluated against the same complete
-    // unread snapshot instead of each querying only the global newest 100.
-    const allThreads = byMember.size ? await listAllChatThreads() : [];
-    const unreadMessages = byMember.size ? await listUnreadMessages() : [];
-    const cachedMembers = await cachedUsersByIds([...byMember.keys()]);
-
+    const snapshotStartedAt = new Date().toISOString();
+    const budget = { remaining: 100, deadline, bdCalls: 0 };
+    const snapshotBdCall = (path: string) => {
+      if (Date.now() > deadline - 25_000) {
+        throw new Error("Notification snapshot exceeded its time budget");
+      }
+      if (budget.bdCalls >= 80) {
+        throw new Error("Notification website read budget exhausted");
+      }
+      budget.bdCalls += 1;
+      return callBd(path);
+    };
+    // Include read messages in the seen snapshot. A later read/unread toggle
+    // is not a newly received message and cannot create a notification.
+    const bdThreads = byMember.size
+      ? await listBdRowsPaginated(snapshotBdCall, "chat_message_threads", {
+        order_column: "thread_id",
+        order_type: "ASC",
+      }, { idField: "thread_id" })
+      : [];
+    const bdMessages = byMember.size
+      ? await listBdRowsPaginated(snapshotBdCall, "chat_message_items", {
+        order_column: "message_id",
+        order_type: "ASC",
+      }, { idField: "message_id" })
+      : [];
+    const identities = byMember.size
+      ? await completeDatabaseRows(
+        "Chat thread identity",
+        "thread_token",
+        (from, to) =>
+          admin
+            .from("bd_chat_threads").select(
+              "thread_token,owner_user_id,responder_user_id",
+              { count: "exact" },
+            )
+            .order("thread_token").range(from, to),
+      )
+      : [];
+    const identityByThread = new Map(
+      identities.map((row) => [String(row.thread_token), row]),
+    );
+    const threads = bdThreads.map((row) => ({
+      ...row,
+      ...identityByThread.get(String(row.thread_token)),
+    }));
     let checked = 0;
+    let notified = 0;
     let deferred = 0;
     let failed = 0;
-    let notified = 0;
-
-    for (const [bdMemberId, rows] of byMember) {
+    let baselinesCreated = 0;
+    for (const [memberId, rows] of byMember) {
+      if (Date.now() > deadline - 25_000 || budget.bdCalls >= 78) break;
       try {
-        const cachedMember = cachedMembers.get(bdMemberId);
-        const user = cachedMember
-          ? (cachedMember as unknown as BdRow)
-          : await fetchFullBdUserById(bdMemberId);
-        if (!user) continue;
-
-        const tokens = participantTokens(
-          user,
-          bdMemberId,
-          rows[0]?.bd_member_token || "",
+        const member = await cachedMember(memberId);
+        const native = await nativeSnapshot(memberId);
+        const moderation = await moderationSnapshot(memberId);
+        const snapshotInput = {
+          memberId,
+          memberTokens: memberTokens(member),
+          bdThreads: threads,
+          bdMessages,
+          ...native,
+          ...moderation,
+          nowMs: Date.now(),
+          siteTimeZone: Deno.env.get("BD_SITE_TIME_ZONE") || "America/Toronto",
+        };
+        const snapshot = buildMessageSnapshot(snapshotInput);
+        const { data: recorded, error: recordError } = await admin.rpc(
+          "record_weddingwin_notification_snapshot",
+          {
+            p_member_id: memberId,
+            p_events: snapshot.events,
+            p_snapshot_complete: true,
+            p_snapshot_started_at: snapshotStartedAt,
+          },
         );
-        const threads = chatThreadsForUser(allThreads, tokens);
-        const blocks = await activeChatBlocksForMember(bdMemberId);
-        const blockedOtherIds = new Set(
-          blocks.map((block) => otherMemberIdFromBlock(block, bdMemberId))
-            .filter(Boolean),
-        );
-        const blockedUsers = await cachedUsersByIds([...blockedOtherIds]);
-        const blockedThreads = new Set(
-          threads.filter((thread) => {
-            for (const blockedId of blockedOtherIds) {
-              if (threadHasParticipant(thread, [blockedId])) return true;
-              const cached = blockedUsers.get(blockedId);
-              if (!cached) continue;
-              const blockedTokens = [
-                cached.user_id,
-                cached.token,
-                cached.cookie,
-                cached.email,
-              ]
-                .map((value) => String(value || "").trim())
-                .filter(Boolean);
-              if (threadHasParticipant(thread, blockedTokens)) return true;
-            }
-            return false;
-          }).map((thread) => threadToken(thread)),
-        );
-        const reportedThreads = await listThreadReportsByTokens(
-          threads.map((thread) => threadToken(thread)),
-        );
-        const bdUnreadCount = countUnreadMessages(
-          threads.filter((thread) =>
-            !threadIsClosed(thread) &&
-            !blockedThreads.has(threadToken(thread)) &&
-            !reportedThreads.has(threadToken(thread))
-          ),
-          tokens,
-          unreadMessages,
-        );
-        const nativeUnreadCount = await countUnsyncedNativeUnread(bdMemberId);
-        const unreadCount = bdUnreadCount + nativeUnreadCount;
-        const rowsToNotify = rows.filter((row) =>
-          unreadCount > Number(row.last_unread_count || 0)
-        );
-        checked += 1;
-
-        const now = new Date().toISOString();
-        if (await renewPushClaim(claimToken) <= 0) {
+        if (recordError || recorded?.ok !== true) {
           throw new Error(
-            "Push claim expired before delivery-state evaluation",
+            `Notification snapshot storage failed: ${
+              recordError?.message || "not complete"
+            }`,
           );
         }
-        if (rowsToNotify.length) {
-          const currentRowsToNotify = await currentClaimedRows(
-            rowsToNotify,
+        if (recorded.baseline_created) baselinesCreated += 1;
+        checked += 1;
+        for (const row of rows) {
+          const result = await dispatchDeviceEvents(
+            row,
             claimToken,
+            snapshotInput,
+            budget,
+            snapshotBdCall,
           );
-          const deliveries = await sendExpoPushNotifications(
-            currentRowsToNotify,
-            unreadCount,
-          );
-          for (const delivery of deliveries) {
-            if (delivery.accepted || delivery.ambiguous) {
-              ambiguousRowIds.add(delivery.row.id);
-            }
-          }
-          for (const delivery of deliveries) {
-            if (delivery.accepted && delivery.ticketId) {
-              let persisted = false;
-              try {
-                persisted = await updateClaimedPushToken(
-                  delivery.row,
-                  claimToken,
-                  {
-                    last_unread_count: unreadCount,
-                    last_notified_at: now,
-                    last_expo_ticket_id: delivery.ticketId,
-                    last_expo_ticket_at: now,
-                    expo_receipt_expires_at: new Date(
-                      Date.parse(now) + EXPO_RECEIPT_EXPIRY_MS,
-                    ).toISOString(),
-                    push_retry_count: 0,
-                    push_next_attempt_at: new Date(
-                      Date.parse(now) + EXPO_RECEIPT_INITIAL_DELAY_MS,
-                    ).toISOString(),
-                    last_push_error: null,
-                    updated_at: now,
-                  },
-                );
-              } catch (error) {
-                ambiguousRowIds.add(delivery.row.id);
-                throw error;
-              }
-              ambiguousRowIds.delete(delivery.row.id);
-              if (persisted) notified += 1;
-            } else if (delivery.retryable) {
-              let persisted = false;
-              try {
-                persisted = await scheduleClaimedPushRetry(
-                  delivery.row,
-                  claimToken,
-                  delivery.errorCode || "ExpoRequestAmbiguous",
-                  delivery.errorMessage ||
-                    "Expo push request should be retried",
-                  delivery.retryAfterMs,
-                );
-              } catch (error) {
-                ambiguousRowIds.add(delivery.row.id);
-                throw error;
-              }
-              ambiguousRowIds.delete(delivery.row.id);
-              if (persisted) deferred += 1;
-            } else {
-              const disable = delivery.errorCode === "DeviceNotRegistered";
-              const update: Record<string, unknown> = {
-                push_retry_count: 0,
-                push_next_attempt_at: null,
-                last_push_error: `${
-                  delivery.errorCode || "ExpoTicketRejected"
-                }: ${delivery.errorMessage || "Push ticket rejected"}`.slice(
-                  0,
-                  500,
-                ),
-                updated_at: now,
-              };
-              if (disable) update.enabled = false;
-              await updateClaimedPushToken(delivery.row, claimToken, update);
-            }
-          }
-        }
-
-        const rowsWithoutIncrease = rows.filter(
-          (row) =>
-            unreadCount <= Number(row.last_unread_count || 0) &&
-            (unreadCount !== Number(row.last_unread_count || 0) ||
-              Number(row.push_retry_count || 0) > 0 ||
-              Boolean(row.push_next_attempt_at)),
-        );
-        if (rowsWithoutIncrease.length) {
-          const { error } = await admin.from("app_push_tokens").update({
-            last_unread_count: unreadCount,
-            push_retry_count: 0,
-            push_next_attempt_at: null,
-            updated_at: now,
-          }).eq("push_claim_token", claimToken)
-            .eq("enabled", true)
-            .gt("push_claim_expires_at", new Date().toISOString())
-            .in("id", rowsWithoutIncrease.map((row) => row.id));
-          if (error) {
-            throw new Error(`Unread baseline update failed: ${error.message}`);
-          }
+          if (result.checked) checkedRowIds.add(row.id);
+          notified += result.notified;
+          deferred += result.deferred;
+          await updateClaimedPushToken(row, claimToken, {
+            last_unread_count: snapshot.unreadCount,
+          });
         }
       } catch (error) {
         failed += 1;
         console.error(
-          `Push evaluation failed for member ${bdMemberId}`,
-          error instanceof Error ? error.message : String(error),
+          `Push evaluation failed for member ${memberId}`,
+          error instanceof Error ? error.message : "Unknown failure",
         );
       }
     }
-
     return jsonResponse({
       ok: failed === 0,
       checked,
       claimed_devices: typedRows.length,
+      notified,
       deferred,
       failed,
-      notified,
+      baselines_created: baselinesCreated,
     });
   } catch (error) {
     return jsonResponse({
@@ -960,16 +947,11 @@ Deno.serve(async (request) => {
     }, 500);
   } finally {
     if (claimEstablished) {
-      const { error: releaseError } = await admin.rpc(
-        "release_weddingwin_push_claim_except",
-        {
-          p_claim_token: claimToken,
-          p_retain_ids: [...ambiguousRowIds],
-        },
+      const { error } = await admin.rpc(
+        "release_weddingwin_notification_claim",
+        { p_claim_token: claimToken, p_checked_ids: [...checkedRowIds] },
       );
-      if (releaseError) {
-        console.error("Push claim release failed", releaseError.message);
-      }
+      if (error) console.error("Push claim release failed", error.message);
     }
   }
 });

@@ -61,31 +61,45 @@ Deno.test("push delivery is centralized and checks Expo receipts", async () => {
   const sweep = await Deno.readTextFile(
     new URL("../bd-push-sweep/index.ts", import.meta.url),
   );
+  const delivery = await Deno.readTextFile(
+    new URL("./notification_delivery.ts", import.meta.url),
+  );
 
   assert(
-    !status.includes("exp.host/--/api/v2/push/send"),
+    !status.includes("exp.host/--/api/v2/push/send") && !status.includes("requestExpoPush"),
     "polling chat status must not also send push notifications",
   );
   assert(
-    sweep.includes("/api/v2/push/send") &&
-      sweep.includes("/api/v2/push/getReceipts"),
+    delivery.includes("/api/v2/push/send") &&
+      delivery.includes("/api/v2/push/getReceipts") &&
+      sweep.includes('"../_shared/notification_delivery.ts"') &&
+      sweep.includes("await requestExpoPush(") && sweep.includes("await requestExpoReceipt("),
     "the background push worker must inspect both tickets and receipts",
   );
   assert(
     sweep.includes('errorCode === "DeviceNotRegistered"'),
     "unregistered Expo tokens must be disabled",
   );
-  const acceptedUpdate = sweep.indexOf(
-    "if (delivery.accepted && delivery.ticketId)",
-  );
-  const countAdvance = sweep.indexOf(
-    "last_unread_count: unreadCount",
-    acceptedUpdate,
-  );
+  const reservation = sweep.indexOf('"begin_weddingwin_notification_delivery"');
+  const send = sweep.indexOf("await requestExpoPush(", reservation);
+  const finalization = sweep.indexOf("await finalizeDelivery(delivery, claimToken, outcome)", send);
+  const acceptedUpdate = sweep.indexOf('if (outcome.status === "ticketed" && finalized)', finalization);
   assert(
-    acceptedUpdate >= 0 && countAdvance > acceptedUpdate,
-    "unread notification state must advance only after Expo accepts a ticket",
+    reservation >= 0 && send > reservation && finalization > send && acceptedUpdate > finalization &&
+      sweep.slice(reservation, send).includes("if (begun !== true) continue") &&
+      !sweep.includes("unreadCount > Number(row.last_unread_count"),
+    "each identity delivery must be durably reserved before sending and counted only after its accepted ticket is persisted",
   );
+  // Execute the centralized outcome contract. A successful ticket means an
+  // accepted request, not receipt delivery, and uncertain sends cannot replay.
+  assert(classifyExpoTicket(200, { data: [{ status: "ok", id: "ticket" }] }, null).status === "ticketed",
+    "a provider ticket must remain pending until its receipt arrives");
+  assert(classifyExpoReceipt(200, { data: {} }, "ticket", null).status === "ticketed",
+    "a missing receipt must preserve the accepted ticket without another send");
+  assert(classifyExpoReceipt(200, { data: { ticket: { status: "ok" } } }, "ticket", null).status === "delivered",
+    "only a positive receipt may finalize provider delivery");
+  assert(classifyExpoTicket(500, {}, null).status === "ambiguous",
+    "an uncertain provider response must not trigger a duplicate notification");
 });
 
 Deno.test("verified email login tolerates a transient BD profile miss", async () => {
@@ -317,3 +331,4 @@ Deno.test("public email login trusts BD rejection and rate-limits generic failur
     "credential rejection must not disclose account existence or log upstream payloads",
   );
 });
+import { classifyExpoReceipt, classifyExpoTicket } from "./notification_delivery.ts";

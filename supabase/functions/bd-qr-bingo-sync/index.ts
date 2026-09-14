@@ -1,3 +1,4 @@
+import { loadQrBingoDrawResult, QrBingoDrawResultError } from "../_shared/qr_bingo_draw_result.ts";
 import { loadQrParticipationReceipt, recordQrParticipation, validateQrParticipationRequest, shouldRecordQrParticipationOnUse, QrParticipationError } from "../_shared/qr_bingo_participation.ts";
 import { loadQrBingoCardState, assertQrBingoCardGeneration, QrBingoCardStateError, type QrBingoCardState } from "../_shared/qr_bingo_card_state.ts";
 import { QR_ENTRY_ACCESS_POLICY_VERSION, QR_ENTRY_ACCESS_POLICY_DISCLOSURE, qrBingoEffectiveEntryDisclosure, qrBingoVendorDrawScannedIds, qrBingoEntryReadiness, qrBingoEntryOpensAt } from "../_shared/qr_bingo_entry_access.ts";
@@ -4071,6 +4072,17 @@ Deno.serve(async (request) => {
         (!/^[1-9][0-9]*$/.test(String(user.subscription_id || "")) ||
           ["4", "18"].includes(String(user.subscription_id)))) {
         return jsonResponse({ ok: false, error: "Sign in with a participating vendor account." }, 403);
+      }
+      if (action === "draw_result_get") {
+        if (String(user.active) !== "2") {
+          return jsonResponse({ ok: false, code: "draw_result_unavailable", error: "This draw result is no longer available." }, 404, false);
+        }
+        try {
+          return jsonResponse({ ok: true, result: await loadQrBingoDrawResult(requireAdmin(), authenticatedMemberId, body.draw_id) }, 200, false);
+        } catch (error) {
+          if (error instanceof QrBingoDrawResultError) return jsonResponse({ ok: false, code: error.code, error: error.message }, error.status, false);
+          throw error;
+        }
       }
       if (action === "vendor_dashboard_access") {
         const vendor = await resolveVendorForRaffleAction(

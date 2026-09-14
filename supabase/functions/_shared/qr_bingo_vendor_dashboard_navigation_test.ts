@@ -84,6 +84,7 @@ function harness(overrides: Record<string, unknown> = {}) {
       browserHidden = true;
     },
     setVendorDrawOpenRequestId: (value: number) => openRequests = value,
+    setVendorDrawFocusId() {},
     addDebugLine() {},
     getWeddingWinPath: (url: string) => {
       const parsed = new URL(url);
@@ -102,7 +103,7 @@ function harness(overrides: Record<string, unknown> = {}) {
     navigateWebViewTo: (url: string) => target = url,
     ...overrides,
   };
-  const open = appCallback("openVendorDrawSettings", "unused", context);
+  const open = appCallback("openVendorDrawSettings", "focusDrawId = ''", context);
   context.openVendorDrawSettings = open;
   const intercept = appCallback(
     "interceptVendorDrawNavigation",

@@ -328,6 +328,24 @@ async function getAppThread(token: string, userId: unknown) {
   return thread;
 }
 
+async function resolveNotificationChatTarget(token: string, userId: string, userTokens: string[]) {
+  if (!/^(?:[a-zA-Z0-9_-]{16,128}|app:[0-9a-f]{32})$/.test(token)) return null;
+  if (isAppThread(token)) {
+    let thread: AppNativeThread;
+    try { thread = await getAppThread(token, userId); }
+    catch (error) {
+      if (error instanceof Error && error.message === "Conversation was not found for this account.") return null;
+      throw error;
+    }
+    const mirrored = String(thread.bd_thread_token || "").trim();
+    if (!mirrored) return token;
+    const alias = await mirrorThreadByToken(mirrored);
+    return alias && threadMatchesUser(alias, userTokens, userId) ? mirrored : token;
+  }
+  const thread = await mirrorThreadByToken(token);
+  return thread && threadMatchesUser(thread, userTokens, userId) ? token : null;
+}
+
 async function listAppThreads(userId: unknown) {
   const id = String(userId || "").trim();
   if (!id) return [];
@@ -1064,6 +1082,14 @@ Deno.serve(async (request) => {
     const userId = String(user.user_id || "");
     const userTokens = participantTokens(user, session);
     let selectedThread = String(body?.thread_token || "");
+    const notificationRequestedThread = action === "read" && body?.notification_target === true
+      ? selectedThread.trim() : "";
+    let notificationResolvedThread = "";
+    if (action === "read" && body?.notification_target === true) {
+      notificationResolvedThread = await resolveNotificationChatTarget(notificationRequestedThread, userId, userTokens) || "";
+      if (!notificationResolvedThread) return jsonResponse({ ok: false, code: "notification_target_unavailable", error: "Conversation is no longer available." }, 404);
+      selectedThread = notificationResolvedThread;
+    }
     let sendDeliveryState: "stored" | "delivered" | "queued" | "failed" | undefined;
     let sendDeliveryError = "";
 
@@ -1280,6 +1306,16 @@ Deno.serve(async (request) => {
     }
 
     const [payload, reportCloseQueued] = await buildChatPayload(user, session, selectedThread);
+    if (notificationRequestedThread) {
+      if (payload.selected_thread_token !== notificationResolvedThread ||
+        !payload.threads.some((thread) => thread.token === notificationResolvedThread)) {
+        return jsonResponse({ ok: false, code: "notification_target_unavailable", error: "Conversation is no longer available." }, 404);
+      }
+      Object.assign(payload, { notification_target: {
+        requested_thread_token: notificationRequestedThread,
+        resolved_thread_token: notificationResolvedThread,
+      } });
+    }
     // Payload assembly can discover a replacement BD website token for a pair
     // that is already blocked. It durably records the alias and queues the
     // close; flush once more so that close is delivered in this same sync

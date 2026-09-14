@@ -101,10 +101,17 @@ for (const path of endpointPaths) {
   Deno.test(`${endpoint} a tagged couple cannot use a signed vendor principal`, async () => {
     const source = await Deno.readTextFile(new URL(path, import.meta.url));
     const start = source.indexOf('if (websitePrincipal?.kind === "vendor" &&');
-    const end = source.indexOf(
-      'if (action === "vendor_dashboard_access")',
-      start,
-    );
+    // Isolate the role guard itself: newly added actions after it are not
+    // dependencies of this authorization boundary.
+    const guardOpen = source.indexOf("{", start);
+    let depth = 1;
+    let end = guardOpen + 1;
+    while (end < source.length && depth > 0) {
+      if (source[end] === "{") depth++;
+      if (source[end] === "}") depth--;
+      end++;
+    }
+    assert(guardOpen > start && depth === 0, "Cannot isolate vendor role guard");
     assert(start > 0 && end > start);
     const implementation = new AsyncFunction(
       "websitePrincipal",

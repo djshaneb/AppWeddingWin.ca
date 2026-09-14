@@ -92,6 +92,7 @@ Deno.serve(async (request) => {
       .toLowerCase();
     const expoPushToken = String(body?.expo_push_token || "").trim();
     const platform = String(body?.platform || "").trim();
+    const previousExpoPushToken = String(body?.previous_expo_push_token || "").trim();
 
     if (!nativeSession?.user_id || !nativeSession?.token) {
       return jsonResponse({ ok: false, error: "Native session required" }, 401);
@@ -103,13 +104,19 @@ Deno.serve(async (request) => {
       );
     }
     if (
+      expoPushToken.length > 256 || (
       !/^ExponentPushToken\[[^\]]+\]$/.test(expoPushToken) &&
-      !/^ExpoPushToken\[[^\]]+\]$/.test(expoPushToken)
+      !/^ExpoPushToken\[[^\]]+\]$/.test(expoPushToken))
     ) {
       return jsonResponse(
         { ok: false, error: "Valid Expo push token required" },
         400,
       );
+    }
+
+    if (previousExpoPushToken && (previousExpoPushToken.length > 256 ||
+      !/^(?:ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/.test(previousExpoPushToken))) {
+      return jsonResponse({ ok: false, error: "Valid previous Expo push token required" }, 400);
     }
 
     if (!(await nativeSessionMatchesCachedBdIdentity(nativeSession))) {
@@ -142,17 +149,13 @@ Deno.serve(async (request) => {
         .eq("expo_push_token", expoPushToken)
         .eq("bd_member_id", String(nativeSession.user_id))
         .eq("bd_member_token", String(nativeSession.token || ""))
-      : admin.from("app_push_tokens").upsert(
-        {
-          bd_member_id: String(nativeSession.user_id),
-          bd_member_token: String(nativeSession.token || ""),
-          expo_push_token: expoPushToken,
-          platform,
-          enabled: true,
-          updated_at: now,
-        },
-        { onConflict: "expo_push_token" },
-      );
+      : admin.rpc("register_weddingwin_push_token", {
+        p_member_id: String(nativeSession.user_id),
+        p_member_token: String(nativeSession.token || ""),
+        p_expo_push_token: expoPushToken,
+        p_platform: platform,
+        p_previous_expo_push_token: previousExpoPushToken || null,
+      });
 
     const { error } = await operation;
 
