@@ -27,7 +27,7 @@ import {
   Vibration,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   accountDeletionIsInFlight,
   accountMutationIsCurrent,
@@ -4124,6 +4124,7 @@ function NativeReviewDraw({ nativeSession, member, noticeRequest, onNoticeHandle
       <Text style={styles.qrConsentLinkText}>Review test — no real prize or email</Text>
     </TouchableOpacity>
     <Modal visible={visible} animationType="slide" onRequestClose={() => setVisible(false)}>
+      <SafeAreaProvider>
       <SafeAreaView style={styles.nativeShell}>
         <View style={styles.chatNativeHeader}>
           <Text style={styles.chatScreenTitle}>Review test</Text>
@@ -4176,6 +4177,7 @@ function NativeReviewDraw({ nativeSession, member, noticeRequest, onNoticeHandle
           {error ? <Text style={styles.qrErrorText} accessibilityRole="alert">{error}</Text> : null}
         </ScrollView>
       </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   </>;
 }

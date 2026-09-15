@@ -207,7 +207,7 @@ function panelFixture({ authorized = true, heldScan = false, contextFailures = 0
         review_state: review } };
     },
   };
-  for (const name of ['TouchableOpacity', 'Text', 'Modal', 'SafeAreaView', 'View', 'X', 'ScrollView', 'TextInput', 'ActivityIndicator']) globals[name] = name;
+  for (const name of ['TouchableOpacity', 'Text', 'Modal', 'SafeAreaProvider', 'SafeAreaView', 'View', 'X', 'ScrollView', 'TextInput', 'ActivityIndicator']) globals[name] = name;
   const context = vm.createContext(globals);
   vm.runInContext(ts.transpileModule(appDeclaration('NativeReviewDraw') + '\nglobalThis.component = NativeReviewDraw;', {
     compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React },
