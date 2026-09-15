@@ -16,7 +16,15 @@ Add for Review on the saved build 5 draft returned **Unable to Add for Review** 
 
 The page additionally repeated that Copyright was required. No age-rating, screenshot or build-selection error was reported in this check. This is the Store form's validation result, not proof that all app behavior, policy or reviewer-access requirements are complete.
 
-The owner was asked to confirm the copyright holder and permission to display third-party content. App Privacy still requires the actual app/WebView and provider inventory; no unknown answer was filled as No.
+The owner subsequently confirmed Wedding Win Inc. as copyright holder and explicitly confirmed permission to use vendor content. At 21:46 UTC, copyright `2026 Wedding Win Inc.` and Content Rights Information (“Yes, this app has the necessary rights to its third-party content.”) were saved and verified after reload. This permission was not inferred from public profiles. App Privacy still requires the actual app/WebView and provider inventory; no unknown answer was filled as No.
+
+## Recheck after ownership and rights were saved
+
+At 21:49 UTC, Add for Review was run again on the saved build 5 draft. **The only reported validation error was that an Admin must provide the app’s privacy practices in App Privacy.** The copyright and Content Rights Information errors were gone. Build 5 remained selected and manual release was unchanged. No App Review submission occurred; this form validation does not close functional reviewer access, testing or the remaining policy facts.
+
+## Unpublished App Privacy draft
+
+Eleven confirmed data types were selected and saved: Name, Email Address, Phone Number, Emails or Text Messages, Photos or Videos, Gameplay Content, Other User Content, User ID, Device ID, Product Interaction and Other Diagnostic Data. Each still shows **Set Up**, no purpose/linkage/tracking questionnaire is finalized, and Publish is disabled. Broader categories and actual provider uses remain under review; the App Privacy submission blocker is not resolved. See the [privacy worksheet](APP_PRIVACY_ANSWERS.md) for the limited Chrome traffic observation and the remaining native WebView verification.
 
 ## Remaining review/testing work
 

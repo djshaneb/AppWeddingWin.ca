@@ -1,6 +1,6 @@
 # Metadata and age-rating worksheet
 
-Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`) and [TERMS-POLICY-UPDATE.md](TERMS_POLICY_UPDATE_2026-09-14.md); age rating updated September 15. **Internal submission worksheet. Public fields, URLs, categories, Canada/free, manual release and the age rating are saved; final privacy/content-rights answers remain unfinished.** Approved launch choices are Canada, free download, English (Canada), iPhone/iPad, seven screenshots per class and manual release. Public-facing copy is in [listing-draft.md](APP_STORE_LISTING.md). Unresolved facts and build/test notes stay in this worksheet, not the public description or screenshots.
+Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`) and [TERMS-POLICY-UPDATE.md](TERMS_POLICY_UPDATE_2026-09-14.md); age rating, copyright and content rights updated September 15. **Internal submission worksheet. Public fields, URLs, categories, Canada/free, manual release, age rating, copyright and content rights are saved; App Privacy remains unfinished.** Approved launch choices are Canada, free download, English (Canada), iPhone/iPad, seven screenshots per class and manual release. Public-facing copy is in [listing-draft.md](APP_STORE_LISTING.md). Unresolved facts and build/test notes stay in this worksheet, not the public description or screenshots.
 
 ## Fields requiring completion
 
@@ -10,11 +10,11 @@ Reconciled September 14, 2026 against source `533821d` (build configuration `58e
 | Current release candidate | Production build 4 FINISHED from clean `533821d`; configuration 4 committed as `58e3438` | EAS e73f9773-b079-4b5c-a462-883f56e9fb96; archive verified, upload completed, Apple Validated/Ready to Submit; WeddingWin Internal QA assigned (one tester), What to Test saved; selected/saved for version 1.0; physical iPad installation and seven functional UI tests verified; two automatic message deliveries verified; first tap passed and second alert/sound user-confirmed; full acceptance incomplete; [iPad installation evidence](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/submission/apple-draft-verification.json) |
 | Highest uploaded build | App Store Connect shows 1.0.0 (4), Validated/Ready to Submit; SDK 23A339, iPhone/iPad and production push | Assigned to WeddingWin Internal QA (one existing tester); What to Test saved. Physical iPad installation and seven functional UI tests verified; two automatic message deliveries verified; first tap passed and second alert/sound user-confirmed; full acceptance incomplete |
 | Categories | Lifestyle primary, Business secondary | Saved and verified after reopening App Information |
-| Copyright | Public business spelling is Wedding Win Inc. | Owner confirms rights holder and final 2026 copyright entry |
+| Copyright | `2026 Wedding Win Inc.` | Owner confirmed the holder; saved and verified after reload September 15 at 21:46 UTC |
 | Review contact | Saved privately in Apple and visually confirmed after reload | No private values recorded in package files |
 | Price/territory/language | Free / Canada only / en-CA | Price and country settings saved and verified; 1 available / 174 not available |
 | Release option | Manual, saved and verified | Retain manual release; obtain separate launch approval |
-| Artwork/content rights | Existing assets and vendor content | Verify rights and review the final seven-scene design |
+| Artwork/content rights | Owner explicitly confirmed permission to use vendor content | “Yes, this app has the necessary rights to its third-party content.” Saved and verified after reload September 15 at 21:46 UTC; permission is not inferred from public availability |
 | Public links | Support/privacy routes checked; September 14 policy pages published and text verified | Recheck final mobile routes and operational privacy/support handling |
 | Encryption | Current source sets ITSAppUsesNonExemptEncryption to false | Confirm final binary/dependencies support that classification; no configuration change authorised by this document |
 
@@ -24,7 +24,7 @@ Completed, saved and verified after reload in App Store Connect on September 15,
 
 The saved answers include UGC, social media and messaging; no parental controls, age assurance or unrestricted web access; owner-confirmed no advertising; infrequent alcohol references, medical information, mature themes and non-explicit sexual content/nudity; wellness topics present; and frequent contests. Social media is assessed under Apple's broad public review/gallery discovery definition. Contests are prominent, repeated QR/draw interactions during events; event availability remains limited. Gambling, simulated gambling, loot boxes, profanity, horror, graphic sexual content and all violence categories are absent in the recorded answers.
 
-The Store rating does not implement age verification or change draw eligibility, existing policies or app code. Remaining promotion, privacy and content-rights requirements below remain open. See [Apple's age-rating definitions](https://developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions/) and [higher-rating guidance](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating/).
+The Store rating does not implement age verification or change draw eligibility, existing policies or app code. Remaining promotion and privacy requirements below remain open; the content-rights declaration is saved. See [Apple's age-rating definitions](https://developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions/) and [higher-rating guidance](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating/).
 
 ## Promotion and purchase facts
 

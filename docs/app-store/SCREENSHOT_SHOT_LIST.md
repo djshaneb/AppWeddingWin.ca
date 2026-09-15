@@ -1,6 +1,6 @@
 # Seven branded App Store screenshots
 
-Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`). **All fourteen branded images are uploaded and Apple previews checked, including both refreshed scene 06 captures.** The manifest records the selected files and their provenance. Final physical TestFlight comparison and content-rights declarations remain separate.
+Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`). **All fourteen branded images are uploaded and Apple previews checked, including both refreshed scene 06 captures.** The manifest records the selected files and their provenance. The owner-confirmed content-rights declaration is saved; final physical TestFlight comparison remains open.
 
 ## Deliverables
 
