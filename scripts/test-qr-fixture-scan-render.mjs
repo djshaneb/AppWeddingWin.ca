@@ -120,7 +120,10 @@ test('actual PHP renders a short unchecked agreement with working terms, officia
   assert.match(html, /href="\/about\/terms#qr-bingo" target="_blank" rel="noopener">QR Bingo Terms/);
   assert.match(html, /href="https:\/\/www[.]weddingwin[.]ca\/qr-bingo-vendor-draw-rules" target="_blank" rel="noopener">Draw Rules/);
   assert.match(html, /href="\/about\/privacy"[^>]*>Privacy Policy/);
-  const text = html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  const retry = html.match(/<button\b[^>]*id="qrRulesNoticeRetry"[^>]*>[\s\S]*?<\/button>/);
+  assert(retry, 'The acknowledgement retry control remains available after a save failure');
+  assert.match(retry[0], /^<button\b[^>]*\bhidden(?:\s|>)/);
+  const text = html.replace(retry[0], '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
   assert.equal(text, 'Before you scan While QR scanning is open, including early access, scanning a vendor with its draw turned on offers an optional entry. Choose Yes to enter or No to keep only your scan. The displayed entry deadline and draw date still apply. I have read and agree to the QR Bingo Terms and Draw Rules. Privacy Policy');
 });
 

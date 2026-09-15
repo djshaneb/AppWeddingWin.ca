@@ -21,7 +21,7 @@ function nativeRender(offer, expanded) {
     useState: () => [expanded, () => {}], styles: {},
     Linking: { openURL: () => assert.fail('Rendering must not open links or submit entry') }, Alert: {},
   };
-  const names = ['PROMOTION_TIME_ZONE', 'promotionDateFormatter', 'formatPromotionDate', 'vendorDrawPrizeSummary', 'trustedVendorDrawRulesUrl', 'QrVendorPrizeDetails'];
+  const names = ['PROMOTION_TIME_ZONE', 'promotionDateFormatter', 'formatPromotionDate', 'vendorDrawPrizeSummary', 'vendorDrawDemoPresentation', 'trustedVendorDrawRulesUrl', 'QrVendorPrizeDetails'];
   vm.runInNewContext(ts.transpileModule(names.map(appDeclaration).join('\n') + '\nglobalThis.render = QrVendorPrizeDetails;', {
     compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 },
   }).outputText, context);
@@ -37,7 +37,8 @@ function textContent(node) {
   return (node.children || []).map(textContent).join('');
 }
 const offer = {
-  vendor_name: 'Willow & Bloom Floral Studio', prize_title: 'Wedding flower credit',
+  vendor_id: '38970', vendor_name: 'Willow & Bloom Floral Studio', prize_title: 'Wedding flower credit',
+  app_review_fixture: false, email_test_fixture: false, outbound_email_suppressed: false,
   prize_description: 'Wedding flower credit. '.repeat(14) + 'Only new bookings; valid until 31 December 2027. Travel is excluded.',
   prize_approx_value_cad: 250, prize_count: 1,
   eligibility_region: 'Ontario residents aged 18 or older', eligibility_exclusions: 'Vendor staff and their household members are excluded.',
@@ -45,6 +46,33 @@ const offer = {
   entry_limit: 'One entry per couple per vendor', odds_basis: 'Depends on the number of eligible entries',
   terms_url: 'https://www.weddingwin.ca/qr-bingo-vendor-draw-rules', no_purchase_required: true, skill_testing_question_required: true,
 };
+const syntheticSource = readFileSync(new URL('../supabase/functions/_shared/qr_bingo_synthetic_fixture.ts', import.meta.url), 'utf8');
+function canonicalSyntheticText(name) {
+  const match = syntheticSource.match(new RegExp(`export const ${name} = ("[^"\\n]*");`));
+  assert(match, `${name} must remain a canonical API fixture constant`);
+  return JSON.parse(match[1]);
+}
+const syntheticOffer = Object.freeze({
+  ...offer,
+  synthetic_fixture_setup_id: 'b74acb9e-b1f0-4014-a41c-1339dcf6ceca',
+  provenance: 'synthetic_fixture_setup', display_only: true, entry_allowed: false, legal_acceptance: false,
+  app_review_fixture: true, email_test_fixture: false, outbound_email_suppressed: true,
+  vendor_id: '38970', vendor_name: canonicalSyntheticText('SYNTHETIC_FIXTURE_VENDOR_NAME'),
+  prize_title: canonicalSyntheticText('SYNTHETIC_FIXTURE_PRIZE_TITLE'),
+  prize_description: canonicalSyntheticText('SYNTHETIC_FIXTURE_PRIZE_DESCRIPTION'),
+  participant_responsibility_disclosure: canonicalSyntheticText('SYNTHETIC_FIXTURE_DISCLOSURE'),
+  prize_approx_value_cad: 0,
+});
+const demoTitle = 'Wedding floral consultation';
+const demoDescription = 'Plan your bouquet, ceremony flowers and reception arrangements in a one-hour consultation with Willow & Bloom Floral Studio.';
+function websiteRenderer() {
+  const context = { Array, Number, String, Date, Intl };
+  for (const key of ['vendorDrawPrize', 'vendorDrawPrizeTitle', 'vendorDrawPrizeValue', 'vendorDrawPrizeSummaryText', 'vendorDrawPrizeDescription', 'vendorDrawPrizeFacts', 'vendorDrawPrizeDetails', 'vendorDrawPrizeRules', 'vendorDrawPreviewNotice', 'vendorDrawDemoNotice']) context[key] = {};
+  const code = ['cleanPromotionText', 'formatPromotionDate', 'vendorDrawPrizeSummary', 'vendorDrawDemoPresentation', 'renderVendorDrawPrize'].map(name => sourceFunction(scanner, name)).join('\n');
+  vm.createContext(context);
+  vm.runInContext(code, context);
+  return context;
+}
 
 test('collapsed native prize summary is short and retains value while full terms are one action away', () => {
   const tree = nativeRender(offer, false), copy = textContent(tree), nodes = descendants(tree);
@@ -79,6 +107,64 @@ test('nonbinding previews stay explicit and never invent positive prize value', 
   assert.doesNotMatch(copy, /\$0|\$250/);
 });
 
+test('recognized demo shows approved natural copy and keeps every canonical limitation under Read more', () => {
+  const before = JSON.stringify(syntheticOffer);
+  const collapsed = textContent(nativeRender(syntheticOffer, false));
+  assert(collapsed.includes(demoTitle));
+  assert(collapsed.includes(demoDescription));
+  assert.doesNotMatch(collapsed, /demonstration|Preview only|Fictional|\$0|\$250/);
+  const expanded = nativeRender(syntheticOffer, true);
+  const details = descendants(expanded).find(node => node.props.testID === 'vendor-draw-prize-full-details');
+  for (const value of [syntheticOffer.prize_title, syntheticOffer.prize_description, syntheticOffer.participant_responsibility_disclosure, 'Preview only. No real prize or draw entry.']) {
+    assert(textContent(details).includes(value), value);
+  }
+  assert.equal(JSON.stringify(syntheticOffer), before, 'Display rendering cannot change canonical submission data');
+
+  const web = websiteRenderer();
+  web.renderVendorDrawPrize(syntheticOffer, offer.terms_url);
+  assert.equal(web.vendorDrawPrizeTitle.textContent, demoTitle);
+  assert.equal(web.vendorDrawPrizeSummaryText.textContent, demoDescription);
+  assert.equal(web.vendorDrawPrizeValue.hidden, true);
+  assert.equal(web.vendorDrawPreviewNotice.hidden, true);
+  assert.equal(web.vendorDrawPrizeDetails.open, false);
+  assert.equal(web.vendorDrawPrizeDescription.textContent, syntheticOffer.prize_description);
+  assert.equal(web.vendorDrawDemoNotice.hidden, false);
+  for (const value of [syntheticOffer.prize_title, syntheticOffer.participant_responsibility_disclosure, 'Preview only. No real prize or draw entry.']) assert(web.vendorDrawDemoNotice.textContent.includes(value));
+  assert.match(scanner, /<details id="vendorDrawPrizeDetails">[\s\S]*?id="vendorDrawDemoNotice"[\s\S]*?<\/details>/);
+  assert.equal(JSON.stringify(syntheticOffer), before);
+});
+
+test('natural demo copy fails closed on any missing or changed fixture identity, provenance, restriction or canonical detail', () => {
+  const native = loadAppDeclarations(['vendorDrawDemoPresentation']).vendorDrawDemoPresentation;
+  const web = websiteRenderer();
+  const invalid = [
+    { provenance: undefined }, { provenance: 'app_review_fixture' },
+    { synthetic_fixture_setup_id: undefined }, { synthetic_fixture_setup_id: 'arbitrary' },
+    { display_only: false }, { display_only: 'true' }, { entry_allowed: true }, { entry_allowed: undefined },
+    { legal_acceptance: true }, { legal_acceptance: undefined },
+    { app_review_fixture: false }, { email_test_fixture: true }, { outbound_email_suppressed: false },
+    { vendor_id: '38972' }, { vendor_id: 38970 }, { vendor_name: 'Another florist' },
+    { prize_title: 'Wedding flower credit' }, { prize_description: 'A real prize' },
+    { prize_approx_value_cad: 250 }, { prize_approx_value_cad: '0' },
+    { participant_responsibility_disclosure: 'Entry creates a real prize' },
+  ];
+  for (const patch of invalid) {
+    const changed = Object.freeze({ ...syntheticOffer, ...patch });
+    assert.equal(native(changed), null, JSON.stringify(patch));
+    assert.equal(web.vendorDrawDemoPresentation(changed), null, JSON.stringify(patch));
+    web.renderVendorDrawPrize(changed, offer.terms_url);
+    assert.equal(web.vendorDrawPrizeTitle.textContent, changed.prize_title);
+    assert.equal(web.vendorDrawPrizeSummaryText.textContent, changed.prize_description);
+    assert.equal(web.vendorDrawDemoNotice.hidden, true);
+  }
+  assert.equal(native(offer), null);
+  assert.equal(web.vendorDrawDemoPresentation(offer), null);
+  web.renderVendorDrawPrize(offer, offer.terms_url);
+  assert.equal(web.vendorDrawPrizeTitle.textContent, offer.prize_title);
+  assert.equal(web.vendorDrawDemoNotice.textContent, '', 'A subsequent real offer clears demo text');
+  assert.equal(web.vendorDrawPreviewNotice.hidden, true);
+});
+
 test('summary keeps Unicode intact and native rules links reject untrusted destinations', () => {
   const { vendorDrawPrizeSummary, trustedVendorDrawRulesUrl } = loadAppDeclarations(['vendorDrawPrizeSummary', 'trustedVendorDrawRulesUrl']);
   assert.equal(vendorDrawPrizeSummary('  A\n\tflower  credit  '), 'A flower credit');
@@ -88,11 +174,7 @@ test('summary keeps Unicode intact and native rules links reject untrusted desti
 });
 
 test('website renders complete terms as plain text, truncates the summary, and resets expanded state per offer', () => {
-  const context = { Array, Number, String, Date, Intl };
-  for (const key of ['vendorDrawPrize', 'vendorDrawPrizeTitle', 'vendorDrawPrizeValue', 'vendorDrawPrizeSummaryText', 'vendorDrawPrizeDescription', 'vendorDrawPrizeFacts', 'vendorDrawPrizeDetails', 'vendorDrawPrizeRules', 'vendorDrawPreviewNotice']) context[key] = {};
-  const code = ['cleanPromotionText', 'formatPromotionDate', 'vendorDrawPrizeSummary', 'renderVendorDrawPrize'].map(name => sourceFunction(scanner, name)).join('\n');
-  vm.createContext(context);
-  vm.runInContext(code, context);
+  const context = websiteRenderer();
   context.vendorDrawPrizeDetails.open = true;
   context.renderVendorDrawPrize(offer, offer.terms_url);
   assert.equal(context.vendorDrawPrizeDetails.open, false);

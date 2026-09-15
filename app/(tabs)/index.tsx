@@ -304,6 +304,9 @@ type QrBingoEventConfig = {
   entry_closes_at: string;
 };
 type QrBingoRaffleOffer = {
+  synthetic_fixture_setup_id?: string;
+  provenance?: string;
+  legal_acceptance?: boolean;
   display_only?: boolean;
   entry_allowed?: boolean;
   app_review_fixture?: boolean;
@@ -1571,6 +1574,26 @@ function vendorDrawPrizeSummary(value: string, limit = 180): string {
   return `${characters.slice(0, limit).join('').trimEnd()}…`;
 }
 
+function vendorDrawDemoPresentation(offer: QrBingoRaffleOffer) {
+  // Display copy only: the authenticated API remains responsible for validating
+  // the immutable fixture and rejecting every entry or delivery action.
+  if (
+    offer.provenance !== 'synthetic_fixture_setup' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(offer.synthetic_fixture_setup_id || '') ||
+    offer.display_only !== true || offer.entry_allowed !== false || offer.legal_acceptance !== false ||
+    offer.app_review_fixture !== true || offer.email_test_fixture !== false || offer.outbound_email_suppressed !== true ||
+    offer.vendor_id !== '38970' || offer.vendor_name !== 'Willow & Bloom Floral Studio' ||
+    offer.prize_title !== 'Floral design consultation — demonstration' ||
+    offer.prize_description !== 'Fictional demonstration only. No prize, booking, entry, winner or external message is created.' ||
+    offer.prize_approx_value_cad !== 0 ||
+    offer.participant_responsibility_disclosure !== 'This is a nonbinding WeddingWin demonstration for John and Jane with Willow & Bloom Floral Studio. No legal agreement, draw entry, prize, booking, winner or external message is created. Choose No to keep only the sample scan.'
+  ) return null;
+  return {
+    title: 'Wedding floral consultation',
+    description: 'Plan your bouquet, ceremony flowers and reception arrangements in a one-hour consultation with Willow & Bloom Floral Studio.',
+  };
+}
+
 function trustedVendorDrawRulesUrl(value: string): string {
   try {
     const url = new URL(value);
@@ -1582,8 +1605,9 @@ function trustedVendorDrawRulesUrl(value: string): string {
 
 function QrVendorPrizeDetails({ offer }: { offer: QrBingoRaffleOffer }) {
   const [expanded, setExpanded] = useState(false);
+  const demo = vendorDrawDemoPresentation(offer);
   const description = String(offer.prize_description || '').trim();
-  const title = String(offer.prize_title || '').trim();
+  const title = demo?.title || String(offer.prize_title || '').trim();
   const value = Number(offer.prize_approx_value_cad);
   const rulesUrl = trustedVendorDrawRulesUrl(offer.terms_url);
   const previewOnly = offer.display_only === true || offer.entry_allowed === false;
@@ -1607,10 +1631,10 @@ function QrVendorPrizeDetails({ offer }: { offer: QrBingoRaffleOffer }) {
       ) : null}
       {description ? (
         <Text style={styles.rafflePrizeDescription}>
-          {expanded ? description : vendorDrawPrizeSummary(description)}
+          {expanded && !demo ? description : vendorDrawPrizeSummary(demo?.description || description)}
         </Text>
       ) : null}
-      {previewOnly ? <Text style={styles.rafflePrizeDescription}>Preview only. No real prize or draw entry.</Text> : null}
+      {previewOnly && !demo ? <Text style={styles.rafflePrizeDescription}>Preview only. No real prize or draw entry.</Text> : null}
       <TouchableOpacity
         onPress={() => setExpanded(!expanded)}
         accessibilityRole="button"
@@ -1623,6 +1647,14 @@ function QrVendorPrizeDetails({ offer }: { offer: QrBingoRaffleOffer }) {
       </TouchableOpacity>
       {expanded ? (
         <View testID="vendor-draw-prize-full-details">
+          {demo ? (
+            <>
+              <Text style={styles.rafflePrizeDescription}>Preview only. No real prize or draw entry.</Text>
+              <Text style={styles.rafflePrizeDescription}>{offer.prize_title}</Text>
+              <Text style={styles.rafflePrizeDescription}>{description}</Text>
+              <Text style={styles.rafflePrizeDescription}>{offer.participant_responsibility_disclosure}</Text>
+            </>
+          ) : null}
           {facts.map((fact, index) => <Text key={index} style={styles.rafflePrizeDescription}>{fact}</Text>)}
           <Text style={styles.rafflePrizeDescription}>Ask the vendor about the prize. The written details and draw rules apply.</Text>
         </View>

@@ -89,3 +89,24 @@ Deno.test("paired private reviewers retain their scoped receive override", () =>
     "an unvalidated account must fail closed",
   );
 });
+
+Deno.test("unset receive overrides use the plan setting without overriding a block", () => {
+  for (const receive of [null, undefined]) {
+    assertEquals(recipientCanReceiveChat({ enable_receiving_chat_messages: receive,
+      enable_direct_messages: "1", receive_messages: "0" }), true,
+    "an unset override uses the enabled direct-message setting");
+    assertEquals(recipientCanReceiveChat({ enable_receiving_chat_messages: receive,
+      enable_direct_messages: "0", receive_messages: "1" }), false,
+    "an explicit direct-message block remains effective");
+    assertEquals(recipientCanReceiveChat({ enable_receiving_chat_messages: receive }), false,
+      "an unset override without another permission is denied");
+  }
+});
+
+Deno.test("unknown or explicit receive overrides never fall through to enabled plans", () => {
+  for (const receive of ["0", 0, false, "", " ", "unknown", "true", 2]) {
+    assertEquals(recipientCanReceiveChat({ enable_receiving_chat_messages: receive,
+      enable_direct_messages: "1", receive_messages: "1" }), false,
+    "only an unset override can fall back");
+  }
+});

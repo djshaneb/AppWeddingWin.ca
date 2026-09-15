@@ -21,7 +21,9 @@ export function recipientCanReceiveChat(
   if (pairedPrivateReviewer) return true;
   if (!plan) return false;
 
-  if (hasOwnFlag(plan, "enable_receiving_chat_messages")) {
+  // BD returns null for an unset receive override on otherwise enabled plans.
+  if (hasOwnFlag(plan, "enable_receiving_chat_messages") &&
+    plan.enable_receiving_chat_messages != null) {
     return enabledPlanFlag(plan.enable_receiving_chat_messages);
   }
   if (hasOwnFlag(plan, "enable_direct_messages")) {

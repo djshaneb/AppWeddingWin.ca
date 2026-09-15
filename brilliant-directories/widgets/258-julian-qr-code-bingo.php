@@ -2024,6 +2024,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         <p class="vendor-draw-copy" id="vendorDrawPreviewNotice" hidden>Preview only. No real prize or draw entry.</p>
         <details id="vendorDrawPrizeDetails">
           <summary>Read more</summary>
+          <p class="vendor-draw-copy" id="vendorDrawDemoNotice" hidden></p>
           <p class="vendor-draw-copy" id="vendorDrawPrizeDescription"></p>
           <p class="vendor-draw-copy" id="vendorDrawPrizeFacts"></p>
           <p class="vendor-draw-copy">Ask the vendor about the prize. The written details and draw rules apply.</p>
@@ -2460,6 +2461,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const vendorDrawPrizeDetails = document.getElementById('vendorDrawPrizeDetails');
     const vendorDrawPrizeRules = document.getElementById('vendorDrawPrizeRules');
     const vendorDrawPreviewNotice = document.getElementById('vendorDrawPreviewNotice');
+    const vendorDrawDemoNotice = document.getElementById('vendorDrawDemoNotice');
     const vendorDrawDecline = document.getElementById('vendorDrawDecline');
     const vendorDrawEnter = document.getElementById('vendorDrawEnter');
 
@@ -2644,15 +2646,36 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       return characters.length <= limit ? words : characters.slice(0, limit).join('').trimEnd() + '…';
     }
 
+    function vendorDrawDemoPresentation(offer) {
+      // This changes presentation only for the API's exact nonbinding fixture.
+      // Entry and delivery permissions remain entirely server-controlled.
+      if (
+        offer.provenance !== 'synthetic_fixture_setup' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(offer.synthetic_fixture_setup_id || '') ||
+        offer.display_only !== true || offer.entry_allowed !== false || offer.legal_acceptance !== false ||
+        offer.app_review_fixture !== true || offer.email_test_fixture !== false || offer.outbound_email_suppressed !== true ||
+        offer.vendor_id !== '38970' || offer.vendor_name !== 'Willow & Bloom Floral Studio' ||
+        offer.prize_title !== 'Floral design consultation — demonstration' ||
+        offer.prize_description !== 'Fictional demonstration only. No prize, booking, entry, winner or external message is created.' ||
+        offer.prize_approx_value_cad !== 0 ||
+        offer.participant_responsibility_disclosure !== 'This is a nonbinding WeddingWin demonstration for John and Jane with Willow & Bloom Floral Studio. No legal agreement, draw entry, prize, booking, winner or external message is created. Choose No to keep only the sample scan.'
+      ) return null;
+      return {
+        title: 'Wedding floral consultation',
+        description: 'Plan your bouquet, ceremony flowers and reception arrangements in a one-hour consultation with Willow & Bloom Floral Studio.'
+      };
+    }
+
     function renderVendorDrawPrize(offer, rulesUrl) {
+      const demo = vendorDrawDemoPresentation(offer);
       const description = cleanPromotionText(offer.prize_description);
       const value = Number(offer.prize_approx_value_cad);
-      vendorDrawPrizeTitle.textContent = cleanPromotionText(offer.prize_title);
+      vendorDrawPrizeTitle.textContent = demo ? demo.title : cleanPromotionText(offer.prize_title);
       vendorDrawPrizeTitle.hidden = !vendorDrawPrizeTitle.textContent;
       vendorDrawPrizeValue.textContent = Number.isFinite(value) && value > 0
         ? 'Value or maximum savings: $' + value.toFixed(2) + ' CAD' : '';
       vendorDrawPrizeValue.hidden = !vendorDrawPrizeValue.textContent;
-      vendorDrawPrizeSummaryText.textContent = vendorDrawPrizeSummary(description);
+      vendorDrawPrizeSummaryText.textContent = vendorDrawPrizeSummary(demo ? demo.description : description);
       vendorDrawPrizeSummaryText.hidden = !description;
       vendorDrawPrizeDescription.textContent = description;
       vendorDrawPrizeDescription.hidden = !description;
@@ -2670,7 +2693,10 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       ].filter(Boolean).join('\n');
       vendorDrawPrizeDetails.open = false;
       vendorDrawPrizeRules.href = rulesUrl;
-      vendorDrawPreviewNotice.hidden = !(offer.display_only === true || offer.entry_allowed === false);
+      vendorDrawPreviewNotice.hidden = Boolean(demo) || !(offer.display_only === true || offer.entry_allowed === false);
+      vendorDrawDemoNotice.textContent = demo ? 'Preview only. No real prize or draw entry. ' +
+        cleanPromotionText(offer.prize_title) + '. ' + cleanPromotionText(offer.participant_responsibility_disclosure) : '';
+      vendorDrawDemoNotice.hidden = !demo;
       vendorDrawPrize.hidden = false;
     }
 
