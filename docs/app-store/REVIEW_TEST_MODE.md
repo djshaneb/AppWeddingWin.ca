@@ -30,6 +30,7 @@ The accounts may be used sequentially for the panel walkthrough. Use separate re
 
 - In each account's review panel, select **Enable test notifications on this device** and allow iOS notifications. Wait for the success feedback before the vendor chooses **Send test result**. A simulator or unavailable push registration may report that a registered physical iPhone or iPad is required; that is not a successful push test.
 - Opt-in applies to the current device registration and review cycle. Enable remains available to explicitly register again if the device registration changes. **Disable test notifications on this device** removes that device's review opt-in.
+- A vendor result opened while signed out may initially show the couple login path. Choose **Change path → Vendor → Log In** and sign in as Meadow & Pine Florals; changing the path preserves the pending result. Alternatively, sign into the correct vendor account before tapping its notification. Signing into a different account rejects the pending result; it does not reveal the other account's data.
 - Enabling after Send does not replay an earlier result. To perform another delivery check, the vendor must reset, both devices must enable again, and the sample entry/verification/Send sequence must be repeated.
 - Record observed alert, sound, badge, app state and notification-tap destination separately. A saved result, device opt-in response or provider receipt alone does not prove all of those physical behaviors. No physical review-draw push verification is claimed by this document.
 
