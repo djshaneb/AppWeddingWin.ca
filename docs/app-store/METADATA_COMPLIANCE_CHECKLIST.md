@@ -1,6 +1,6 @@
-# Metadata and age-rating draft
+# Metadata and age-rating worksheet
 
-Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`) and [TERMS-POLICY-UPDATE.md](TERMS_POLICY_UPDATE_2026-09-14.md). **Internal submission worksheet. Public fields, URLs, categories, Canada/free and manual release are saved; final age/privacy/content-rights answers remain unfinished.** Approved launch choices are Canada, free download, English (Canada), iPhone/iPad, seven screenshots per class and manual release. Public-facing copy is in [listing-draft.md](APP_STORE_LISTING.md). Unresolved facts and build/test notes stay in this worksheet, not the public description or screenshots.
+Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`) and [TERMS-POLICY-UPDATE.md](TERMS_POLICY_UPDATE_2026-09-14.md); age rating updated September 15. **Internal submission worksheet. Public fields, URLs, categories, Canada/free, manual release and the age rating are saved; final privacy/content-rights answers remain unfinished.** Approved launch choices are Canada, free download, English (Canada), iPhone/iPad, seven screenshots per class and manual release. Public-facing copy is in [listing-draft.md](APP_STORE_LISTING.md). Unresolved facts and build/test notes stay in this worksheet, not the public description or screenshots.
 
 ## Fields requiring completion
 
@@ -20,31 +20,11 @@ Reconciled September 14, 2026 against source `533821d` (build configuration `58e
 
 ## Age-rating questionnaire
 
-Use the current questionnaire in the live App Store record and save its actual answers/result as evidence. Do not promise a numerical rating before Apple calculates it. Proposed answers below remain subject to the final content and navigation review; unresolved fields are not No answers.
+Completed, saved and verified after reload in App Store Connect on September 15, 2026 at 21:32 UTC. Apple calculated **13+**; the owner-authorized override is **18+**, and the country details explicitly list Canada under 18+. Apple's earlier-than-OS-26 global display is **17+**. The [saved questionnaire and supporting evidence](AGE_RATING_2026-09-15.md) records the individual answers, public-content review and override.
 
-| Capability/content | Draft answer | Evidence or remaining check |
-| --- | --- | --- |
-| Messaging and Chat | Yes | Private conversations are a core feature |
-| User-Generated Content | Yes | Public member/vendor listings and shared wedding content; private messaging is answered separately |
-| Social Media | Unresolved | Inspect reachable feeds/discovery, comments, reactions, reviews and sharing. Private messaging alone does not settle this capability |
-| Social Media Disabled for Users Under 13 | No affirmative claim supported | No Declared Age Range API/gated social-media implementation found in inspected source; assess applicability in the live questionnaire |
-| Contests | Present; select Infrequent or Frequent after availability review | Optional vendor draws exist; record actual frequency/access across events and early access |
-| Gambling | Proposed No only after promotion review | No betting/wagering flow identified; confirm whether admission/payment or another required action constitutes consideration or an entry advantage |
-| Simulated Gambling | Proposed None | No wagering simulation found |
-| Loot Boxes | Proposed No | No randomized virtual-item purchase found |
-| Unrestricted Web Access | Proposed No, subject to final navigation tests | Main-frame WeddingWin/builder hosts stay in app; other HTTPS destinations go to the system browser. HTTPS subframes are permitted. Check redirects, pop-ups and embedded browsing |
-| Advertising | Unresolved | Owner identifies paid listings, boosts, sponsored placement and embedded ads; a directory listing or tracking pixel alone does not settle this answer |
-| Parental Controls | Proposed No | No parental-control system found |
-| Age Assurance | Unresolved | QR entry derives an age-of-majority attestation from the pre-scan agreement. No age-range API, birth-date verification or identity check found. Assess this specific-service gate against the live question; do not claim verified age |
-| Profanity; horror/fear; alcohol/tobacco/drugs | Frequency review pending | Inspect reachable vendor/editorial/user content, including venue/bar imagery and descriptions |
-| Medical/treatment information; health/wellness | Frequency review pending | Inspect reachable advice, vendor categories and editorial content |
-| Mature/suggestive themes; sexual content/nudity; graphic sexual content | Frequency review pending | Inspect final imagery and reachable content; the wedding theme does not establish an answer |
-| Cartoon/fantasy violence; realistic violence; prolonged graphic violence; guns/weapons | Frequency review pending | No intentional native feature identified; embedded content still needs assessment |
-| Kids category | No | This is not a children's app |
+The saved answers include UGC, social media and messaging; no parental controls, age assurance or unrestricted web access; owner-confirmed no advertising; infrequent alcohol references, medical information, mature themes and non-explicit sexual content/nudity; wellness topics present; and frequent contests. Social media is assessed under Apple's broad public review/gallery discovery definition. Contests are prominent, repeated QR/draw interactions during events; event availability remains limited. Gambling, simulated gambling, loot boxes, profanity, horror, graphic sexual content and all violence categories are absent in the recorded answers.
 
-The presence of messaging does not establish the whole rating. Current definitions include the separate Social Media capabilities above. Complete every current question and review the resulting Canadian rating. [Apple age-rating definitions](https://developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions/)
-
-Apple's chance-activity screen uses None/Infrequent/Frequent for Contests and Simulated Gambling, and Yes/No for Gambling and Loot Boxes. Confirm the app/EULA minimum age separately from draw eligibility. If the EULA minimum exceeds Apple's calculated rating, use the required higher-rating override. Check both current-OS and earlier-OS displays. [Set an app age rating](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating/)
+The Store rating does not implement age verification or change draw eligibility, existing policies or app code. Remaining promotion, privacy and content-rights requirements below remain open. See [Apple's age-rating definitions](https://developer.apple.com/help/app-store-connect/reference/app-information/age-ratings-values-and-definitions/) and [higher-rating guidance](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating/).
 
 ## Promotion and purchase facts
 
