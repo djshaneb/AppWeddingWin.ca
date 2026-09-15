@@ -398,8 +398,13 @@ Deno.test("fixture context is authenticated, exact-couple, and never fetches the
       source.indexOf('if (action === "fixture_context")'),
       source.indexOf("const isVendorRaffleAction"),
     );
+    const identityCheck = source.indexOf("if (!await nativeSessionMatchesCachedBdIdentity(nativeSession))");
+    const freshIdentity = source.indexOf("const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)");
+    const fixtureBranch = source.indexOf('if (action === "fixture_context")');
     assert(
-      branch.includes("websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)") &&
+      identityCheck >= 0 && freshIdentity > identityCheck && fixtureBranch > freshIdentity &&
+        branch.includes("const fixtureUser = freshAuthenticatedUser;") &&
+        branch.includes("String(fixtureUser.user_id) !== String(authenticatedMemberId)") &&
         branch.includes("loadAppReviewRaffleFixture") &&
         branch.includes("loadEmailTestRaffleFixture") &&
         !branch.includes("loginWebsiteSession") &&

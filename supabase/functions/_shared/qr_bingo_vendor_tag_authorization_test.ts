@@ -28,8 +28,10 @@ Deno.test("every vendor dashboard action requires the published QR Bingo tag", a
     );
     assert(
       source.includes(
-        "const user = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);",
+        "const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);",
       ) &&
+        source.includes("const user = freshAuthenticatedUser;") &&
+        source.indexOf("const user = freshAuthenticatedUser;") > source.indexOf("const freshAuthenticatedUser =") &&
         !source.includes("? ({ user_id: nativeSession.user_id } as BdRow)"),
       `${label} can authorize an isolated vendor without loading current BD tags`,
     );

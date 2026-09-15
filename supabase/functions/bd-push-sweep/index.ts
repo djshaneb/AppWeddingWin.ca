@@ -486,11 +486,13 @@ type EventDelivery = {
   id: string;
   event_id: string;
   event_key: string;
-  type: "chat_message" | "draw_result" | "vendor_draw_follow_up";
+  type: "chat_message" | "draw_result" | "vendor_draw_follow_up" |
+    "review_draw_result" | "review_vendor_follow_up";
   recipient_member_id: string;
   sender_member_id: string | null;
   thread_token: string | null;
   draw_id: string | null;
+  review_notice_id?: string | null;
   expires_at: string;
   status: "claimed" | "ticketed";
   attempt_count: number;
@@ -729,6 +731,7 @@ async function dispatchDeviceEvents(
       recipient_member_id: delivery.recipient_member_id,
       thread_token: delivery.thread_token,
       draw_id: delivery.draw_id,
+      review_notice_id: delivery.review_notice_id,
       expires_at: delivery.expires_at,
     });
     const { data: begun, error: beginError } = await admin.rpc(

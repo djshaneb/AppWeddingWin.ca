@@ -20,9 +20,11 @@ export type NotificationIntent = {
   id: string;
   version: 0 | 1;
   recipientMemberId: string | null;
-  screen: 'chat' | 'draw_result' | 'vendor_draw_result';
+  screen: 'chat' | 'draw_result' | 'vendor_draw_result' | 'review_draw_result';
   threadToken?: string;
   drawId?: string;
+  reviewMode?: 'nonbinding_draw_v1';
+  reviewNoticeId?: string;
   expiresAt: number;
 };
 type StoredIntents = {
@@ -36,6 +38,8 @@ export type NotificationProcessOutcome = NotificationRouteOutcome | 'waiting' | 
 export function parseNotificationIntent(data: unknown, responseId: string, now = Date.now()): NotificationIntent | null {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   const value = data as Record<string, unknown>;
+  if (value.review_notice_id !== undefined && value.screen !== 'review_draw_result') return null;
+  if (value.review_mode !== undefined && (value.review_mode !== 'nonbinding_draw_v1' || value.screen !== 'review_draw_result')) return null;
   if (value.v === undefined && value.screen === 'chat') {
     // Old notifications can open only the signed-in member's own inbox.
     if (!LEGACY_ID.test(responseId)) return null;
@@ -48,6 +52,11 @@ export function parseNotificationIntent(data: unknown, responseId: string, now =
   if (!Number.isFinite(expiresAt) || expiresAt <= now || expiresAt > now + MAX_AGE_MS) return null;
   const base = { id: `event:${value.event_id.toLowerCase()}`, version: 1 as const,
     recipientMemberId: value.recipient_member_id, expiresAt };
+  if (value.screen === 'review_draw_result') {
+    if (value.review_mode !== 'nonbinding_draw_v1' || typeof value.review_notice_id !== 'string' ||
+      !UUID.test(value.review_notice_id) || value.draw_id !== undefined || value.thread_token !== undefined) return null;
+    return { ...base, screen: 'review_draw_result', reviewMode: 'nonbinding_draw_v1', reviewNoticeId: value.review_notice_id };
+  }
   if (value.screen === 'chat') {
     if (value.thread_token !== undefined && (typeof value.thread_token !== 'string' || !THREAD_TOKEN.test(value.thread_token))) return null;
     return { ...base, screen: 'chat', ...(value.thread_token ? { threadToken: value.thread_token as string } : {}) };
@@ -63,6 +72,11 @@ function validStoredIntent(value: unknown, now: number): value is NotificationIn
   if (!value || typeof value !== 'object') return false;
   const p = value as NotificationIntent;
   if (!Number.isFinite(p.expiresAt) || p.expiresAt > now + MAX_AGE_MS || typeof p.id !== 'string') return false;
+  if (p.screen === 'review_draw_result') return p.version === 1 && p.id.startsWith('event:') && UUID.test(p.id.slice(6)) &&
+    typeof p.recipientMemberId === 'string' && MEMBER_ID.test(p.recipientMemberId) &&
+    p.reviewMode === 'nonbinding_draw_v1' && typeof p.reviewNoticeId === 'string' && UUID.test(p.reviewNoticeId) &&
+    !p.threadToken && !p.drawId;
+  if (p.reviewMode !== undefined || p.reviewNoticeId !== undefined) return false;
   if (p.version === 0) return p.id.startsWith('legacy:') && LEGACY_ID.test(p.id.slice(7)) && p.recipientMemberId === null && p.screen === 'chat' && !p.threadToken && !p.drawId;
   return p.version === 1 && p.id.startsWith('event:') && UUID.test(p.id.slice(6)) &&
     typeof p.recipientMemberId === 'string' && MEMBER_ID.test(p.recipientMemberId) &&
@@ -99,6 +113,7 @@ export function createNotificationIntentStore(storage: {
         expiresAt: parsed.pending.expiresAt,
         ...(parsed.pending.threadToken ? { threadToken: parsed.pending.threadToken } : {}),
         ...(parsed.pending.drawId ? { drawId: parsed.pending.drawId } : {}),
+        ...(parsed.pending.reviewMode ? { reviewMode: parsed.pending.reviewMode, reviewNoticeId: parsed.pending.reviewNoticeId } : {}),
       } : null,
       handled: parsed.version === 1 && Array.isArray(parsed.handled) ? parsed.handled.filter(x =>
         x && typeof x.id === 'string' &&

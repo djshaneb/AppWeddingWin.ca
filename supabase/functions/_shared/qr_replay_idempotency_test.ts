@@ -147,9 +147,13 @@ Deno.test("review vendor dashboard skips the website session but requires the li
       fastPathStart,
     );
     const fastPath = source.slice(fastPathStart, dashboardStart);
+    const freshIdentity = source.indexOf(
+      "const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)",
+      identityCheck,
+    );
 
     assert(
-      identityCheck >= 0 && fastPathStart > identityCheck &&
+      identityCheck >= 0 && freshIdentity > identityCheck && fastPathStart > freshIdentity &&
         dashboardStart > fastPathStart,
       "the isolated reviewer-vendor fast path must retain cached-token verification and run before dashboard routing",
     );
@@ -164,7 +168,7 @@ Deno.test("review vendor dashboard skips the website session but requires the li
           "reviewFixture && isReviewVendor && isVendorRaffleAction",
         ) &&
         fastPath.includes(
-          "const user = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)",
+          "const user = freshAuthenticatedUser;",
         ) &&
         !fastPath.includes("? ({ user_id: nativeSession.user_id } as BdRow)") &&
         source.includes("function hasCurrentQrBingoVendorTag") &&

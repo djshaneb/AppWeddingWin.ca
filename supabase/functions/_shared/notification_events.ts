@@ -354,10 +354,12 @@ export function buildMessageSnapshot(input: MessageSnapshotInput): {
 
 export type NotificationPayloadEvent = {
   id: string;
-  type: "chat_message" | "draw_result" | "vendor_draw_follow_up";
+  type: "chat_message" | "draw_result" | "vendor_draw_follow_up" |
+    "review_draw_result" | "review_vendor_follow_up";
   recipient_member_id: string;
   thread_token?: string | null;
   draw_id?: string | null;
+  review_notice_id?: string | null;
   expires_at: string;
 };
 
@@ -379,6 +381,18 @@ export function buildNotificationPayload(
     recipient_member_id: event.recipient_member_id,
     expires_at: new Date(expiry).toISOString(),
   };
+  if (event.type === "review_draw_result" || event.type === "review_vendor_follow_up") {
+    if (!event.review_notice_id || !UUID.test(event.review_notice_id) || event.draw_id || event.thread_token) {
+      throw new Error("Invalid review notification target");
+    }
+    return {
+      title: event.type === "review_draw_result" ? "Test draw result ready" : "Test winner follow-up ready",
+      body: "Review test only. No real prize or email.",
+      data: { ...base, screen: "review_draw_result" as const,
+        review_mode: "nonbinding_draw_v1" as const, review_notice_id: event.review_notice_id },
+    };
+  }
+  if (event.review_notice_id) throw new Error("Review notice cannot use a production notification route");
   if (event.type === "chat_message") {
     if (event.thread_token && !THREAD_TOKEN.test(event.thread_token)) {
       throw new Error("Invalid notification conversation target");

@@ -249,9 +249,10 @@ Deno.test("chat proof and QR contact gates re-read the authenticated member inst
     assert(fetcher.includes("await callBd(") && fetcher.includes("/api/v2/user/get/"));
     assert(!/cache|cached/i.test(fetcher));
     const handler = source.slice(source.indexOf("Deno.serve(async"));
-    const fresh = handler.indexOf("const user = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)");
+    const fresh = handler.indexOf("const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)");
+    const useFresh = handler.indexOf("const user = freshAuthenticatedUser;");
     const contacts = handler.indexOf("await loadQrContactProfile(requireAdmin(), contactEventKey, authenticatedMemberId, user)");
-    assert(fresh >= 0 && contacts > fresh);
+    assert(fresh >= 0 && useFresh > fresh && contacts > useFresh);
     assert(!handler.includes("loadMemberEmailVerification"));
     assert(handler.includes('websitePrincipal?.kind === "couple"\n        ? await fetchFullBdUserById(authenticatedMemberId)'));
   }

@@ -1,3 +1,5 @@
+import { handleReviewDrawAction, ReviewDrawError, REVIEW_DRAW_MODE } from "../_shared/qr_bingo_review_draw.ts";
+import { setReviewDrawPushEnabled, ReviewDrawNotificationError } from "../_shared/review_draw_notifications.ts";
 import { parseQrBingoPrizeEditStatus } from "../_shared/qr_bingo_prize_edit.ts";
 import { syntheticFixtureContextMatches, syntheticFixtureOfferMatches, syntheticFixtureActionIsBlocked, SYNTHETIC_FIXTURE_DISCLOSURE, SYNTHETIC_FIXTURE_DISPLAY_ONLY_MESSAGE, type SyntheticFixtureSetup } from "../_shared/qr_bingo_synthetic_fixture.ts";
 import { loadQrBingoDrawResult, QrBingoDrawResultError } from "../_shared/qr_bingo_draw_result.ts";
@@ -4123,8 +4125,31 @@ Deno.serve(async (request) => {
         return jsonResponse({ ok: false, error: "Sign in with a couple account to use QR Bingo." }, 403);
       }
 
+      // Isolated review mode uses fresh authenticated identities and separate
+      // service-only state. A disabled review pair never falls into real draws.
+      const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);
+      if (!freshAuthenticatedUser?.user_id || String(freshAuthenticatedUser.user_id) !== authenticatedMemberId) {
+        return jsonResponse({ ok: false, error: "Native session expired" }, 401);
+      }
+      try {
+        if (action === "review_draw_push_enable") {
+          const context = await handleReviewDrawAction(requireAdmin(), authenticatedMemberId, freshAuthenticatedUser, "review_draw_context", body);
+          if (context?.review_mode !== REVIEW_DRAW_MODE || body.review_mode !== REVIEW_DRAW_MODE) {
+            return jsonResponse({ ok: false, code: "review_unavailable", error: "This account has no active review draw." }, 403, false);
+          }
+          return jsonResponse(await setReviewDrawPushEnabled(requireAdmin(), authenticatedMemberId, body), 200, false);
+        }
+        const reviewReply = await handleReviewDrawAction(requireAdmin(), authenticatedMemberId, freshAuthenticatedUser, action, body);
+        if (reviewReply) return jsonResponse(reviewReply, 200, false);
+      } catch (error) {
+        if (error instanceof ReviewDrawError || error instanceof ReviewDrawNotificationError) {
+          return jsonResponse({ ok: false, code: error.code, error: error.message }, error.status, false);
+        }
+        throw error;
+      }
+
       if (action === "fixture_context") {
-        const fixtureUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);
+        const fixtureUser = freshAuthenticatedUser;
         if (
           !fixtureUser?.user_id ||
           String(fixtureUser.user_id) !== String(authenticatedMemberId)
@@ -4166,7 +4191,7 @@ Deno.serve(async (request) => {
 
       // Always load the current BD member with tags. Even an isolated fixture
       // vendor must still belong to the currently published QR Bingo roster.
-      const user = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);
+      const user = freshAuthenticatedUser;
       if (
         !user?.user_id || String(user.user_id) !== String(authenticatedMemberId)
       ) {

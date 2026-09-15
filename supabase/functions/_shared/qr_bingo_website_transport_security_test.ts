@@ -54,7 +54,18 @@ for (const path of endpointPaths) {
   Deno.test(`${endpoint} signed couple proof still requires the fresh exact couple account`, async () => {
     const source = await Deno.readTextFile(new URL(path, import.meta.url));
     const start = source.indexOf("const websiteCoupleUser =");
-    const end = source.indexOf('if (action === "fixture_context")', start);
+    // Execute the fresh website-couple authorization boundary itself. Review
+    // dispatch after this guard has separate authenticated integration tests.
+    const guardStart = source.indexOf('if (websitePrincipal?.kind === "couple" &&', start);
+    const guardOpen = source.indexOf("{", guardStart);
+    let depth = 1;
+    let end = guardOpen + 1;
+    while (end < source.length && depth > 0) {
+      if (source[end] === "{") depth++;
+      if (source[end] === "}") depth--;
+      end++;
+    }
+    assert(guardStart > start && guardOpen > guardStart && depth === 0);
     assert(start > 0 && end > start);
     const implementation = new AsyncFunction(
       "websitePrincipal",

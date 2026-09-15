@@ -36,6 +36,8 @@ import {
 } from '@/lib/account_deletion_state';
 import { getNativeSessionStorageGeneration, mutateNativeSessionStorage, readNativeSessionStorage } from '@/lib/native_session_storage';
 import { createNotificationIntentStore, type NotificationIntent, type NotificationRouteOutcome } from '@/lib/notification_intent';
+import { REVIEW_DRAW_MODE, normalizeReviewDrawState, normalizeReviewDrawNotice, reviewDrawActionAllowed,
+  type ReviewDrawState, type ReviewDrawNotice } from '@/lib/review_draw';
 import { useFocusEffect } from '@react-navigation/native';
 import { useNavigation } from 'expo-router';
 import { WebView, type WebViewNavigation } from 'react-native-webview';
@@ -3971,6 +3973,213 @@ function VendorBottomNav({
   );
 }
 
+function NativeReviewDraw({ nativeSession, member, noticeRequest, onNoticeHandled, onEnablePush }: {
+  nativeSession: NativeBridgeSession | null;
+  member: NativeMember;
+  noticeRequest: ReviewDrawNotice | null;
+  onNoticeHandled: () => void;
+  onEnablePush: (generation: number, enabled: boolean) => Promise<void>;
+}) {
+  const [review, setReview] = useState<ReviewDrawState | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [checksConfirmed, setChecksConfirmed] = useState(false);
+  const [skillAnswer, setSkillAnswer] = useState('');
+  const requestGeneration = useRef(0);
+  const inFlight = useRef(false);
+  const contextRetryNeeded = useRef(false);
+  const memberId = String(member.user_id || '');
+  const role = memberAccountRole(member);
+  const sessionKey = `${nativeSession?.user_id || ''}:${nativeSession?.token || ''}`;
+  const currentSessionKey = useRef(sessionKey);
+  currentSessionKey.current = sessionKey;
+  const sessionRef = useRef(nativeSession);
+  sessionRef.current = nativeSession;
+
+  const request = useCallback(async (action: string, extra: Record<string, unknown> = {}) => {
+    const requestSession = sessionRef.current;
+    if (!requestSession?.user_id || !requestSession.token || String(requestSession.user_id) !== memberId ||
+      !role || accountDeletionIsInFlight() || inFlight.current) return;
+    const generation = requestGeneration.current;
+    const deletionGeneration = getAccountDeletionGeneration();
+    const isCurrent = () => requestGeneration.current === generation && currentSessionKey.current === sessionKey &&
+      accountMutationIsCurrent(deletionGeneration);
+    let retryableContextFailure = true;
+    if (action === 'review_draw_context') contextRetryNeeded.current = false;
+    inFlight.current = true;
+    setBusy(true); setError(''); setFeedback('');
+    try {
+      const { response, data } = await fetchQrBingoJsonWithTimeout<{
+        ok?: boolean; error?: string; review_mode?: string | null; review_state?: unknown;
+        notice_id?: string; result?: unknown;
+      }>(QR_BINGO_SYNC_FUNCTION_URL, {
+        method: 'POST', headers: { Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+          apikey: APP_BACKEND_PUBLISHABLE_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...extra, action, review_mode: REVIEW_DRAW_MODE, native_session: requestSession }),
+      }, 'The review test took too long. Refresh to check its saved state.');
+      if (!isCurrent()) return;
+      if (action === 'review_draw_context' && response.ok && data.ok === true && data.review_mode === null) {
+        setReview(null); setVisible(false); return;
+      }
+      if (!response.ok || data.ok !== true || data.review_mode !== REVIEW_DRAW_MODE) {
+        retryableContextFailure = ![400, 401, 403, 404, 410].includes(response.status);
+        if ([401, 403, 404, 410].includes(response.status)) { setReview(null); setVisible(false); }
+        throw new Error(data.error || 'The review test is unavailable.');
+      }
+      const next = normalizeReviewDrawState(data.review_state, memberId, role);
+      if (!next) throw new Error('The review test response was incomplete. Refresh and try again.');
+      if (action === 'review_draw_result_get' && !normalizeReviewDrawNotice(data, String(extra.review_notice_id || ''), memberId, role)) {
+        throw new Error('This test result is no longer available.');
+      }
+      setReview(next);
+      if (action === 'review_draw_reset') { setChecksConfirmed(false); setSkillAnswer(''); }
+      if (action === 'review_draw_entry') setFeedback(next.entered ? 'You are entered in the review test.' : 'You chose not to enter the review test.');
+      if (action === 'review_draw_send') setFeedback('Test result saved. No prize or email was sent.');
+      if (action === 'review_draw_result_get') setFeedback('Review test result received. No real prize or claim is created.');
+    } catch (cause) {
+      if (isCurrent()) {
+        setError(cause instanceof Error ? cause.message : 'The review test is unavailable.');
+        if (action === 'review_draw_context' && retryableContextFailure) {
+          contextRetryNeeded.current = true;
+          return 'retry';
+        }
+      }
+    } finally {
+      if (isCurrent()) { inFlight.current = false; setBusy(false); }
+    }
+  }, [memberId, role, sessionKey]);
+
+  useEffect(() => {
+    setChecksConfirmed(false); setSkillAnswer('');
+  }, [review?.generation]);
+
+  useEffect(() => {
+    requestGeneration.current += 1; inFlight.current = false;
+    contextRetryNeeded.current = false;
+    setReview(null); setVisible(false); setBusy(false);
+    setChecksConfirmed(false); setSkillAnswer(''); setError(''); setFeedback('');
+    let retired = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const loadContext = async (attempt = 0) => {
+      if (retired) return;
+      const result = await request('review_draw_context');
+      if (!retired && result === 'retry' && attempt < 2) {
+        retryTimer = setTimeout(() => { retryTimer = null; void loadContext(attempt + 1); }, attempt === 0 ? 1500 : 5000);
+      }
+    };
+    void loadContext();
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active' || !contextRetryNeeded.current || retired) return;
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+      void loadContext(2);
+    });
+    return () => {
+      retired = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      subscription.remove();
+      requestGeneration.current += 1; inFlight.current = false; contextRetryNeeded.current = false;
+    };
+  }, [request]);
+
+  useEffect(() => {
+    if (!noticeRequest || !role) return;
+    const notice = normalizeReviewDrawNotice(noticeRequest, noticeRequest.notice_id, memberId, role);
+    if (notice) {
+      setReview(notice.review_state); setVisible(true); setError('');
+      setFeedback('Review test result received. No real prize or claim is created.');
+    }
+    onNoticeHandled();
+  }, [memberId, noticeRequest, onNoticeHandled, role]);
+
+  const perform = (action: string, extra: Record<string, unknown> = {}) => {
+    if (!review || busy || !reviewDrawActionAllowed(review, action)) return;
+    void request(action, { ...extra, expected_generation: review.generation });
+  };
+  const updatePush = (enabled: boolean) => {
+    if (!review || inFlight.current) return;
+    const generation = requestGeneration.current;
+    inFlight.current = true; setBusy(true); setError(''); setFeedback('');
+    void onEnablePush(review.generation, enabled).then(() => {
+      if (generation !== requestGeneration.current) return;
+      setFeedback(enabled ? 'Test notifications are enabled on this device for the current review cycle.' : 'Test notifications are disabled on this device.');
+    }).catch(cause => {
+      if (generation === requestGeneration.current) setError(cause instanceof Error ? cause.message : 'Test notifications are unavailable.');
+    }).finally(() => {
+      if (generation === requestGeneration.current) { inFlight.current = false; setBusy(false); }
+    });
+  };
+  const button = (label: string, onPress: () => void, disabled = false) => (
+    <TouchableOpacity style={[styles.secondaryAction, (disabled || busy) && styles.loginButtonDisabled]}
+      onPress={onPress} disabled={disabled || busy} accessibilityRole="button" accessibilityLabel={label}
+      accessibilityState={{ disabled: disabled || busy }}>
+      <Text style={styles.secondaryActionText}>{label}</Text>
+    </TouchableOpacity>
+  );
+  if (!review) return null;
+  return <>
+    <TouchableOpacity style={styles.qrConsentLink} accessibilityRole="button"
+      accessibilityLabel="Open review test — no real prize or email" onPress={() => { setVisible(true); void request('review_draw_context'); }}>
+      <Text style={styles.qrConsentLinkText}>Review test — no real prize or email</Text>
+    </TouchableOpacity>
+    <Modal visible={visible} animationType="slide" onRequestClose={() => setVisible(false)}>
+      <SafeAreaView style={styles.nativeShell}>
+        <View style={styles.chatNativeHeader}>
+          <Text style={styles.chatScreenTitle}>Review test</Text>
+          <TouchableOpacity accessibilityRole="button" accessibilityLabel="Close review test" onPress={() => setVisible(false)}>
+            <X size={24} color={BRAND_COLOR} />
+          </TouchableOpacity>
+        </View>
+        <ScrollView contentContainerStyle={styles.notificationResultContent} keyboardShouldPersistTaps="handled">
+          <Text style={styles.vendorRaffleInfoTitle}>Review test — no real prize or email</Text>
+          <Text style={styles.vendorRaffleInfoText}>This isolated test creates no real draw entry, agreement, winner or prize claim. Test notifications go only to review devices that opt in.</Text>
+          <Text style={styles.vendorRaffleWinnerName}>{review.vendor_name}</Text>
+          <Text style={styles.vendorRaffleWinnerTitle}>{review.prize_title}</Text>
+          <Text style={styles.vendorRaffleInfoText}>{review.prize_description}</Text>
+          <Text style={styles.vendorRaffleInfoText}>Test draw: {review.enabled ? 'On' : 'Off'} · Sample scan: {review.scanned ? 'Recorded' : 'Not recorded'} · Test entry: {review.entered ? 'Entered' : 'Not entered'}</Text>
+          {review.role === 'couple' ? <>
+            {button('Use review QR sample', () => perform('review_draw_scan', { vendor_id: review.vendor_id }), !reviewDrawActionAllowed(review, 'review_draw_scan'))}
+            <Text style={styles.vendorRaffleHint}>Uses the review sample without scanning a physical QR code.</Text>
+            {review.scanned && !review.entered && review.selection_status === 'none' ? <>
+              <Text style={styles.vendorRaffleInfoTitle}>Enter this vendor’s review draw?</Text>
+              {button('Yes', () => perform('review_draw_entry', { enter: true }), !reviewDrawActionAllowed(review, 'review_draw_entry'))}
+              {button('No', () => perform('review_draw_entry', { enter: false }), !reviewDrawActionAllowed(review, 'review_draw_entry'))}
+            </> : null}
+          </> : <>
+            {button(review.enabled ? 'Turn test draw off' : 'Turn test draw on', () => perform('review_draw_enable', { enabled: !review.enabled }), !reviewDrawActionAllowed(review, 'review_draw_enable'))}
+            <Text style={styles.vendorRaffleInfoText}>Review couple: {review.couple_name}</Text>
+            {button('Select test winner', () => perform('review_draw_select'), !reviewDrawActionAllowed(review, 'review_draw_select'))}
+            {review.selection_status === 'potential' ? <>
+              <TouchableOpacity accessibilityRole="checkbox" accessibilityState={{ checked: checksConfirmed, disabled: busy }}
+                accessibilityLabel="Confirm simulated review checks" disabled={busy} onPress={() => setChecksConfirmed(v => !v)} style={styles.qrConsentLink}>
+                <Text style={styles.qrConsentLinkText}>{checksConfirmed ? '☑' : '☐'} Confirm simulated review checks</Text>
+              </TouchableOpacity>
+              <Text style={styles.vendorRaffleInfoText}>These are test checks, not real eligibility verification.</Text>
+              <Text style={styles.profileFieldLabel}>{review.skill_question_prompt}</Text>
+              <TextInput value={skillAnswer} onChangeText={setSkillAnswer} keyboardType="number-pad" maxLength={8}
+                editable={!busy} accessibilityLabel="Review skill question answer" style={styles.textInput} />
+              {button('Verify test winner', () => perform('review_draw_verify', { checks_confirmed: checksConfirmed, skill_answer: skillAnswer.trim() }), !checksConfirmed || !skillAnswer.trim())}
+            </> : null}
+            {review.selection_status === 'verified' ? <Text style={styles.vendorRaffleInfoText}>Test winner verified. Use Send below to create the test result.</Text> : null}
+            {button('Send test result', () => perform('review_draw_send'), !reviewDrawActionAllowed(review, 'review_draw_send'))}
+            {button('Reset review test', () => Alert.alert('Reset review test?', 'Clears only this isolated review cycle and disables its test notifications. No real entries are affected.', [
+              { text: 'Cancel', style: 'cancel' }, { text: 'Reset review test', onPress: () => perform('review_draw_reset') },
+            ]))}
+          </>}
+          {review.test_notice_id ? button('View test result', () => perform('review_draw_result_get', { review_notice_id: review.test_notice_id })) : null}
+          {button('Enable test notifications on this device', () => updatePush(true))}
+          {button('Disable test notifications on this device', () => updatePush(false))}
+          {button('Refresh review test', () => { void request('review_draw_context'); })}
+          {busy ? <ActivityIndicator color={BRAND_COLOR} /> : null}
+          {feedback ? <Text style={styles.vendorRaffleInfoText} accessibilityLiveRegion="polite">{feedback}</Text> : null}
+          {error ? <Text style={styles.qrErrorText} accessibilityRole="alert">{error}</Text> : null}
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  </>;
+}
+
 function NativeHome({
   onOpenUrl,
   onOpenWebsiteBuilder,
@@ -4003,6 +4212,9 @@ function NativeHome({
   vendorDrawOpenRequestId,
   vendorDrawFocusId,
   onVendorDrawOpenRequestHandled,
+  reviewDrawNoticeRequest,
+  onReviewDrawNoticeHandled,
+  onEnableReviewPush,
 }: {
   onOpenUrl: (path: string) => void;
   onOpenWebsiteBuilder: () => void;
@@ -4035,6 +4247,9 @@ function NativeHome({
   vendorDrawOpenRequestId: number;
   vendorDrawFocusId?: string;
   onVendorDrawOpenRequestHandled: (requestId: number) => void;
+  reviewDrawNoticeRequest: ReviewDrawNotice | null;
+  onReviewDrawNoticeHandled: () => void;
+  onEnableReviewPush: (generation: number, enabled: boolean) => Promise<void>;
 }) {
   const { width: viewportWidth, height: viewportHeight, fontScale } =
     useWindowDimensions();
@@ -6475,6 +6690,8 @@ function NativeHome({
                   >
                     {displayName}
                   </Text>
+                  <NativeReviewDraw nativeSession={nativeSession} member={member} noticeRequest={reviewDrawNoticeRequest}
+                    onNoticeHandled={onReviewDrawNoticeHandled} onEnablePush={onEnableReviewPush} />
                   {usesApplePrivateRelayEmail && shouldCompleteProfile ? (
                     <Text style={styles.profileHint} accessibilityRole="text">
                       Your Apple sign-in stays the same.
@@ -10243,6 +10460,8 @@ export default function HomeScreen() {
   const [notificationIntentRevision, setNotificationIntentRevision] = useState(0);
   const [notificationRetryVisible, setNotificationRetryVisible] = useState(false);
   const [notificationDrawResult, setNotificationDrawResult] = useState<NotificationDrawResult | null>(null);
+  const [reviewDrawNoticeRequest, setReviewDrawNoticeRequest] = useState<ReviewDrawNotice | null>(null);
+  const clearReviewDrawNoticeRequest = useCallback(() => setReviewDrawNoticeRequest(null), []);
   const [vendorDrawFocusId, setVendorDrawFocusId] = useState('');
   const vendorConnectNativeUrlRef = useRef('');
   const vendorDrawCloserRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -10687,6 +10906,35 @@ true;
       void registerPushNotifications(session, { force: true, devicePushToken });
     });
     return () => subscription.remove();
+  }, [registerPushNotifications]);
+
+  const enableReviewPush = useCallback(async (expectedGeneration: number, enabled: boolean) => {
+    const session = nativeBridgeSessionRef.current;
+    const sessionGeneration = nativeSessionGenerationRef.current;
+    const isCurrent = () => nativeSessionGenerationRef.current === sessionGeneration &&
+      nativeBridgeSessionRef.current?.token === session?.token &&
+      String(nativeBridgeSessionRef.current?.user_id) === String(session?.user_id) &&
+      !logoutInFlightRef.current && !accountDeletionIsInFlight();
+    if (!hasNativeTokenSession(session) || !isCurrent()) throw new Error('Sign in again to enable review notifications.');
+    if (enabled) await registerPushNotifications(session, { force: true });
+    const permission = enabled ? await Notifications.getPermissionsAsync() : null;
+    if (!isCurrent()) throw new Error('The signed-in account changed. Open the review test again.');
+    const token = expoPushTokenRef.current;
+    if (!token || (enabled && (permission?.status !== 'granted' || pushRegistrationKeyRef.current !== `${session?.user_id}:${session?.token}`))) {
+      throw new Error('Test notifications need a registered physical device. Allow notifications in Settings and try again on your iPhone or iPad.');
+    }
+    const { response, data } = await fetchQrBingoJsonWithTimeout<{
+      ok?: boolean; error?: string; review_mode?: string; review_push_enabled?: boolean;
+    }>(QR_BINGO_SYNC_FUNCTION_URL, {
+      method: 'POST', headers: { Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+        apikey: APP_BACKEND_PUBLISHABLE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'review_draw_push_enable', review_mode: REVIEW_DRAW_MODE,
+        expected_generation: expectedGeneration, native_session: session, expo_push_token: token, enabled }),
+    }, 'Enabling review notifications took too long. Try again.');
+    if (!isCurrent()) throw new Error('The signed-in account changed. Open the review test again.');
+    if (!response.ok || data.ok !== true || data.review_mode !== REVIEW_DRAW_MODE || data.review_push_enabled !== enabled) {
+      throw new Error(data.error || 'Review notifications could not be updated. Refresh the review test and try again.');
+    }
   }, [registerPushNotifications]);
 
   const unregisterPushNotifications = useCallback(
@@ -14605,6 +14853,26 @@ true;
       setShowNativeChat(true);
       return 'handled';
     }
+    if (intent.screen === 'review_draw_result') {
+      const reviewRole = memberAccountRole(member);
+      if (!reviewRole || intent.reviewMode !== REVIEW_DRAW_MODE || !intent.reviewNoticeId) return 'unavailable';
+      const { response, data } = await fetchQrBingoJsonWithTimeout<{ ok?: boolean } & Partial<ReviewDrawNotice>>(
+        QR_BINGO_SYNC_FUNCTION_URL, {
+          method: 'POST', headers: { Authorization: `Bearer ${APP_BACKEND_PUBLISHABLE_KEY}`,
+            apikey: APP_BACKEND_PUBLISHABLE_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'review_draw_result_get', review_mode: REVIEW_DRAW_MODE,
+            native_session: session, review_notice_id: intent.reviewNoticeId }),
+        }, 'The review result took too long to load. Try again.');
+      if (!isCurrent()) return 'retry';
+      if (!response.ok || data.ok !== true) return [400, 403, 404, 410].includes(response.status) ? 'unavailable' : 'retry';
+      const notice = normalizeReviewDrawNotice(data, intent.reviewNoticeId, String(session?.user_id), reviewRole);
+      if (!notice) return 'unavailable';
+      const navigationIntent = await beginNavigationIntent();
+      if (navigationIntent === null || !isCurrent()) return 'retry';
+      dismissAnyKeyboard(); hideWebsiteBrowser(); setShowNativeQrScanner(false); setShowNativeChat(false);
+      setNotificationDrawResult(null); setReviewDrawNoticeRequest(notice);
+      return 'handled';
+    }
     const role = intent.screen === 'vendor_draw_result' ? 'vendor' : 'couple';
     if (memberAccountRole(member) !== role || !intent.drawId) return 'unavailable';
     const { response, data } = await fetchQrBingoJsonWithTimeout<{ ok?: boolean; result?: NotificationDrawResult }>(
@@ -14688,7 +14956,7 @@ true;
   }, [nativeSessionHydrated, nativeBridgeSession?.user_id, nativeBridgeSession?.token,
     nativeMember?.user_id, notificationIntentRevision, processPendingNotification]);
 
-  useEffect(() => { setNotificationDrawResult(null); }, [nativeBridgeSession?.user_id, nativeBridgeSession?.token]);
+  useEffect(() => { setNotificationDrawResult(null); setReviewDrawNoticeRequest(null); }, [nativeBridgeSession?.user_id, nativeBridgeSession?.token]);
 
   const notificationOverlay = (
     <>
@@ -14839,6 +15107,9 @@ true;
             vendorDrawOpenRequestId={vendorDrawOpenRequestId}
             vendorDrawFocusId={vendorDrawFocusId}
             onVendorDrawOpenRequestHandled={acknowledgeVendorDrawOpenRequest}
+            reviewDrawNoticeRequest={reviewDrawNoticeRequest}
+            onReviewDrawNoticeHandled={clearReviewDrawNoticeRequest}
+            onEnableReviewPush={enableReviewPush}
           />
         </View>
         {renderNativeChatOverlay()}
