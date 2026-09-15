@@ -1,5 +1,7 @@
 # App Store release readiness — September 14, 2026
 
+**Current status — September 15, 2026:** Fresh authenticated Apple inspection shows builds 2, 3 and 4 as Expired, superseding the historical build-4 availability statements below. Approved replacement build 5 is finished and its signed archive is verified. Its TestFlight upload is waiting in Expo’s free-tier submission queue; five iPhone TestFlight preparation checks passed, while WeddingWin installation/testing remains pending. See the [in-progress iPhone build 5 report](IPHONE_TESTFLIGHT_BUILD5_REPORT.md). The full acceptance matrix remains incomplete; no App Review submission has occurred.
+
 Reconciled against source `533821d` (build configuration `58e3438`) and [TERMS-POLICY-UPDATE.md](TERMS_POLICY_UPDATE_2026-09-14.md). **All fourteen screenshot images are uploaded and Apple previews checked; the documents are prepared; public listing fields and release settings are saved. Submission remains on hold for functional draw-review access, remaining declarations/business decisions and distribution-build acceptance.** Build 4 is finished and archive-verified; TestFlight upload completed at 2026-09-15 04:15:04 UTC. No App Review submission or public release is recorded.
 
 ## Prepared and verified
