@@ -2,6 +2,8 @@
 
 Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`); account facts below retain their recorded verification scope. These are controlled demonstration identities; the public vendor directory and real members were not renamed.
 
+**September 15 update:** The build 6 review-mode candidate uses a different controlled pair: **Emma and Liam Parker** (member 39086, private plan 18, review.couple@weddingwin.ca) and **Meadow & Pine Florals** (member 39087, private plan 39, review.vendor@weddingwin.ca). Their isolated fixture expires November 14, 2026. Follow [Review test mode](REVIEW_TEST_MODE.md) for simulated entry, verification, explicit Send and authenticated results with no real prize, agreement or email. These accounts do not replace the screenshot identities below. This account inventory does not establish a final-build login or physical push pass; passwords stay in private records.
+
 | Role | Display name | Demo email | Account/email status |
 | --- | --- | --- | --- |
 | Couple | John and Jane | johnandjane.demo@weddingwin.ca | Confirmed through the received email and normal flow; login and chat status returned HTTP 200 |
@@ -37,7 +39,7 @@ The earlier September 14 scene 06 captures showed the real named Yes/No question
 
 Both scene 06 images are refreshed from the approved natural prize presentation in source `533821d`, with the nonbinding explanation available under Read more. The real raw captures retain build 3 provenance; the same UI is in the build 4 candidate. The fixture entry/message safeguards are unchanged and no warning was painted out of pixels. The [manifest](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/submission/screenshots.json) owns selected images and hashes.
 
-The fixture is display/scan-only. Its Yes option does not create an entry, and it cannot validate winner selection or delivery for App Review. Its recorded expiry is September 21, 2026 at 20:47:37.829 UTC. Verify or provide authorised functional access for Apple's review and follow-up, then update the private notes to match it. Changing screenshot copy or recording a new capture does not provide functional draw-review access. The separate native API sending failure is fixed and verified as described above.
+The fixture is display/scan-only. Its Yes option does not create an entry, and it cannot validate winner selection or delivery for App Review. Its recorded expiry is September 21, 2026 at 20:47:37.829 UTC. The new Emma/Liam–Meadow & Pine pair provides a separate controlled review-mode path intended for build 6; verify it on the selected build and update the private notes before submission. Changing screenshot copy or recording a new capture does not provide functional draw-review access. The separate native API sending failure is fixed and verified as described above.
 
 All fourteen branded files across the seven planned scenes per device class are uploaded and Apple previews visually checked. Final physical TestFlight comparison and content-rights declarations remain separate checks. See the [policy update](TERMS_POLICY_UPDATE_2026-09-14.md) and [release checklist](RELEASE_READINESS.md).
 <!-- scene06-package-update:end -->
