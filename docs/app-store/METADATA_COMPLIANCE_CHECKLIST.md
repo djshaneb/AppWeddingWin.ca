@@ -1,21 +1,21 @@
 # Metadata and age-rating draft
 
-Updated September 14, 2026. **Internal submission worksheet; not saved in App Store Connect.** Approved launch choices are Canada, free download, English (Canada), iPhone/iPad, seven screenshots per class and manual release. Public-facing copy is in [listing-draft.md](APP_STORE_LISTING.md). Unresolved facts and build/test notes stay in this worksheet, not the public description or screenshots.
+Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`) and [TERMS-POLICY-UPDATE.md](TERMS_POLICY_UPDATE_2026-09-14.md). **Internal submission worksheet. Public fields, URLs, categories, Canada/free and manual release are saved; final age/privacy/content-rights answers remain unfinished.** Approved launch choices are Canada, free download, English (Canada), iPhone/iPad, seven screenshots per class and manual release. Public-facing copy is in [listing-draft.md](APP_STORE_LISTING.md). Unresolved facts and build/test notes stay in this worksheet, not the public description or screenshots.
 
 ## Fields requiring completion
 
 | Field | Current position | Remaining action |
 | --- | --- | --- |
-| App identity | WeddingWin; bundle ca.weddingwin.app; existing Store record previously named WeddingWin Canada | Confirm current seller-owned record, display name and SKU without creating a duplicate |
-| Current local/device build | Development-signed 1.0.0 (3), source `faf553f`; installed and launched on the iPhone | This is not a processed App Store/TestFlight release candidate |
-| Historical Store build | EAS reports a finished Store build 1.0.0 (3), September 2, source `6840adb` | Predates current changes; verify highest uploaded/processed build in App Store Connect and select a fresh approved candidate with an accepted build number |
-| Categories | Lifestyle primary, Business secondary are draft defaults | Preserve existing record values until verified |
+| App identity | WeddingWin Canada; Apple ID 6806603211; ca.weddingwin.app; SKU WEDDINGWIN-IOS-CA-20260829; seller Shane Blair | Existing authenticated record verified; version 1.0 Prepare for Submission |
+| Current release candidate | Production build 4 FINISHED from clean `533821d`; configuration 4 committed as `58e3438` | EAS e73f9773-b079-4b5c-a462-883f56e9fb96; archive verified, upload completed, Apple Validated/Ready to Submit; WeddingWin Internal QA assigned (one tester), What to Test saved; selected/saved for version 1.0; physical installation/acceptance pending |
+| Highest uploaded build | App Store Connect shows 1.0.0 (4), Validated/Ready to Submit; SDK 23A339, iPhone/iPad and production push | Assigned to WeddingWin Internal QA (one existing tester); What to Test saved. User asked to install build 4; physical acceptance pending |
+| Categories | Lifestyle primary, Business secondary | Saved and verified after reopening App Information |
 | Copyright | Public business spelling is Wedding Win Inc. | Owner confirms rights holder and final 2026 copyright entry |
-| Review contact | Not established by this audit | Owner supplies name, email and telephone securely |
-| Price/territory/language | Free / Canada / en-CA | Apply to the existing Store record as preparation proceeds |
-| Release option | Manual | Retain manual release after approval; do not publish automatically |
+| Review contact | Saved privately in Apple and visually confirmed after reload | No private values recorded in package files |
+| Price/territory/language | Free / Canada only / en-CA | Price and country settings saved and verified; 1 available / 174 not available |
+| Release option | Manual, saved and verified | Retain manual release; obtain separate launch approval |
 | Artwork/content rights | Existing assets and vendor content | Verify rights and review the final seven-scene design |
-| Public links | Support, privacy, privacy-request, terms and rules reachable | Recheck final mobile routes and align stale privacy QR wording |
+| Public links | Support/privacy routes checked; September 14 policy pages published and text verified | Recheck final mobile routes and operational privacy/support handling |
 | Encryption | Current source sets ITSAppUsesNonExemptEncryption to false | Confirm final binary/dependencies support that classification; no configuration change authorised by this document |
 
 ## Age-rating questionnaire
@@ -50,14 +50,12 @@ Apple's chance-activity screen uses None/Infrequent/Frequent for Contests and Si
 
 QR Bingo scanning records progress. Optional entry follows a prior agreement and a named vendor Yes/No prompt during authorised scanning, including early access when enabled. Do not reintroduce show-only claims or a second disclosure form in listing/review copy.
 
-The public policy/rules assign sponsorship solely to each vendor and expressly exclude Wedding Win as sponsor. Apple's guideline 5.3.1 requires developer sponsorship of sweepstakes/contests; 5.3.2 requires rules and Apple's non-involvement statement in the app. Confirm the real seller/sponsor/operator arrangement and promotion classification before submission. A cosmetic wording change is not evidence of a changed operating arrangement. [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/#gaming-gambling-and-lotteries)
+The current rules describe Wedding Win as the developer and a limited platform sponsor for the in-app workflow, while the named vendor is the vendor-promotion sponsor, operator and prize provider. Apple's guideline 5.3.1 requires developer sponsorship of sweepstakes/contests; 5.3.2 requires rules and Apple's non-involvement statement in the app. Confirm the real seller/sponsor/operator arrangement and promotion classification before submission. The policy update did not settle this business question. [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/#gaming-gambling-and-lotteries)
 
-The live privacy policy retains show-only/older acknowledgement language, while the rules require vendor-specific information in the entry flow that the current simple modal omits. Resolve the actual disclosure placement without silently weakening rules or expanding the requested Yes/No prompt. See the [unpublished wording proposal](PRIVACY_COPY_ALIGNMENT_DRAFT.md) and [privacy and age audit](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/package-review/privacy-and-age-audit.md).
+The approved policy rollout supersedes the older acknowledgement-wording and missing-prize-detail findings. The production Yes/No prompt now contains a short recorded prize summary and value, with full conditions and dates available through Read more. Source `648e60f` removes only the explanatory paragraph from the pre-scan screen; it preserves agreement controls and links. Existing attendance-related wording and early-entry behavior were deliberately left unchanged. See the [published policy update](TERMS_POLICY_UPDATE_2026-09-14.md). The display-only screenshot fixture cannot establish functional entry, winner or notice behavior.
 
 The app download is free; event admission can be paid. Inventory reachable ticketing, vendor subscriptions, promoted placements and other checkout routes. Classify what is purchased and where it is consumed before deciding payment treatment and privacy answers.
 
 The approved notification work is implemented, deployed and locally verified. Natural worker execution and a direct push-provider ticket/receipt passed. Visible banner/sound/tap, automatic new-message/draw-event delivery and production TestFlight acceptance remain open. Keep feature descriptions accurate without presenting pending tests as passed. See [verification evidence](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/push-test-2026-09-14/verification-summary.json), [historical build evidence](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/eas-build-history.json), the [privacy matrix](APP_PRIVACY_ANSWERS.md) and [release checklist](RELEASE_READINESS.md).
 
 This worksheet does not authorize further code/configuration changes or public release.
-
-Canonical package source: [metadata-age-rating-draft.md](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/metadata-age-rating-draft.md). Repository links above are adapted for this location.

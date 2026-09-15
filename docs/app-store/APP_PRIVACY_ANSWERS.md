@@ -1,16 +1,16 @@
 # App Privacy draft matrix
 
-Updated September 14, 2026. **Internal submission worksheet; not submitted to Apple.** This covers native features, embedded WeddingWin/website-builder pages and their service providers. Observed collection is separated from purposes and provider practices that still need confirmation.
+Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`) and [TERMS-POLICY-UPDATE.md](TERMS_POLICY_UPDATE_2026-09-14.md). **Internal submission worksheet; not submitted to Apple.** This covers native features, embedded WeddingWin/website-builder pages and their service providers. Observed collection is separated from purposes and provider practices that still need confirmation.
 
-The approved notification changes are implemented and deployed. Development-signed iPhone version 1.0.0 (3), source `faf553f`, is installed. Local verification and a direct push-provider receipt passed; visible phone behavior, automatic new-message/draw delivery and final TestFlight acceptance remain pending. These testing limits do not remove implemented collection from the inventory. See [verification evidence](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/push-test-2026-09-14/verification-summary.json).
+The approved notification changes are implemented and deployed. Their earlier local verification and direct push-provider receipt passed; visible phone behavior, automatic new-message/draw delivery and final TestFlight acceptance remain pending. The latest candidate `533821d` includes the later policy, couple-screen and approved demo changes. Its production build 4 is finished and archive-verified, with TestFlight upload completed; the earlier development install is not TestFlight evidence. These limits do not remove implemented collection from the inventory. See [notification evidence](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/push-test-2026-09-14/verification-summary.json) and the [current policy/build record](TERMS_POLICY_UPDATE_2026-09-14.md).
 
 ## Top-level fields
 
 | Field | Draft |
 | --- | --- |
 | Does the app collect data? | Yes |
-| Privacy Policy URL | https://www.weddingwin.ca/about/privacy — public and app-specific; wording alignment noted below |
-| Privacy Choices URL | https://www.weddingwin.ca/privacy-request — public request route |
+| Privacy Policy URL | https://www.weddingwin.ca/about/privacy — published, text verified and URL saved in App Store Connect |
+| Privacy Choices URL | https://www.weddingwin.ca/privacy-request — public request route; URL saved in App Store Connect |
 | Data linked to the user | Yes for the account, contact, messages, QR, consent and push records below |
 | Tracking | Unresolved until the final production network/provider inventory is complete; do not infer No from native code alone |
 
@@ -49,8 +49,8 @@ The deployed migration schedules daily removal of notification events more than 
 
 - QR camera images are decoded on device. The scanner transmits matched vendor/account/event information rather than uploaded camera frames.
 - Contact details and the QR Bingo agreement come before scanning. The agreement receipt is recorded server-side. A profile alone is not proof that someone accepted it.
-- During organiser-authorised scanning, an enabled vendor can display the simple Yes/No entry prompt. Yes records that named vendor entry under the prior agreement; No retains scan progress without entering. No second agreement form is presented in the prompt.
-- Vendor access is scoped to authorised entries for that vendor. Scanning by itself does not share an entrant list with that vendor.
+- During organiser-authorised scanning, an enabled production vendor can display the named Yes/No entry prompt with a short recorded prize summary and value; Read more exposes full conditions and dates. Yes records that named vendor entry under the accepted current agreement; No retains scan progress without entering. No second agreement form is presented in the prompt. The isolated screenshot fixture is display-only and does not provide a working Yes/entry path.
+- Vendor draw exports remain scoped to authorised entries for that vendor. Scanning by itself does not share an entrant list. Separately accepted ticket-sharing disclosures cover attending vendors/exhibitors and sponsors, including sponsors without a booth; the policy update did not widen draw exports or create retroactive consent.
 - The administrator master export uses recorded participation evidence, deduplicates accounts across eligible events and excludes known QA data. It is protected administrative access, not a vendor-wide contact list. Export data is snapshotted temporarily; the snapshot expires and scheduled cleanup removes expired snapshot data.
 - A card reset resets current scans and vendor entries while preserving relevant historical records. It is not account deletion and does not erase agreement history.
 - Account deletion is available in About. Conversations close and account-owned active data is removed or disabled as applicable; shared recipient history and limited audit/security/legal records may remain under the retention policy. Do not promise universal immediate erasure.
@@ -59,23 +59,21 @@ The deployed migration schedules daily removal of notification events more than 
 
 ## Public-policy alignment and final evidence
 
-The public policy is live. A fresh September 14 read confirms its September 1 text still describes QR entry as show-only and refers to an older draw-specific acknowledgement. Align those passages with the September 11 authorised scanning policy and agreement-before-scan/simple Yes/No behavior. The rules also require vendor-specific disclosures in the entry flow that the simple native modal does not show. The [unpublished wording proposal](PRIVACY_COPY_ALIGNMENT_DRAFT.md) does not resolve every rules issue. Preserve truthful sharing and retention; no replacement is published by this document.
+The September 14 Terms, Privacy, rules amendment and ticket provisions are published and their text was verified. The current app displays recorded prize details with expansion while keeping the named Yes/No choice. Those changes supersede the old acknowledgement-wording and missing-prize-detail findings in the [historical wording proposal](PRIVACY_COPY_ALIGNMENT_DRAFT.md). The subsequent couple-screen cleanup removed only an explanatory paragraph; agreement controls, links and prospective acceptance remain. Existing attendance-related wording and early-entry behavior were left unchanged as requested. Publication does not settle the remaining provider, purpose, tracking or retention decisions.
 
 A fresh public HTML read found Meta Pixel bootstrap code on the privacy and draw-rules pages. This establishes website code presence, **not** transmission or tracking in the final app. The native WebView uses a private session and disables shared/third-party cookies, but allows JavaScript and HTTPS subframes. No ATT implementation was found in inspected native source/config.
 
 If app-functionality web content or a provider performs Apple's defined tracking, ATT permission must precede it. A website agreement or cookie choice cannot replace ATT. If tracking is absent, record evidence for that conclusion rather than adding a prompt solely because a pixel string exists. [Apple tracking and web-view guidance](https://developer.apple.com/app-store/user-privacy-and-data-use/)
 
-The public policy/rules assign vendor-draw sponsorship to the vendor and expressly exclude Wedding Win. This conflicts with Apple's developer-sponsorship requirement for sweepstakes/contests unless the actual operating arrangement and promotion classification establish an appropriate resolution. It is an owner decision, not a cosmetic copy change. See the [privacy and age audit](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/package-review/privacy-and-age-audit.md).
+The current rules identify Wedding Win as the developer and a limited platform sponsor for the in-app workflow, and the named vendor as the vendor-promotion sponsor, operator and prize provider. Confirm the actual Store developer entity and arrangement against Apple's developer-sponsorship requirement before submission. The policy update did not resolve this owner/business decision. See the [current submission review](APPLE_SUBMISSION_REVIEW.md).
 
-The business name appears publicly as **Wedding Win Inc.** The public support address is **info@weddingwin.ca**. These are public-page observations, not proof of App Store seller ownership. [Privacy policy](https://www.weddingwin.ca/about/privacy), [support](https://www.weddingwin.ca/about/contact).
+The business name appears publicly as **Wedding Win Inc.**, and the public support address is **info@weddingwin.ca**. The authenticated App Store record displays **Shane Blair** as seller. That observed distinction still needs to be reconciled with the actual promotion/copyright arrangement; no corporate ownership conclusion is inferred. [Privacy policy](https://www.weddingwin.ca/about/privacy), [support](https://www.weddingwin.ca/about/contact).
 
 Before submitting:
 
 - [ ] Complete the exact-build and embedded-page network/provider inventory.
 - [ ] Approve data purposes, linked status, any tracking answer and associated consent requirements.
 - [ ] Reconcile ticket, search, support, diagnostic and media data with actual production use.
-- [ ] Approve operational retention/deletion handling and any public-policy alignment.
+- [ ] Approve operational retention/deletion handling and determine whether the final provider/purpose inventory requires any further policy update.
 - [ ] Verify public privacy-request access and end-to-end account deletion on the selected build.
 - [ ] Compare final App Store answers with the selected signed archive's privacy report/manifests and actual production settings. Required-reason API entries in `app.json` alone are not a complete data-collection declaration.
-
-Canonical package source: [privacy-draft-matrix.md](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/privacy-draft-matrix.md). Repository links above are adapted for this location.

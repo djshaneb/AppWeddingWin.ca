@@ -1,6 +1,6 @@
 # Seven branded App Store screenshots
 
-Updated September 14, 2026. **Fourteen branded drafts prepared; all seven planned scenes captured per device class.** The images remain preparation assets pending final submitted-build, rights and Store-preview approval.
+Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`). **All fourteen branded images are uploaded and Apple previews checked, including both refreshed scene 06 captures.** The manifest records the selected files and their provenance. Final physical TestFlight comparison and content-rights declarations remain separate.
 
 ## Deliverables
 
@@ -15,20 +15,24 @@ Use WeddingWin coral/pink, a light background, short headlines, consistent typog
 | 3 | Make your wedding website | Website builder | Finished-looking fictional example using current tools; no private details or upgrade screen. |
 | 4 | Keep conversations close | Private Messages | Approved fictional conversation; no moderation test state. Text only unless final-build photo availability is verified. |
 | 5 | Scan. Explore. Play. | QR Bingo progress | Several participating tiles and truthful progress; avoid a blank camera as the main image. No simulation or contact data. |
-| 6 | Your choice to enter | Named vendor Yes/No | Actual named question from the approved nonbinding fixture; test labels remain. No only, zero entries. This image is not proof of a working App Review entry or winner flow. |
+| 6 | Your choice to enter | Named vendor Yes/No | Current named question, short prize summary and full-details control from the approved display-only fixture. Use approved fictional copy and preserve its safeguards/disclosure. No only, zero entries; this does not verify functional App Review entry/winner access. |
 | 7 | Get ready for the wedding show | Vendor home | Cedar & Light Photography's actual vendor home with account, message and draw tools. This follows the original vendor-dashboard scene without claiming an enabled draw. |
 
-About/privacy is a reserve scene. Unimplemented notification screens are excluded.
+About/privacy is a reserve scene. Notification banners are outside this seven-scene story; notification implementation and final delivery testing are tracked separately.
 
 ## Current material pass
 
-Fourteen branded drafts are prepared and checked against raw-source hashes: iPhone and iPad scenes01–07. Scenes06 and07 use existing build3 simulator captures; scenes01–05 retain their build2 provenance. Scene07 shows Cedar & Light Photography's ordinary vendor home, without claiming an enabled draw. Corrected iPad03 shows the confirmed demo email. Final TestFlight and Store-preview acceptance remain pending.
+Fourteen branded files are prepared with raw-source hashes. The earlier scenes 06/07 used build 3 simulator captures; scenes 01–05 retain build 2 provenance. Scene 07 shows Cedar & Light Photography's ordinary vendor home without claiming an enabled draw. Corrected iPad 03 shows the confirmed demo email. Check the [current manifest](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/submission/screenshots.json) for selected replacements rather than assuming a file count means every scene is current.
 
-Both scene06 slots are complete: John and Jane see the genuine named Willow & Bloom question, with existing test labels preserved. The [approved demo-only scope](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/screenshots/demo-draw-capture-scope.md) was implemented without changing native UI or rewriting old offers. Scene06 is a nonbinding, display/scan-only synthetic fixture: the actual named Yes/No question was captured on both devices, No was used, and live checks confirmed zero entries, draws and deliveries. It does not establish functional Yes/entry/winner acceptance for App Review. The fresh fixture expires 2026-09-21T20:47:37.829Z (at most seven days); verify or provision appropriately authorized review access for Apple's later review and follow-up. Native app code was unchanged for these captures. Eight photographer messages were saved through normal website forms and verified by native reading; iPad scene04 shows all eight and iPhone shows the latest five with canonical photos. Native SEND still returns HTTP403 and remains a separately scoped release blocker.
+The earlier scene 06 captures are preserved as historical evidence. The selected replacements show the approved natural floral title and description, with the nonbinding explanation under Read more. These are real captures of source `533821d`, retaining actual build 3 provenance; the same interface is included in build 4. Entry/message safeguards and the full disclosure remain unchanged, and no warning was painted out of pixels.
 
-## Existing asset audit
+The display/scan-only fixture supports the named prompt and No path, with zero entries, draws and deliveries recorded in the earlier verification. It does not provide functional Yes entry or winner review. Its recorded expiry is September 21, 2026 at 20:47:37.829 UTC. Functional App Review access remains a separate requirement.
 
-All 53 files under `assets/app-store/screenshots` have August 28, 2026 filesystem dates:
+Eight photographer messages were saved through normal website forms and verified by native reading. iPad scene 04 shows all eight; iPhone shows the latest five with canonical photos. The receiving-flag fix is now deployed. Two-way normal authenticated API sends/delivery/read passed and both accounts see ten messages, with the original eight unchanged. Scene 04 truthfully retains its earlier eight-message capture; screenshot content does not need to include every later test message. See [two-way chat verification](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-finish-sept14/demo-chat-send-verification.json).
+
+## Original asset audit — historical
+
+The original audit recorded 53 files under `assets/app-store/screenshots` with August 28, 2026 filesystem dates:
 
 | Files | Measured size | Decision |
 | --- | --- | --- |
@@ -46,11 +50,11 @@ Six September 14 native-feedback images in the task workspace are also 368×800 
 
 - [ ] Record final source revision and processed build.
 - [ ] Verify iPad layout, keyboards, modals, web views and overlay cleanup first.
-- [ ] Use marketing-safe fictional content and establish rights for all visible images. Do not edit away review-fixture warnings.
+- [ ] Use approved fictional content and establish rights for all visible images. Capture any approved demo presentation change in the real interface; do not edit away fixture disclosures in pixels.
 - [ ] Verify the scenes reflect prior agreement, authorized early entry, simple Yes/No, named repeat scans and saved draw feedback.
 - [ ] Capture full-resolution clean originals with consistent appearance, status bar and text size.
-- [ ] Add approved branding; inspect readability at Store preview size.
-- [x] Validate format, pixels, opacity, seven images per class and order against actual files and source provenance.
-- [ ] Review the artwork, upload and inspect Store previews, and include the finished set in the completed package.
-
-Canonical package source: [screenshot-shot-list.md](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/screenshot-shot-list.md). Repository links above are adapted for this location.
+- [x] Approved branding is applied and readability checked in Apple previews.
+- [x] Original fourteen-file format, dimension, opacity and source/provenance checks passed.
+- [x] Both scene 06 replacements are visually checked, selected and included in current artwork/hash validation.
+- [x] Artwork uploaded: 7/10 in the 6.9-inch iPhone slot and 7/10 in the 13-inch iPad slot, exact 01–07 order; Apple previews visually checked.
+- [ ] Complete final physical TestFlight comparison.

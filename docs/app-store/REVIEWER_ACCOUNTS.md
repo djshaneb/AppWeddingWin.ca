@@ -1,73 +1,43 @@
-# App Review account preparation
+# Fictional screenshot accounts
 
-Status: **CODE-OWNED CHECKLIST FINAL — credentials and exact-build operational verification remain private release tasks.**
+Reconciled September 14, 2026 against source `533821d` (build configuration `58e3438`); account facts below retain their recorded verification scope. These are controlled demonstration identities; the public vendor directory and real members were not renamed.
 
-WeddingWin has different couple and vendor paths. Use one fictional account for each role. No username, password, token, phone number, or private reset procedure belongs in this file or Git.
+| Role | Display name | Demo email | Account/email status |
+| --- | --- | --- | --- |
+| Couple | John and Jane | johnandjane.demo@weddingwin.ca | Confirmed through the received email and normal flow; login and chat status returned HTTP 200 |
+| Vendor | Willow & Bloom Floral Studio; contact Alex Morgan | willowandbloom.demo@weddingwin.ca | Dedicated inbox exists; app email update/verification remains pending |
+| Ordinary demo vendor | Cedar & Light Photography | hello.cedarandlight@weddingwin.ca | Manually created through Members; normal login/chat status HTTP 200; no mailbox created |
 
-## Credential routing
+The two inboxes were created using WeddingWin's existing admin → Emails → Email Accounts → Add/Edit Email Addresses sign-in. The hosting account does not expose the Forwarders feature, so these are separate mailboxes, not aliases. Each has the default 1 GB quota and a generated strong password. Access them using cPanel's **Check Email** control; mailbox passwords can be managed there. No existing mailboxes, routing, or DNS settings were changed.
 
-- Primary couple account, member `38971`: enter its username and password only in App Store Connect's dedicated sign-in fields.
-- Additional vendor account, member `38970`: replace the single `[[PRIVATE_VENDOR_CREDENTIALS]]` insertion in `APP_REVIEW_NOTES.md` only in App Store Connect immediately before submission. Never save the completed notes in the repository.
-- Review contact: enter a monitored person's name, email, and international-format phone number in App Store Connect's Review Contact fields.
-- Source of truth: team password manager. `docs/app-store/private-reviewer-credentials.md` is local-only, ignored, and must remain untracked.
+App account names and the isolated couple website's names were updated and checked against protected-field hashes. Account status, fixture isolation, outbound draw-email suppression and historical draw offers were preserved. The couple completed genuine email confirmation through the normal flow. The vendor email change is still pending because the private vendor account's current status is rejected by the email-update request; that issue remains unresolved.
 
-## Prepared isolated fixture
+Cedar & Light Photography is now a verified ordinary demo account (active status 2, existing free chat-enabled plan 17). It is distinct from the preserved private Willow & Bloom fixture. The Members form accepted the demo email without creating a mailbox. No welcome email or billing was added. Ever After Music remains artwork and conversation copy only; no account is provisioned.
 
-Vendor `38970` and couple `38971` are assigned to `app-review-weddingwin-2026-38970`. Couple `38971` displays the fictional first name `App Review`; every profile/contact value used in its draw entry must remain fictional. The event has isolated fictional QR scan/progress and optional vendor-draw state. The fixture demonstrates the workflow without a real prize or outbound email and cannot change production-event data. Vendor `38970` must review and accept Official Rules version `2026-09-01-in-person-entry`, including the named-vendor contact-use and marketing responsibilities, and enable the fixture before the reviewer walkthrough.
+## Private access handling
 
-Use only `assets/app-store/sample-qr-review-vendor-38970.png`, payload `https://www.weddingwin.ca/qr?vendor_id=38970`. Do not send the legacy `23608` QR to App Review because it points at a production-side vendor.
+Keep passwords, tokens and private review-contact values out of this repository. Enter verified credentials only in App Store Connect's private sign-in/review fields. The public-looking fictional email addresses below are not proof of a working mailbox or reviewer login.
 
-The vendor is intentionally private/nonpublic. Pair-scoped chat access is service-managed and currently expiry-gated. Because Apple requires working review access that does not expire, submission is blocked until operations extends or replaces that grant so every documented feature remains available throughout review, monitors it daily, and retains a manual post-review revocation plan. Do not solve this by publishing the vendor.
+## Current demo preparation status
 
-## Exact-build account gate
+- John and Jane: genuine email confirmation complete; normal login and chat status returned HTTP 200.
+- Cedar & Light Photography: ordinary demo account created through the normal admin Members flow; normal login and chat status returned HTTP 200. Normal app login/list/read returned the original eight-message conversation. The receiving-flag fix is now deployed as `bd-chat-sync` version 56. Controlled normal authenticated API sends/delivery/read returned HTTP 200 in both directions; both accounts now see ten messages and the original eight are unchanged.
+- No Cedar mailbox was created. Its entered demo email is not evidence that an inbox exists or that email delivery works.
+- Willow & Bloom: preserved private review fixture; its app email update/verification remains unresolved. Do not treat Cedar's successful account check as proof that Willow's access changed.
+- Photos: clean JPEG exports of the unchanged Willow and Cedar artwork, plus the existing couple website photo, uploaded successfully in Media Manager. Profile logo updates and canonical local imports are verified for all three. Normal native refresh returns the Cedar and couple photos; both final chat captures visibly show them.
+- Conversation: eight alternating photographer messages were saved through normal website forms, reloaded in order, and returned by normal native reading. The floral display-only fixture is separate from these saved messages. The two-way normal API send test now passes; physical TestFlight messaging remains to be checked.
+- Corrected iPad website and both chat captures are ready as branded simulator drafts. All eight messages are visible on iPad, with the latest five visible on iPhone. Apple previews are checked; final physical TestFlight acceptance remains pending.
 
-- [ ] Both credentials work from a clean install of the processed TestFlight build with no one-time code, CAPTCHA, owner device approval, expired consent, or manual activation step.
-- [ ] Neither account is scheduled for inactivity cleanup, password rotation, account-access expiry, or pair-access expiry during review.
-- [ ] Both profiles contain fictional/test-safe names, email, phone, images, business details, and a future test wedding date; no real person's data appears.
-- [ ] Couple uses the normal couple plan (`18` in the audited backend). Vendor uses the actual release vendor plan selected by the owner from the supported plan set (`17`, `27`, or `28`).
-- [ ] Signed-out private-browser checks show vendor `38970` absent from directory/search, direct public profile browsing, sitemap, featured content, event rosters, search-engine surfaces, and marketing feeds.
-- [ ] Private status does not prevent vendor login, dashboard, or text chat described to Apple.
-- [ ] Login and native session creation pass on physical iPhone and iPad for both roles.
+The earlier PNG acceptance error was resolved by standard JPEG exports; no image-upload issue remains open for these three profiles. See [canonical photo imports](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/demo-avatars-canonical.json) and [normal native refresh](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/demo-avatars-native-refresh.json). The earlier [native send proposal](NATIVE_MESSAGE_PERMISSION_FIX.md) is superseded by the deployed fix and [two-way chat verification](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-finish-sept14/demo-chat-send-verification.json).
 
-## Controlled messaging state
+<!-- scene06-package-update:start -->
+## Display-only draw capture and current refresh
 
-- [ ] Start with one open, unreported fictional text conversation between the two accounts.
-- [ ] App→website text and the supported active-couple-website→private-vendor-app reply pass on the exact TestFlight build and persist after reload/sync.
-- [ ] The Attach control appears only when the explicit backend rollout gate is enabled. On a physical iPhone, tap Attach, confirm the iOS system picker supports cancel and selection without a broad photo-library permission prompt, choose a fictional non-sensitive photo, and verify the app resizes/re-encodes it as a bounded JPEG and the attachment persists in both app and website after reload/sync.
-- [ ] Confirm the backend rejects invalid type/base64/full decode, decoded-size, image-dimension, and rollout-cutoff cases. Do not describe this technical validation as automated semantic image moderation.
-- [ ] Seed a separate disposable thread for Report because reporting closes the current conversation and removes the composer.
-- [ ] Describe the moderation boundary accurately for text and photos: the current thread closes, the app suppresses the reported member, retained conversation/media follows the approved finite schedule, and a thread created through an external website entry point may exist until synchronization discovers and closes it.
-- [ ] Staff can see/respond to a report, reset the disposable state, and monitor the published safety contact during review.
+The earlier September 14 scene 06 captures showed the real named Yes/No question in the isolated Willow fixture on both devices. No was used; read-only checks confirmed zero entries, draws and deliveries. The native app was unchanged for those earlier captures. They predate the later prize-summary rollout and are historical previews.
 
-Current evidence: a controlled Simulator/live-backend text round trip passed, including active couple website→private vendor app. The inactive vendor's website send was correctly rejected. Simulator testing also confirmed system-picker selection without a broad permission prompt plus captioned and photo-only delivery. The physical TestFlight/iPhone picker and attachment matrix remains pending; treat Simulator evidence as preparation only.
+Both scene 06 images are refreshed from the approved natural prize presentation in source `533821d`, with the nonbinding explanation available under Read more. The real raw captures retain build 3 provenance; the same UI is in the build 4 candidate. The fixture entry/message safeguards are unchanged and no warning was painted out of pixels. The [manifest](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/submission/screenshots.json) owns selected images and hashes.
 
-## QR Bingo booth-visit and vendor-draw state
+The fixture is display/scan-only. Its Yes option does not create an entry, and it cannot validate winner selection or delivery for App Review. Its recorded expiry is September 21, 2026 at 20:47:37.829 UTC. Verify or provide authorised functional access for Apple's review and follow-up, then update the private notes to match it. Changing screenshot copy or recording a new capture does not provide functional draw-review access. The separate native API sending failure is fixed and verified as described above.
 
-- [ ] Reset couple `38971` so vendor `38970` is unscanned and has no current optional-draw entry/selection; reset the vendor fixture to a clean, enabled, rules-accepted state.
-- [ ] Printed QR permission allow/deny/re-enable, successful scan, duplicate handling, isolated progress, and wrong/invalid-code behavior pass on a physical iPhone.
-- [ ] The scan records booth-visit progress only and never creates a draw entry automatically. Declining the separate optional offer leaves no entry.
-- [ ] The optional entry requires opening Official Rules version `2026-09-01-in-person-entry`, all eligibility confirmations, and explicit consent to share the entrant's name, email address, phone number if provided, wedding date if provided, and entry/consent evidence with vendor `38970` for this draw and that vendor's wedding-related offers or promotions. In production, the eligible couple must attend the wedding show, visit that vendor's booth, scan its QR code, and then separately choose whether to enter; the QR flow is the digital replacement for a paper ballot. Each eligible couple may receive only one valid entry per named vendor draw. General admission is free when obtained in advance while the free allocation remains; VIP admission is paid; anyone without an advance general ticket must purchase admission at the door; paid admission does not add a chance or improve odds; and no purchase from the named vendor is required. The isolated reviewer fixture emulates the in-show booth scan without changing production data.
-- [ ] The vendor can view settings and entry count; accept version `2026-09-01-in-person-entry`; enable/disable the fixture; download the authenticated, exact-vendor/event entrant-administration CSV; and select only one potential winner after entries close/early-review permission applies. Confirm the CSV contains Event, Vendor, Participant Reference, Name, Email, Phone, Wedding Date, Entered At, Entry Method, Rules Version, Entrant Eligibility Attested, Selection Status, and Marketing Consent; Entry Method is `QR scan opt-in`; every identity/profile value is fictional; Marketing Consent says `Yes - named vendor draw entry and wedding-related marketing`; another vendor cannot obtain it; and a legacy entry is excluded until fresh consent under the current version.
-- [ ] After selection, the UI shows Vendor verification required. Before confirm/disqualify, the vendor independently verifies eligibility, attests that it obtained the entrant declaration/release outside Wedding Win, enters the correct mathematical skill-testing answer, and records a nonblank evidence note stating date, method, and non-sensitive reference. Wedding Win records that vendor attestation only; it does not perform or certify the vendor's eligibility review, declaration/release, or prize-fulfilment work. Fulfilment notices and prize-claim controls remain blocked until verification completes. The isolated fictional App Review fixture suppresses outbound email and awards no prize. In a separate controlled production fixture, verify that a fully verified winner sends through each configured vendor/couple channel and is not unconditionally suppressed.
-- [ ] Public rules identify the named vendor as vendor-promotion sponsor, contest operator, and prize provider solely responsible for lawful terms, eligibility and winner-release decisions, the skill-testing question, prize restrictions, taxes, claims, disputes, and fulfilment; Wedding Win Inc. as app developer, limited platform sponsor of the in-app workflow, and technical administrator that is not the named vendor-promotion sponsor/operator/prize provider and remains responsible for its own technology, privacy, security, administrative conduct, and non-waivable duties; and Apple as not a sponsor or participant.
-- [ ] Owner/legal confirms the narrow Wedding Win platform-sponsor role reflects the actual workflow and satisfies Apple Guideline 5.3.1; it is not used to imply that Wedding Win supplies, guarantees, insures, or fulfils the named vendor's prize.
-
-Current evidence: backend replay for the prepared QR is idempotent. This does not replace printed-camera, exact-build, optional-entry/vendor-draw, rules, selection/verification, or public-disclosure verification.
-
-## Push and deletion state
-
-- [ ] Couple account registers a TestFlight push token and receives one generic notification without message text in foreground, background, and terminated states.
-- [ ] Sign-out unregisters the device token; reinstall/rotation and invalid-token handling pass.
-- [ ] Do not invite Apple to delete either standing account. Maintain a fresh disposable email account and, if needed, a separate Apple-linked disposable account through the private reset process.
-- [ ] Exact-build deletion removes login/account-owned data, closes related conversations, rejects new sends, and leaves only the surviving participant's read-only shared history and approved moderation/legal records under the published retention schedule.
-- [ ] Physical Apple reauthentication/revocation, provider stores, backups, errors, and the public signed-out request path pass.
-
-Current evidence: disposable email members `38978`/`38979` passed the deployed two-party deletion-preservation design. Their credentials no longer work. This does not complete the physical Apple/provider/backup/TestFlight gate.
-
-## Review-window operations
-
-- [ ] Recheck both credentials, account roles, pair authorization, isolated event, QR reset, normal chat, and backend availability immediately before submission and daily while in review.
-- [ ] Monitor the Review Contact and `info@weddingwin.ca`; document who can reset messages, scans, report/block state, and disposable accounts without touching production users.
-- [ ] Do not add either review account to newsletters or any real promotional campaign. A current-version fixture entry necessarily carries consent for vendor `38970` to use the fictional contact data for the draw and its wedding-related marketing; keep that data fictional and verify the consent marker without sending a campaign.
-- [ ] Do not exempt review accounts from authentication, authorization, moderation, privacy, entry-consent, eligibility, draw-limit, winner-verification, or sponsor/rules controls. Only the isolated early-draw and outbound-email-suppression fixture behavior may differ from production.
-- [ ] After review ends, revoke the special pair grant and rotate/remove credentials under the private operational procedure.
+All fourteen branded files across the seven planned scenes per device class are uploaded and Apple previews visually checked. Final physical TestFlight comparison and content-rights declarations remain separate checks. See the [policy update](TERMS_POLICY_UPDATE_2026-09-14.md) and [release checklist](RELEASE_READINESS.md).
+<!-- scene06-package-update:end -->
