@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 function invitationFixture() {
-  const nodes = Object.fromEntries(['vendorDrawEnter', 'vendorDrawDecline', 'vendorDrawModal', 'vendorDrawDisclosure', 'vendorDrawPrivacy', 'vendorDrawTerms', 'vendorDrawRules', 'vendorDrawTitle', 'vendorDrawVendor', 'vendorDrawDescription', 'vendorDrawStatus'].map(key => [key, { ...node(), focus() {} }]));
+  const nodeDeclarations = section(website, "    const vendorDrawModal = document.getElementById('vendorDrawModal');", '    function cleanPromotionText');
+  const nodes = Object.fromEntries([...nodeDeclarations.matchAll(/const ([A-Za-z0-9_]+) = document[.]getElementById\(/g)]
+    .map(match => [match[1], { ...node(), focus() {} }]));
   nodes.vendorDrawModal.hidden = true;
   const calls = [], timers = [];
   const context = vm.createContext({
@@ -25,6 +27,7 @@ function invitationFixture() {
   vm.runInContext(section(website, '    function resetVendorDrawChoice()', '    function showVendorDrawStatus('), context);
   vm.runInContext(section(website, '    async function enterVendorDraw()', "    vendorDrawDecline.addEventListener"), context);
   const offer = { vendor_business_name: 'Sound of Harmony', prize_title: 'Test prize',
+    prize_description: 'Offline test only — no real prize. Valid only in this unit test.', prize_approx_value_cad: 250,
     consent_version: canonical().rules_version, vendor_offer_version: '2026-09-11T12:00:00Z',
     terms_url: canonical().official_rules_url, prize_count: 1, exclude_previous_winners: true,
     participant_responsibility_disclosure: 'I scanned this vendor QR code during authorized scanning.',
@@ -39,6 +42,11 @@ test('website shows named Yes/No invitation and No preserves scan without submit
   assert.equal(f.nodes.vendorDrawTitle.textContent, 'Enter Sound of Harmony’s draw?');
   assert.equal(f.nodes.vendorDrawEnter.disabled, false);
   assert.equal(f.nodes.vendorDrawDecline.textContent, 'No');
+  assert.equal(f.nodes.vendorDrawPrizeTitle.textContent, f.offer.prize_title);
+  assert.equal(f.nodes.vendorDrawPrizeDescription.textContent, f.offer.prize_description);
+  assert.match(f.nodes.vendorDrawPrizeValue.textContent, /\$250\.00 CAD/);
+  assert.equal(f.nodes.vendorDrawPrizeDetails.open, false);
+  assert.equal(f.nodes.vendorDrawPrizeRules.href, f.offer.terms_url);
   const modal = section(website, '  <div class="vendor-draw-modal"', '  <!-- Vendor Data -->');
   assert.doesNotMatch(modal, /vendorDrawPrivacy|vendorDrawRules|vendorDrawDisclosure|vendorDrawDescription/);
   assert.match(modal, />Yes<\/button>/);

@@ -8,7 +8,7 @@ const syncUrls = [
 ];
 
 const CURRENT_IN_PERSON_RULES_VERSION = "2026-09-01-in-person-entry";
-const CURRENT_PARTICIPATION_NOTICE_VERSION = "2026-09-04-pre-scan-draw-consent";
+const CURRENT_PARTICIPATION_NOTICE_VERSION = "2026-09-14-showday-prize-lock";
 
 function extract(source: string, pattern: RegExp, label: string) {
   const value = source.match(pattern)?.[1] || "";
@@ -237,7 +237,7 @@ Deno.test("couple and vendor Edge endpoints remain behaviorally identical", asyn
   );
 });
 
-Deno.test("couple QR notice gate rejects unknown versions and preserves only the explicit legacy contract", async () => {
+Deno.test("couple QR notice gate requires the revised version and never upgrades earlier agreements", async () => {
   const expectedVersion =
     `${CURRENT_IN_PERSON_RULES_VERSION}|${CURRENT_PARTICIPATION_NOTICE_VERSION}`;
   const legacyVersion =
@@ -339,29 +339,14 @@ Deno.test("couple QR notice gate rejects unknown versions and preserves only the
       );
     }
 
-    assert(
-      invoke("scan")?.status === 428 &&
-        invoke("scan", { participation_notice_version: legacyVersion }) === null &&
-        invoke("raffle_offer") === null &&
-        invoke("raffle_offer", { participation_notice_version: legacyVersion }) === null,
-      "legacy scans still need their exact notice while the old offer contract may omit the field",
-    );
-    for (const withNotice of [false, true]) {
-      const body: Record<string, unknown> = {
-        ...legacyEntry,
-        ...(withNotice ? { participation_notice_version: legacyVersion } : {}),
-      };
-      assert(
-        invoke("raffle_opt_in", body) === null,
-        "the released entry contract must retain its fully attested opt-in path",
-      );
-      for (const field of Object.keys(legacyEntry)) {
-        for (const invalidValue of [undefined, false, "true", "older-rules"]) {
-          assert(
-            invoke("raffle_opt_in", { ...body, [field]: invalidValue })?.status === 428,
-            `legacy opt-in must reject missing or invalid ${field}`,
-          );
-        }
+    for (const action of ["scan", "raffle_offer", "raffle_opt_in"]) {
+      for (const body of [
+        {}, legacyEntry,
+        { ...legacyEntry, participation_notice_version: legacyVersion },
+        { ...legacyEntry, participation_notice_version: `${CURRENT_IN_PERSON_RULES_VERSION}|2026-09-04-pre-scan-draw-consent` },
+      ]) {
+        assert(invoke(action, body)?.status === 428,
+          "earlier complete attestations cannot accept the revised prospective terms");
       }
     }
 

@@ -1,0 +1,39 @@
+# WeddingWin policy and prize update — September 14, 2026
+
+The user-authorized prize, disclosure, ticket-sharing and liability changes are implemented and published. This record supersedes the selected findings in the earlier terms consistency review; it does not declare the entire App Store release ready.
+
+## Current behavior
+
+- Vendors may change their prize title, description and value before **11:00 a.m. on the wedding-show date in the show's local time zone**. Niagara's current deadline is October 18, 2026 at 11:00 a.m. America/Toronto (15:00 UTC). Saves at or after the deadline are rejected by the database. Existing earlier winner-notice locks remain effective.
+- The couple's named Yes/No choice includes a short recorded prize summary and value. Read more exposes full recorded conditions and dates; the rules remain accessible. Verbal explanations supplement the written offer. Existing entrants retain their recorded prize terms.
+- Ticket disclosures cover all vendors/exhibitors at the show and all its sponsors, including sponsors without a booth. This concerns information supplied for tickets under the applicable accepted registration/checkout disclosure. It does not widen a vendor's draw-entrant export or retroactively create consent. No still declines that named draw.
+- Terms, rules and ticket provisions use stronger releases, hold-harmless wording, indemnities and liability limits to the extent permitted by law. They preserve non-waivable rights, fraud/wilful-misconduct exceptions and Wedding Win's accountability for personal information. This is not a promise of immunity or a legal opinion about enforceability.
+- Early-entry behavior and the existing attendance-related text were left unchanged as instructed. The earlier difference in that wording is not represented as resolved.
+
+## Acceptance and historical evidence
+
+General Terms and Privacy versions are 2026-09-14. The base draw Rules ID remains 2026-09-01-in-person-entry with the prospective amendment and QR notice 2026-09-14-showday-prize-lock.
+
+The new QR notice requires actual explicit first acceptance. A previous receipt, local cache, scan or draw cannot silently accept it. Existing vendors can expressly accept the exact responsibility amendment even when their offer is already activated; the system records fresh acceptance and an immutable new offer, retaining old evidence. The amendment cannot smuggle in prize, identity or schedule changes.
+
+Live before/after digests matched for all 6 participation receipts, 111 offer versions, 8 entries, 4 draws and 18 settings rows. No live agreement was accepted, draw entered, winner selected or message sent during this rollout. A read-only demo-account check confirmed that the new notice was not already accepted, an explicitly false acceptance request was rejected with HTTP 428, and an unsigned list request was rejected with HTTP 401.
+
+## Publication and validation
+
+Published four policy pages, the Apple web sign-in policy version fields, QR widget 258 and vendor dashboard widget 328. Applied these three migrations:
+
+- 20260915005744_enforce_vendor_prize_edit_deadline
+- 20260915010147_require_explicit_showday_prize_notice
+- 20260915010928_allow_exact_showday_responsibility_amendment
+
+QR endpoints are ACTIVE at versions 76/77; all 36 deployed source copies match the reviewed source and JWT settings are preserved. Fifteen functions carrying signup-policy validation received only the two version-string changes, preserving each function's previously deployed authentication code. Those downloaded source copies also match exactly; unrelated local authentication differences were excluded.
+
+Full `npm run verify` passed: **1,032 Deno tests, 653 Node tests and all SQL suites**. Focused SQL coverage includes 70 cases across the cutoff, explicit notice, supported synthetic setup and exact vendor amendment. Expo checks passed; lint has zero errors and seven existing warnings. Installed Firefox passed compact/expanded views at 320, 390 and 768 px, long text, reachable 44 px controls and Tab/Shift-Tab focus containment. Public policy pages return 200 and match the reviewed text. A final rendered-page check caught and corrected a duplicate script wrapper in the vendor widget deployment; all 38 inline vendor-page scripts now parse successfully and the vendor script matches the repository. The anonymous QR page requires sign-in and does not expose its authenticated widget.
+
+The new native source was built, installed and launched on the connected iPhone as **1.0.0 (3), development-signed**. iPhone and iPad simulator agreement layouts were visually checked and remained unchecked. Native source SHA256: d95242a58405ace4a3e2c5c5f25d768f0ab8d0a5066dcaa3ed5e3f3ddecdad7e. This is not a new TestFlight/App Store upload or proof of final distribution-build acceptance.
+
+## App Store follow-through
+
+The previous scene 06 screenshots predate the new prize summary and must be recaptured for both device classes before upload. They remain historical previews. No new acceptance was fabricated to unlock a capture. Remaining sponsorship, chat/reviewer access, privacy/retention, physical notification and final TestFlight checks remain listed in the Apple submission review. No Apple submission or public release occurred.
+
+Evidence is retained in `work/terms-policy-update-sept14/` at the task workspace: full-verify-ui-followup-result.json, deployed-source-verification.json, history-preservation.json, public-render-check.json, migration-formatting-note.json, native-device-artifact.json, backend-report.md, legal-report.md, ui-browser-qa/REPORT.md and the deployment logs.

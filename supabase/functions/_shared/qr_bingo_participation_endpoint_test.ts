@@ -11,20 +11,27 @@ async function harness(endpoint:string){
  const calls:any[]=[];let complete=true,unavailable=false,receipt:any=null;
  const db:any={from:(table:string)=>{assertEquals(table,"qr_bingo_participation_acceptances");return db;},select:()=>db,eq:()=>db,maybeSingle:()=>({data:receipt,error:null}),rpc:(name:string,args:any)=>{
   calls.push({name,args});if(unavailable)return {data:null,error:{code:"42501"}};
+  if(receipt && receipt.event_key===args.p_event_key && receipt.couple_bd_user_id===args.p_couple_id && receipt.notice_version===args.p_notice_version)
+   return {data:{ok:true,receipt},error:null};
+  if(args.p_basis!=="explicit_notice")return {data:{ok:false,code:"participation_notice_required"},error:null};
   receipt={id:"00000000-0000-4000-8000-000000000001",event_key:args.p_event_key,couple_bd_user_id:args.p_couple_id,rules_version:args.p_rules_version,notice_version:args.p_notice_version,basis:args.p_basis,accepted_at:"2026-09-14T12:00:00Z",excluded_from_master:args.p_event_key.startsWith("app-review-")};return {data:{ok:true,receipt},error:null};
  }};
  const deps={loadQrParticipationReceipt,recordQrParticipation,validateQrParticipationRequest,shouldRecordQrParticipationOnUse,QrParticipationError,
   requireAdmin:()=>db,qrBingoConfig:()=>config,qrParticipationNoticeVersion:()=>notice,isEmailTestFixture:()=>false,
   loadQrBingoCardState:(_:unknown,event:string,couple:string)=>({event_key:event,couple_id:couple,generation:0,scan_reset_after:null}),assertQrBingoCardGeneration:()=>{},
   loadQrContactProfile:(_:unknown,event:string,couple:string)=>({event_key:event,couple_id:couple,name:"Offline Couple",email:"test@example.test",phone:"5550101001",version:1,complete,saved:true,missing_fields:complete?[]:["phone"],date_sync_pending:false}),
-  acceptsQrParticipationNotice:(action:string,body:any)=>!["scan","raffle_offer","raffle_opt_in"].includes(action)||body.participation_notice_version===notice||body.participation_notice_version===undefined,
+  acceptsQrParticipationNotice:(action:string,body:any)=>!["scan","raffle_offer","raffle_opt_in"].includes(action)||body.participation_notice_version===notice,
   jsonResponse:(body:any,status=200)=>({body,status}),BD_API_BASE_URL:"https://example.test"};
  const mod=await import(`data:application/typescript,${encodeURIComponent(`type QrContactProfile=any;type QrBingoCardState=any;export default function(deps:any){const {${Object.keys(deps).join(',')}}=deps;return async function(action:string,body:any,user:any,reviewFixture:any){const authenticatedMemberId=String(user.user_id),websitePrincipal=null;try{${source.slice(start,end)}return {body:{ok:true,participation_agreement:participationAgreement,reached_transport:true},status:200};}catch(error){if(error instanceof QrParticipationError)return jsonResponse({ok:false,code:error.code},error.status);throw error;}}}`)}`);
  return {calls,dispatch:(action:string,body:any={},user:any={user_id:"701",subscription_id:"18",active:"2"},fixture:any=null)=>mod.default(deps)(action,body,user,fixture),setComplete:(value:boolean)=>complete=value,setUnavailable:()=>unavailable=true};
 }
 for(const endpoint of ["bd-qr-bingo-sync","bd-qr-bingo-vendor-sync"]){
- Deno.test(`${endpoint}: explicit and cached participation acceptance complete before any website/scan transport`,async()=>{
-  for(const acceptance_source of ["explicit","cached"]){const h=await harness(endpoint);const result=await h.dispatch("participation_accept",{...valid,acceptance_source});assertEquals(result.status,200);assertEquals(result.body.participation_agreement.recorded,true);assertEquals(result.body.reached_transport,undefined);assertEquals(h.calls.length,1);assertEquals(h.calls[0].args.p_basis,acceptance_source+"_notice");}
+ Deno.test(`${endpoint}: explicit acceptance and cached replay complete before website/scan transport`,async()=>{
+  const h=await harness(endpoint);
+  const freshCache=await h.dispatch("participation_accept",{...valid,acceptance_source:"cached"});
+  assertEquals(freshCache.status,428);assertEquals(freshCache.body.reached_transport,undefined);
+  for(const acceptance_source of ["explicit","cached"]){const result=await h.dispatch("participation_accept",{...valid,acceptance_source});assertEquals(result.status,200);assertEquals(result.body.participation_agreement.recorded,true);assertEquals(result.body.reached_transport,undefined);}
+  assertEquals(h.calls.map(c=>c.args.p_basis),["cached_notice","explicit_notice","cached_notice"]);
  });
  Deno.test(`${endpoint}: non-couple identity, false acceptance, stale event and incomplete profile cannot record`,async()=>{
   const h=await harness(endpoint);assertEquals((await h.dispatch("participation_accept",valid,{user_id:"901",subscription_id:"28",active:"2"})).status,403);
@@ -41,8 +48,16 @@ for(const endpoint of ["bd-qr-bingo-sync","bd-qr-bingo-vendor-sync"]){
  Deno.test(`${endpoint}: profile reads and list never infer agreement or create a receipt`,async()=>{
   const h=await harness(endpoint);for(const action of ["list","contact_profile_get"]){const r=await h.dispatch(action);assertEquals(r.status,200);assertEquals(r.body.participation_agreement,null);}assertEquals(h.calls,[]);
  });
- Deno.test(`${endpoint}: exact installed-client notice records on use but omitted legacy field does not invent it`,async()=>{
-  const h=await harness(endpoint);for(const action of ["scan","raffle_offer","raffle_opt_in"]){await h.dispatch(action,{participation_notice_version:notice});}assertEquals(h.calls.map(c=>c.args.p_basis),["notice_on_use","notice_on_use","notice_on_use"]);
-  const older=await harness(endpoint);await older.dispatch("raffle_offer",{});assertEquals(older.calls,[]);
+ Deno.test(`${endpoint}: on-use cannot invent first acceptance and only replays a current explicit receipt`,async()=>{
+  const h=await harness(endpoint);
+  for(const action of ["scan","raffle_offer","raffle_opt_in"]){
+   const r=await h.dispatch(action,{participation_notice_version:notice});assertEquals(r.status,428);assertEquals(r.body.reached_transport,undefined);
+  }
+  await h.dispatch("participation_accept",valid);
+  for(const action of ["scan","raffle_offer","raffle_opt_in"]){
+   const r=await h.dispatch(action,{participation_notice_version:notice});assertEquals(r.status,200);assertEquals(r.body.reached_transport,true);
+  }
+  assertEquals(h.calls.map(c=>c.args.p_basis),["notice_on_use","notice_on_use","notice_on_use","explicit_notice","notice_on_use","notice_on_use","notice_on_use"]);
+  const older=await harness(endpoint);const r=await older.dispatch("raffle_offer",{});assertEquals(r.status,428);assertEquals(r.body.reached_transport,undefined);assertEquals(older.calls,[]);
  });
 }

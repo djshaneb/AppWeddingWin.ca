@@ -304,6 +304,8 @@ type QrBingoEventConfig = {
   entry_closes_at: string;
 };
 type QrBingoRaffleOffer = {
+  display_only?: boolean;
+  entry_allowed?: boolean;
   app_review_fixture?: boolean;
   email_test_fixture?: boolean;
   outbound_email_suppressed?: boolean;
@@ -491,7 +493,10 @@ type QrBingoVendorRaffleResponse = {
   can_update_entries?: boolean;
   material_terms_locked?: boolean;
   prize_details_locked?: boolean;
-  prize_details_lock_reason?: 'sending' | 'sent' | 'unconfirmed' | null;
+  prize_details_lock_reason?: 'sending' | 'sent' | 'unconfirmed' | 'deadline' | 'unavailable' | 'synthetic_fixture' | null;
+  prize_editable?: boolean;
+  prize_edit_deadline_at?: string | null;
+  prize_edit_timezone?: string | null;
   can_send_verified_winner_notice?: boolean;
   can_test_suppressed_notice?: boolean;
   verified_potential_winner_notice_pending?: boolean;
@@ -590,8 +595,8 @@ const VENDOR_MEMBERSHIP_PLAN_IDS = new Set([
 const TERMS_URL = `${TARGET_URL}/about/terms`;
 const QR_BINGO_TERMS_URL = `${TERMS_URL}#qr-bingo`;
 const PRIVACY_URL = `${TARGET_URL}/about/privacy`;
-const TERMS_VERSION = '2026-09-01';
-const PRIVACY_VERSION = '2026-09-01';
+const TERMS_VERSION = '2026-09-14';
+const PRIVACY_VERSION = '2026-09-14';
 const APP_BACKEND_URL = 'https://pszcjoyabwvzsxxjtkhs.supabase.co';
 const APP_BACKEND_PUBLISHABLE_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzemNqb3lhYnd2enN4eGp0a2hzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2OTMxMTYsImV4cCI6MjA5NDI2OTExNn0.QLCEmNcn1WAks0IHkCLmI3iY5K4GnRxZ9Sfy89GYrLo';
@@ -613,7 +618,7 @@ const PUSH_TOKEN_SESSION_KEY = 'weddingwin.expoPushToken.v1';
 const PENDING_PUSH_UNREGISTER_KEY = 'weddingwin.pendingPushUnregister.v1';
 const PENDING_PUSH_ROLLOVER_KEY = 'weddingwin.pendingPushRollover.v1';
 const ACCOUNT_DELETED_EVENT_KEY = 'weddingwin.accountDeleted.v1';
-const QR_BINGO_PARTICIPATION_NOTICE_VERSION = '2026-09-04-pre-scan-draw-consent';
+const QR_BINGO_PARTICIPATION_NOTICE_VERSION = '2026-09-14-showday-prize-lock';
 const VENDOR_RAFFLE_WIZARD_STEPS = [
   { id: 1, label: 'Prize' },
   { id: 2, label: 'Open' },
@@ -1537,6 +1542,105 @@ function areVendorPrizeDetailsLocked(
     : Boolean(data?.material_terms_locked);
 }
 
+function vendorPrizeEditHelp(data: QrBingoVendorRaffleResponse | null | undefined): string {
+  const reason = data?.prize_details_lock_reason;
+  if (reason === 'sending') return 'The winner email is being sent. Prize details are temporarily locked.';
+  if (reason === 'unconfirmed') return 'Email delivery is being checked. Prize details are temporarily locked.';
+  if (reason === 'sent') return 'Prize details are locked because the winner email has been sent.';
+  if (reason === 'synthetic_fixture') return 'This preview has no real prize. Its sample details cannot be changed.';
+  let deadline = '';
+  const date = new Date(data?.prize_edit_deadline_at || '');
+  if (Number.isFinite(date.getTime()) && data?.prize_edit_timezone) {
+    try {
+      deadline = new Intl.DateTimeFormat('en-CA', {
+        timeZone: data.prize_edit_timezone, year: 'numeric', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short',
+      }).format(date);
+    } catch { /* A missing or invalid deadline must not promise that editing is open. */ }
+  }
+  if (!deadline || reason === 'unavailable') return 'Prize editing is unavailable until the wedding show deadline is confirmed. Refresh to check.';
+  if (reason === 'deadline') return `Prize details are locked. The editing deadline was ${deadline}.`;
+  if (areVendorPrizeDetailsLocked(data)) return 'Prize details are currently locked. Refresh to check their status.';
+  return `Add the prize name, expiry date and conditions. You can edit until ${deadline}, unless a winner email locks the prize earlier.`;
+}
+
+function vendorDrawPrizeSummary(value: string, limit = 180): string {
+  const words = value.replace(/\s+/g, ' ').trim();
+  const characters = Array.from(words);
+  if (characters.length <= limit) return words;
+  return `${characters.slice(0, limit).join('').trimEnd()}…`;
+}
+
+function trustedVendorDrawRulesUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || !['weddingwin.ca', 'www.weddingwin.ca'].includes(url.hostname.toLowerCase()) ||
+      (url.port && url.port !== '443') || url.username || url.password) return '';
+    return url.toString();
+  } catch { return ''; }
+}
+
+function QrVendorPrizeDetails({ offer }: { offer: QrBingoRaffleOffer }) {
+  const [expanded, setExpanded] = useState(false);
+  const description = String(offer.prize_description || '').trim();
+  const title = String(offer.prize_title || '').trim();
+  const value = Number(offer.prize_approx_value_cad);
+  const rulesUrl = trustedVendorDrawRulesUrl(offer.terms_url);
+  const previewOnly = offer.display_only === true || offer.entry_allowed === false;
+  const facts = [
+    offer.prize_count ? `${offer.prize_count} prize${offer.prize_count === 1 ? '' : 's'}.` : '',
+    offer.eligibility_region ? `Eligibility: ${offer.eligibility_region}` : '',
+    offer.eligibility_exclusions ? `Exclusions: ${offer.eligibility_exclusions}` : '',
+    offer.entry_opens_at ? `Entries open: ${formatPromotionDate(offer.entry_opens_at)}` : '',
+    offer.entry_closes_at ? `Entries close: ${formatPromotionDate(offer.entry_closes_at)}` : '',
+    offer.draw_at ? `Scheduled draw: ${formatPromotionDate(offer.draw_at)}` : '',
+    offer.entry_limit ? `Entry limit: ${offer.entry_limit}` : '',
+    offer.odds_basis ? `Odds: ${offer.odds_basis}` : '',
+    offer.no_purchase_required ? 'No purchase required.' : '',
+    offer.skill_testing_question_required ? 'A skill-testing question is required to win.' : '',
+  ].filter(Boolean);
+  return (
+    <View style={styles.rafflePrizeDetails} testID="vendor-draw-prize-summary">
+      {title ? <Text style={styles.rafflePrizeTitle}>{title}</Text> : null}
+      {Number.isFinite(value) && value > 0 ? (
+        <Text style={styles.rafflePrizeValue}>Value or maximum savings: ${value.toFixed(2)} CAD</Text>
+      ) : null}
+      {description ? (
+        <Text style={styles.rafflePrizeDescription}>
+          {expanded ? description : vendorDrawPrizeSummary(description)}
+        </Text>
+      ) : null}
+      {previewOnly ? <Text style={styles.rafflePrizeDescription}>Preview only. No real prize or draw entry.</Text> : null}
+      <TouchableOpacity
+        onPress={() => setExpanded(!expanded)}
+        accessibilityRole="button"
+        accessibilityLabel={expanded ? 'Show fewer prize details' : 'Read all prize details, dates and restrictions'}
+        accessibilityState={{ expanded }}
+        style={styles.rafflePrizeMoreButton}
+        testID="vendor-draw-prize-read-more"
+      >
+        <Text style={styles.raffleTermsLink}>{expanded ? 'Show less' : 'Read more'}</Text>
+      </TouchableOpacity>
+      {expanded ? (
+        <View testID="vendor-draw-prize-full-details">
+          {facts.map((fact, index) => <Text key={index} style={styles.rafflePrizeDescription}>{fact}</Text>)}
+          <Text style={styles.rafflePrizeDescription}>Ask the vendor about the prize. The written details and draw rules apply.</Text>
+        </View>
+      ) : null}
+      {rulesUrl ? (
+        <TouchableOpacity
+          onPress={() => { Linking.openURL(rulesUrl).catch(() => Alert.alert('Unable to open draw rules', 'Please try again.')); }}
+          accessibilityRole="link"
+          accessibilityLabel="View draw rules"
+          style={styles.rafflePrizeMoreButton}
+        >
+          <Text style={styles.raffleTermsLink}>Draw rules</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
+
 function normalizeCurrencyDraft(value: string): string {
   const cleaned = value.replace(/[^0-9.]/g, '');
   const dotIndex = cleaned.indexOf('.');
@@ -2296,6 +2400,15 @@ function NativeQrScanner({
           'Saving your acknowledgement took too long. Please try again.',
         );
         if (!stillCurrent()) return false;
+        if (response.status === 428 && data?.code === 'participation_notice_required') {
+          await SecureStore.deleteItemAsync(participationNoticeKey).catch(() => {});
+          if (!stillCurrent()) return false;
+          setServerParticipationAgreement(null);
+          setAcceptedParticipationNoticeKey('');
+          setParticipationNoticeBackfillKey('');
+          setBingoError('Please read and accept the updated QR Bingo Terms and Draw Rules before scanning.');
+          return false;
+        }
         if (!response.ok || data?.ok !== true || !isCurrentQrParticipationAgreement(
           data.participation_agreement, String(nativeSession.user_id), eventConfig.event_key, eventConfig.rules_version, participationProfileEventKey,
         )) throw new Error(data?.detail || data?.error || 'Your acknowledgement could not be saved. Please try again.');
@@ -3238,6 +3351,11 @@ function NativeQrScanner({
             <View style={styles.qrConsentHeader}>
               <Text style={styles.qrConsentTitle}>Before you scan</Text>
             </View>
+            <Text style={styles.qrConsentSummary}>
+              The updated Terms apply after you agree below. Prize changes close at
+              11:00 a.m. on show day, in the show’s local time. Review the recorded
+              prize before choosing Yes. The Terms limit liability only as permitted by law.
+            </Text>
             <View style={styles.qrConsentLinks}>
               <TouchableOpacity
                 style={styles.qrConsentLink}
@@ -3578,7 +3696,7 @@ function NativeQrScanner({
       >
         <View style={styles.raffleModalBackdrop}>
           <View style={styles.raffleModalCard}>
-            <View style={styles.raffleModalCardContent} testID="vendor-draw-offer">
+            <ScrollView style={styles.raffleModalBody} contentContainerStyle={styles.raffleModalCardContent} testID="vendor-draw-offer" keyboardShouldPersistTaps="handled">
               <Text style={styles.raffleModalTitle}>
                 Enter {raffleOffer?.vendor_name || 'this vendor'}’s draw?
               </Text>
@@ -3587,12 +3705,13 @@ function NativeQrScanner({
                   {raffleOffer?.vendor_name || 'This vendor'} has already been scanned.
                 </Text>
               ) : null}
+              {raffleOffer ? <QrVendorPrizeDetails key={`${raffleOffer.vendor_id}:${raffleOffer.vendor_offer_version}`} offer={raffleOffer} /> : null}
               {bingoError ? (
                 <Text style={styles.qrErrorText} accessibilityRole="alert" accessibilityLiveRegion="assertive">
                   {bingoError}
                 </Text>
               ) : null}
-            </View>
+            </ScrollView>
             <View style={styles.raffleModalActions}>
               <TouchableOpacity
                 style={styles.raffleCancelButton}
@@ -4552,7 +4671,7 @@ function NativeHome({
         : Number(draftPrizeApproxValueCad);
       const requestMaxWinners = 1;
       const requestExcludePreviousWinners = true;
-      // Prize details remain editable until the winner email is sent. Rules
+      // The server enforces the show-day deadline and any earlier winner-email lock. Rules
       // acceptance remains tied to the current draft and current rules version.
       const requestLegalAccepted = draftLegalAccepted;
       const draftRulesViewed =
@@ -7609,9 +7728,8 @@ function NativeHome({
                                     Why prize details lock
                                   </Text>
                                   <Text style={styles.vendorRaffleInfoText}>
-                                    You can edit your prize and its value until
-                                    you send the winner email. Event, eligibility
-                                    and entry rules stay unchanged.
+                                    {vendorPrizeEditHelp(vendorRaffle)} Event,
+                                    eligibility and entry rules stay unchanged.
                                   </Text>
                                 </View>
                                 <View style={styles.vendorRaffleInfoCard}>
@@ -7855,15 +7973,7 @@ function NativeHome({
                               />
                             </View>
                             <Text style={styles.vendorRaffleFieldHelp}>
-                              {vendorRafflePrizeDetailsLocked
-                                ? vendorRaffle?.prize_details_lock_reason === 'sending'
-                                  ? 'The winner email is being sent. Prize details are temporarily locked.'
-                                  : vendorRaffle?.prize_details_lock_reason === 'unconfirmed'
-                                    ? 'Email delivery is being checked. Prize details are temporarily locked.'
-                                    : vendorRaffle?.prize_details_lock_reason === 'sent'
-                                      ? 'Prize details are locked because the winner email has been sent.'
-                                      : 'Prize details are currently locked. Refresh to check their status.'
-                                : 'Add the prize name, expiry date and conditions. You can edit this until you send the winner email.'}
+                              {vendorPrizeEditHelp(vendorRaffle)}
                             </Text>
                             <Text style={styles.inputLabel}>
                               Value or maximum savings ($ CAD)
@@ -15750,6 +15860,16 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
     marginTop: 12,
   },
+  rafflePrizeDetails: {
+    marginTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#EAD2CC',
+    paddingTop: 12,
+  },
+  rafflePrizeTitle: { color: '#2E2E32', fontSize: 16, lineHeight: 22, fontWeight: '800' },
+  rafflePrizeValue: { color: '#5F5552', fontSize: 13, lineHeight: 19, fontWeight: '700', marginTop: 5 },
+  rafflePrizeDescription: { color: '#5F5552', fontSize: 14, lineHeight: 21, marginTop: 8 },
+  rafflePrizeMoreButton: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', paddingRight: 12 },
   raffleModalActions: {
     flexDirection: 'row',
     gap: 10,
@@ -17020,6 +17140,9 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 25,
     fontWeight: '800',
+  },
+  qrConsentSummary: {
+    color: '#5F5552', fontSize: 13, lineHeight: 19, marginTop: 6, marginBottom: 8,
   },
   qrConsentLinks: {
     flexDirection: 'row',

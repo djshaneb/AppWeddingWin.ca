@@ -252,10 +252,10 @@ if ($ww_qrvd_is_bridge) {
           <small>For a discount, enter the most the winner can save.</small>
         </label>
 
-        <p class="ww-qrvd-small">One couple wins your draw. You can edit your prize until you send the winner email.</p>
+        <p class="ww-qrvd-small">One couple wins your draw. <span data-role="prize-edit-deadline">Prize changes close at 11:00 a.m. on the wedding show day, in the show’s local time. Loading the deadline…</span></p>
 
         <p class="ww-qrvd-lock is-hidden" data-role="material-lock">
-          Prize details are locked for the winner email.
+          Prize details are currently locked.
         </p>
 
         <div class="ww-qrvd-actions">
@@ -285,7 +285,7 @@ if ($ww_qrvd_is_bridge) {
           </details>
           <details class="ww-qrvd-responsibility">
             <summary><strong>Editing your prize</strong></summary>
-            <p>Each draw has one winner. You can edit the prize details and value until you send the winner email. They stay locked while the email is sending and afterward. Event dates, eligibility, and the other draw rules still apply.</p>
+            <p>Each draw has one winner. Prize details and value can be changed until 11:00 a.m. on the wedding show day, in the show’s local time. An earlier winner email also locks them while sending and afterward. Event dates, eligibility, and the other draw rules still apply. Keep expiry dates, conditions and restrictions in the written prize details; you can also explain the prize verbally.</p>
           </details>
           <details class="ww-qrvd-disclosures" aria-label="Current draw terms">
             <summary>View event dates, eligibility, odds, admission, and entry rules</summary>

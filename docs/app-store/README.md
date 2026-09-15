@@ -1,5 +1,7 @@
 # WeddingWin App Store release package
 
+Latest: [September 14 prize and policy update](TERMS_POLICY_UPDATE_2026-09-14.md). The connected iPhone is updated; draw-choice captures must be refreshed before submission.
+
 Updated September 14, 2026. Status: **release blocked; materials are being prepared**.
 
 Start with the [Apple submission review](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/APPLE-SUBMISSION-REVIEW.md) for the complete audit and the [submission field pack](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/outputs/app-store-launch-2026-09-14/submission/README.md) for copy intended for App Store Connect. The gallery and internal test notes are review materials, not public listing content.

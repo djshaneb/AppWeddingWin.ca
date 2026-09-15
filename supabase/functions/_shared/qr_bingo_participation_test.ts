@@ -17,7 +17,7 @@ Deno.test("participation binds current event rules notice and optional revision"
   }
   assertEquals(validateQrParticipationRequest({...request,expected_config_revision:undefined},config),"explicit_notice");
 });
-Deno.test("existing clients record only their exact current notice and supported actions", () => {
+Deno.test("on-use replay requests carry only the exact current notice and supported actions", () => {
   for(const action of ["scan","raffle_offer","raffle_opt_in"]) assertEquals(shouldRecordQrParticipationOnUse(action,{participation_notice_version:notice},config),true);
   for(const action of ["list","contact_profile_save","contact_profile_get","vendor_raffle_get"]) assertEquals(shouldRecordQrParticipationOnUse(action,{participation_notice_version:notice},config),false);
   for(const body of [{},{participation_notice_version:"2026-09-01-in-person-entry"},{participation_notice_version:notice+" "}]) assertEquals(shouldRecordQrParticipationOnUse("raffle_opt_in",body,config),false);
@@ -44,7 +44,7 @@ Deno.test("database failures and unverified receipt identity fail closed", async
   }
 });
 Deno.test("database staleness and profile conflict remain retryable user decisions", async () => {
-  for(const [code,status] of [["participation_agreement_stale",409],["participation_profile_changed",409],["profile_incomplete",422]] as const) {
+  for(const [code,status] of [["participation_agreement_stale",409],["participation_profile_changed",409],["profile_incomplete",422],["participation_notice_required",428]] as const) {
     const error=await assertRejects(()=>recordQrParticipation({rpc:()=>({data:{ok:false,code},error:null})},config,config.event_key,"701",profile,"explicit_notice"),QrParticipationError);assertEquals(error.code,code);assertEquals(error.status,status);
   }
 });
@@ -54,4 +54,17 @@ Deno.test("receipt lookup filters exact account event rules and full notice vers
   assertEquals(filters,["qr_bingo_participation_acceptances",["event_key",config.event_key],["couple_bd_user_id","701"],["rules_version",config.rules_version],["notice_version",notice]]);
   db.maybeSingle=()=>({data:null,error:null});assertEquals(await loadQrParticipationReceipt(db,config,config.event_key,"701"),null);
   db.maybeSingle=()=>({data:null,error:{}});await assertRejects(()=>loadQrParticipationReceipt(db,config,config.event_key,"701"),QrParticipationError);
+});
+
+Deno.test("new notice is distinct from the historical pre-scan notice", () => {
+  assertEquals(notice, config.rules_version + "|2026-09-14-showday-prize-lock");
+  const error=assertThrows(()=>validateQrParticipationRequest({...request,
+    participation_notice_version:config.rules_version+"|2026-09-04-pre-scan-draw-consent"},config),QrParticipationError);
+  assertEquals(error.code,"participation_agreement_stale");
+});
+Deno.test("new-version receipt cannot claim cached or on-use first acceptance", async () => {
+  for(const basis of ["cached_notice","notice_on_use","vendor_draw_entry"]){
+    await assertRejects(()=>recordQrParticipation({rpc:()=>({data:{ok:true,receipt:{...row,basis}},error:null})},
+      config,config.event_key,"701",profile,"cached_notice"),QrParticipationError);
+  }
 });

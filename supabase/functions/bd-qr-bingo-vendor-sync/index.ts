@@ -1,3 +1,4 @@
+import { parseQrBingoPrizeEditStatus } from "../_shared/qr_bingo_prize_edit.ts";
 import { syntheticFixtureContextMatches, syntheticFixtureOfferMatches, syntheticFixtureActionIsBlocked, SYNTHETIC_FIXTURE_DISCLOSURE, SYNTHETIC_FIXTURE_DISPLAY_ONLY_MESSAGE, type SyntheticFixtureSetup } from "../_shared/qr_bingo_synthetic_fixture.ts";
 import { loadQrBingoDrawResult, QrBingoDrawResultError } from "../_shared/qr_bingo_draw_result.ts";
 import { loadQrParticipationReceipt, recordQrParticipation, validateQrParticipationRequest, shouldRecordQrParticipationOnUse, QrParticipationError } from "../_shared/qr_bingo_participation.ts";
@@ -43,6 +44,10 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
   "";
 const RAFFLE_ADMINISTRATOR = "Wedding Win Inc.";
 const PLATFORM_ROLE =
+  "Wedding Win Inc. is the app developer, a limited platform sponsor solely for the in-app workflow, and the technical administrator. The named vendor is the promotion sponsor, operator, and prize provider; Wedding Win does not supply, guarantee, or fulfil its prize. Wedding Win's releases and liability limits are in the Terms of Use and apply prospectively when accepted. They exclude fraud and wilful misconduct and preserve all non-waivable law, privacy and security obligations, and accountability for personal information. Earlier entries, prize obligations, and accepted terms remain unchanged.";
+// Frozen prior wording only identifies the exact prospective amendment. It
+// never grants current acceptance or changes a historical disclosure.
+const PRE_SHOWDAY_PLATFORM_ROLE =
   "Wedding Win Inc. is the app developer, a limited platform sponsor solely for the in-app workflow, and the technical administrator. It provides entry recording, duplicate controls, random-selection, audit, and notice-delivery technology on the named vendor's behalf, but it is not the named vendor-promotion sponsor, contest operator, or prize provider and does not own, supply, insure, guarantee, or fulfill the vendor's prize. Wedding Win Inc. remains responsible for its own technology, privacy and security obligations, negligence, wilful misconduct, representations, and express administrative commitments, subject to all non-waivable law.";
 const APPLE_NON_SPONSOR_DISCLAIMER =
   "Apple Inc. is not a sponsor of and is not involved in this promotion, its administration, winner selection, or prize fulfillment.";
@@ -64,8 +69,7 @@ const NAMED_VENDOR_CONTACT_RULES_VERSIONS = [
   CONTACT_SHARING_RULES_VERSION,
 ] as const;
 const CONTACT_SHARE_SCOPE = "named_vendor_draw_administration";
-const QR_PARTICIPATION_NOTICE_VERSION = "2026-09-04-pre-scan-draw-consent";
-const LEGACY_QR_PARTICIPATION_NOTICE_VERSION = "2026-09-01-in-person-entry";
+const QR_PARTICIPATION_NOTICE_VERSION = "2026-09-14-showday-prize-lock";
 const QR_DRAW_EMAIL_SEND_URL = Deno.env.get("QR_DRAW_EMAIL_SEND_URL") ||
   `${BD_API_BASE_URL}/qr-bingo-draw-email-send`;
 const MAX_RAFFLE_WINNERS = 3;
@@ -99,23 +103,11 @@ function acceptsQrParticipationNotice(
   body: Record<string, unknown>,
 ) {
   if (!["scan", "raffle_offer", "raffle_opt_in"].includes(action)) return true;
-  const suppliedVersion = cleanText(body.participation_notice_version, 180);
-  if (suppliedVersion === qrParticipationNoticeVersion()) return true;
-
-  // Released native builds acknowledge the previous pre-scan notice, then
-  // collect all draw-specific attestations separately. Those builds omit the
-  // notice field on offer/entry requests; do not mistake that old contract for
-  // acceptance of the new agreement or accept an arbitrary supplied version.
-  const legacyVersion =
-    `${qrBingoConfig().rules_version}|${LEGACY_QR_PARTICIPATION_NOTICE_VERSION}`;
-  const omittedLegacyField = action !== "scan" &&
-    !Object.prototype.hasOwnProperty.call(body, "participation_notice_version");
-  if (suppliedVersion !== legacyVersion && !omittedLegacyField) return false;
-  if (action !== "raffle_opt_in") return true;
-  return reviewedCurrentRules(body) && eligibilityAttested(body) &&
-    body.promotion_responsibility_acknowledged === true &&
-    body.draw_administration_contact_share_acknowledged === true &&
-    body.vendor_marketing_consent_acknowledged === true;
+  // A previous notice cannot grant the revised prospective liability terms.
+  // Old receipt/entry rows remain unchanged; the client must show the current
+  // agreement and record its explicit acceptance before scanning or entering.
+  return cleanText(body.participation_notice_version, 180) ===
+    qrParticipationNoticeVersion();
 }
 
 function productionShowScanWindowOpen() {
@@ -1058,7 +1050,8 @@ function materialSettingsFingerprint(settings: Partial<RaffleSettings>) {
   });
 }
 
-// Prize wording/value may change until email claim; other terms stay immutable.
+// Prize wording/value may change before the show-day 11am cutoff, unless
+// an earlier winner-email lock applies; other terms stay immutable.
 function lockedMaterialSettingsFingerprint(settings: Partial<RaffleSettings>) {
   return materialSettingsFingerprint({
     ...settings,
@@ -1070,9 +1063,9 @@ function lockedMaterialSettingsFingerprint(settings: Partial<RaffleSettings>) {
   });
 }
 
-async function vendorPrizeDetailsLock(vendor: QrVendor, eventKey: string) {
+async function vendorPrizeEditStatus(vendor: QrVendor, eventKey: string) {
   const { data, error } = await requireAdmin().rpc(
-    "qr_bingo_prize_details_lock",
+    "qr_bingo_prize_edit_status",
     {
       p_event_key: eventKey,
       p_vendor_bingo_id: vendor.id,
@@ -1080,11 +1073,12 @@ async function vendorPrizeDetailsLock(vendor: QrVendor, eventKey: string) {
     },
   );
   if (error) throw error;
-  if (
-    data === null || data === "sent" || data === "sending" ||
-    data === "unconfirmed"
-  ) return data;
-  throw new Error("The prize email status could not be checked safely.");
+  return parseQrBingoPrizeEditStatus(data, {
+    event_key: eventKey,
+    vendor_bingo_id: vendor.id,
+    vendor_bd_user_id: String(vendor.user_id || vendor.id),
+    event_revision: qrBingoConfig().revision,
+  });
 }
 
 function nonConsentMaterialSettingsFingerprint(
@@ -1134,6 +1128,66 @@ function isPermittedInPersonEntryRulesTransition(
     ) &&
     nonConsentMaterialSettingsFingerprint(current) ===
       nonConsentMaterialSettingsFingerprint(next);
+}
+
+// Only the exact canonical old-to-new responsibility wording may be accepted
+// under the same base rules. Prize/schedule/identity changes are separate work.
+function isPermittedShowdayPolicyAmendment(
+  current: Partial<RaffleSettings>,
+  next: Partial<RaffleSettings>,
+  explicitAcceptanceRequested: boolean,
+  publishedEventKey: string,
+) {
+  if (explicitAcceptanceRequested !== true ||
+      publishedEventKey !== "niagara-wedding-show-2026" ||
+      current.event_key !== publishedEventKey || next.event_key !== publishedEventKey ||
+      current.synthetic_fixture_setup_id != null || next.synthetic_fixture_setup_id != null ||
+      current.legal_terms_version !== CONTACT_SHARING_RULES_VERSION ||
+      next.legal_terms_version !== CONTACT_SHARING_RULES_VERSION ||
+      current.legal_terms_accepted !== true ||
+      current.apple_non_sponsor_acknowledged !== true ||
+      current.vendor_responsibility_acknowledged !== true ||
+      current.vendor_responsibility_version !== CONTACT_SHARING_RULES_VERSION ||
+      !current.legal_terms_accepted_at || !current.rules_viewed_at ||
+      !current.vendor_responsibility_acknowledged_at ||
+      next.vendor_responsibility_acknowledged !== true ||
+      next.vendor_responsibility_version !== CONTACT_SHARING_RULES_VERSION) return false;
+  for (const field of [
+    "vendor_bingo_id", "vendor_bd_user_id", "vendor_name",
+    "administrator_name", "co_sponsor_name",
+  ] as const) {
+    if (current[field] !== next[field]) return false;
+  }
+  const vendorName = cleanText(next.vendor_name, 180);
+  if (!vendorName || vendorName !== next.vendor_name) return false;
+  const nextVendor = vendorResponsibilityDisclosure(vendorName);
+  const nextParticipant = participantResponsibilityDisclosure(vendorName);
+  return next.vendor_responsibility_disclosure_text === nextVendor &&
+    next.participant_responsibility_disclosure_text === nextParticipant &&
+    current.vendor_responsibility_disclosure_text ===
+      nextVendor.replace(PLATFORM_ROLE, PRE_SHOWDAY_PLATFORM_ROLE) &&
+    current.participant_responsibility_disclosure_text ===
+      nextParticipant.replace(PLATFORM_ROLE, PRE_SHOWDAY_PLATFORM_ROLE) &&
+    nonConsentMaterialSettingsFingerprint(current) ===
+      nonConsentMaterialSettingsFingerprint(next);
+}
+
+function vendorRulesAcceptanceTimestamp(
+  current: Partial<RaffleSettings>,
+  vendorName: string,
+  rulesVersion: string,
+  acceptanceRequested: boolean,
+  acceptedNow: string,
+) {
+  if (!acceptanceRequested) return null;
+  const alreadyCurrent = current.legal_terms_version === rulesVersion &&
+    current.legal_terms_accepted === true && current.legal_terms_accepted_at && current.rules_viewed_at &&
+    current.apple_non_sponsor_acknowledged === true &&
+    current.vendor_responsibility_acknowledged === true &&
+    current.vendor_responsibility_version === rulesVersion && current.vendor_responsibility_acknowledged_at &&
+    current.vendor_responsibility_disclosure_text === vendorResponsibilityDisclosure(vendorName) &&
+    current.participant_responsibility_disclosure_text === participantResponsibilityDisclosure(vendorName);
+  return alreadyCurrent ? current.rules_viewed_at : acceptedNow;
 }
 
 function absoluteWeddingWinUrl(pathOrUrl: unknown) {
@@ -2788,7 +2842,7 @@ async function getVendorRaffleDashboard(
   );
   const activeEntryCount = await activeVendorEntryCount(eventKey, vendor.id);
   const offerActivated = await activatedVendorOfferExists(eventKey, vendor.id);
-  const prizeLockReason = await vendorPrizeDetailsLock(vendor, eventKey);
+  const prizeEditStatus = await vendorPrizeEditStatus(vendor, eventKey);
   const alternateEntryClosure = await alternateEntryClosureStatus(
     eventKey,
     vendor.id,
@@ -2874,8 +2928,7 @@ async function getVendorRaffleDashboard(
     selection_in_progress: entryPool.selection_in_progress,
     can_update_entries: entryPool.can_update_entries,
     material_terms_locked: activeEntryCount > 0 || offerActivated,
-    prize_details_locked: Boolean(prizeLockReason),
-    prize_details_lock_reason: prizeLockReason,
+    ...prizeEditStatus,
     draws: draws.map((draw) =>
       vendorVisibleDraw(draw, isolatedFixture, suppressOutboundEmail)
     ),
@@ -4248,7 +4301,7 @@ Deno.serve(async (request) => {
           ok: false,
           code: "participation_notice_required",
           error:
-            "Read and accept the current QR Bingo agreement before continuing.",
+            "Read and accept the updated QR Bingo agreement before continuing. If it does not appear, update the app or reload the website.",
           participation_notice_version: qrParticipationNoticeVersion(),
         }, 428);
       }
@@ -4844,12 +4897,11 @@ Deno.serve(async (request) => {
         }
         const currentRulesAcceptanceRequested = legalTermsAccepted &&
           rulesReviewed && vendorResponsibilityAcknowledged;
-        const acceptedAt = legalTermsAccepted && rulesReviewed
-          ? currentSettings.legal_terms_version ===
-                qrBingoConfig().rules_version && currentSettings.rules_viewed_at
-            ? currentSettings.rules_viewed_at
-            : new Date().toISOString()
-          : null;
+        const acceptanceNow = new Date().toISOString();
+        const acceptedAt = vendorRulesAcceptanceTimestamp(
+          currentSettings, vendor.name, qrBingoConfig().rules_version,
+          currentRulesAcceptanceRequested, acceptanceNow,
+        );
         const responsibilityAcceptedAt = legalTermsAccepted && rulesReviewed &&
             vendorResponsibilityAcknowledged
           ? currentSettings.vendor_responsibility_acknowledged === true &&
@@ -4861,7 +4913,7 @@ Deno.serve(async (request) => {
                   2000,
                 ) === responsibilityDisclosure
             ? currentSettings.vendor_responsibility_acknowledged_at
-            : new Date().toISOString()
+            : acceptanceNow
           : null;
         const nextMaterialSettings: Partial<RaffleSettings> = {
           ...currentSettings,
@@ -4914,10 +4966,13 @@ Deno.serve(async (request) => {
             lockedMaterialSettingsFingerprint(nextMaterialSettings);
         const permittedLockedRulesReacceptance = materialTermsLocked &&
           currentRulesAcceptanceRequested && materialFingerprintChanged &&
-          isPermittedInPersonEntryRulesTransition(
+          (isPermittedInPersonEntryRulesTransition(
             currentSettings,
             nextMaterialSettings,
-          );
+          ) || isPermittedShowdayPolicyAmendment(
+            currentSettings, nextMaterialSettings,
+            currentRulesAcceptanceRequested, qrBingoConfig().event_key,
+          ));
         const acceptanceRefreshRequested = currentRulesAcceptanceRequested &&
           (
             currentSettings.legal_terms_accepted !== true ||
@@ -4948,7 +5003,7 @@ Deno.serve(async (request) => {
           positiveCadValue(currentSettings.prize_approx_value_cad) !==
             prizeApproxValueCad;
         if (
-          prizeChanged && await vendorPrizeDetailsLock(vendor, raffleEventKey)
+          prizeChanged && !(await vendorPrizeEditStatus(vendor, raffleEventKey)).prize_editable
         ) {
           const dashboard = await getVendorRaffleDashboard(
             vendor,
@@ -4962,7 +5017,7 @@ Deno.serve(async (request) => {
             ok: false,
             code: "prize_details_locked",
             error:
-              "Prize details are locked while the winner email is sending or after it has been sent.",
+              "Prize changes close at 11:00 a.m. on the wedding show day. An earlier winner-notification lock may also apply. Reload the current draw.",
             ...dashboard,
           }, 409);
         }
@@ -5040,7 +5095,7 @@ Deno.serve(async (request) => {
               : "material_terms_locked",
             error: acceptanceRefreshRequested
               ? "The current rules could not be accepted because this saved draw no longer matches its locked prize and event terms. Reload the draw and contact Wedding Win support; no prize terms were changed."
-              : "The draw schedule, eligibility and rules are locked after entries open. You can still edit prize details until the winner email is sent.",
+              : "The draw schedule, eligibility and rules are locked after entries open. Prize changes close at 11:00 a.m. on the wedding show day, or earlier if winner notification is locked.",
           }, 409);
         }
         const settingsPatch: Partial<RaffleSettings> =
@@ -5113,6 +5168,16 @@ Deno.serve(async (request) => {
             },
           );
         } catch (error) {
+          if (error && typeof error === "object" && "message" in error &&
+            String(error.message).includes("prize_edit_closed:")) {
+            return jsonResponse({
+              ok: false,
+              code: "prize_details_locked",
+              error: "Prize changes close at 11:00 a.m. on the wedding show day. Reload the current draw.",
+              ...await getVendorRaffleDashboard(vendor, user, raffleEventKey,
+                allowEarlyDraw, suppressOutboundEmail, reviewFixture),
+            }, 409);
+          }
           if (
             error && typeof error === "object" && "code" in error &&
             String(error.code) === "40001"

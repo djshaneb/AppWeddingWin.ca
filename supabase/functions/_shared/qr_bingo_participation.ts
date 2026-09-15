@@ -1,6 +1,6 @@
 import type { QrContactProfile } from "./qr_bingo_contacts.ts";
 
-export const QR_BINGO_PARTICIPATION_NOTICE = "2026-09-04-pre-scan-draw-consent";
+export const QR_BINGO_PARTICIPATION_NOTICE = "2026-09-14-showday-prize-lock";
 type Config = { event_key: string; rules_version: string; revision: number };
 export type QrParticipationReceipt = {
   recorded: true;
@@ -43,7 +43,7 @@ export function validateQrParticipationRequest(body: Record<string, unknown>, co
 function verifiedReceipt(row: any, config: Config, eventKey: string, coupleId: string): QrParticipationReceipt {
   if (!row || row.event_key !== eventKey || row.couple_bd_user_id !== coupleId ||
     row.rules_version !== config.rules_version || row.notice_version !== qrParticipationVersion(config) ||
-    !["explicit_notice", "cached_notice", "notice_on_use"].includes(row.basis) ||
+    row.basis !== "explicit_notice" ||
     typeof row.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.id) ||
     typeof row.accepted_at !== "string" || !Number.isFinite(Date.parse(row.accepted_at)) ||
     typeof row.excluded_from_master !== "boolean") throw new QrParticipationError();
@@ -77,6 +77,8 @@ export async function recordQrParticipation(
   if (error) throw new QrParticipationError();
   if (data?.ok !== true) {
     if (data?.code === "participation_agreement_stale") throw stale();
+    if (data?.code === "participation_notice_required") throw new QrParticipationError(
+      "Review and accept the current QR Bingo agreement before continuing.", "participation_notice_required", 428);
     if (data?.code === "participation_profile_changed") throw new QrParticipationError(
       "Your QR Bingo contact details changed. Reload before accepting the agreement.", "participation_profile_changed", 409);
     if (data?.code === "profile_incomplete") throw new QrParticipationError(
@@ -86,10 +88,9 @@ export async function recordQrParticipation(
   return verifiedReceipt(data.receipt, config, eventKey, coupleId);
 }
 
-// Compatibility is evidence-based: an exact current notice supplied by an
-// installed client records its prior acknowledgement. Missing/legacy fields do
-// not invent acceptance of this notice; a valid subsequent entry has its own
-// distinctly labelled durable named-vendor consent evidence in PostgreSQL.
+// A cache or action carrying the exact current version may replay an existing
+// explicit server receipt. PostgreSQL refuses to create first acceptance from
+// these paths; historical notices and vendor-entry consent remain distinct.
 export function shouldRecordQrParticipationOnUse(action: string, body: Record<string, unknown>, config: Config) {
   return ["scan", "raffle_offer", "raffle_opt_in"].includes(action) &&
     body.participation_notice_version === qrParticipationVersion(config);

@@ -37,7 +37,7 @@ function route({ action = 'get_scanned', card = initial, privateFixture = false,
   agreementResponse = null, profileComplete = true } = {}) {
   const fixture = { action, card, privateFixture, probeCard, scanCard, lock, visits, config, agreementResponse, profileComplete };
   const post = { action, vendor_id: '707', qr_csrf: 'c'.repeat(64), expected_event_key: config.event_key,
-    expected_config_revision: '9', participation_notice_version: 'offline-rules|2026-09-04-pre-scan-draw-consent', ...fields };
+    expected_config_revision: '9', participation_notice_version: 'offline-rules|2026-09-14-showday-prize-lock', ...fields };
   const adapted = source.replace('$eventConfig = ww_qr_bingo_runtime_config();', '$eventConfig = ww_qr_bingo_scanner_config($fixture["config"]);');
   return php(`
     ini_set('display_errors','0');date_default_timezone_set('UTC');http_response_code(200);
@@ -77,7 +77,7 @@ function route({ action = 'get_scanned', card = initial, privateFixture = false,
         if($fixture['agreementResponse']!==null)return $fixture['agreementResponse'];
         return array('status_code'=>200,'body'=>array('ok'=>true,'participation_agreement'=>array(
           'recorded'=>true,'couple_id'=>'90001','event_key'=>$fixture['config']['event_key'],'profile_event_key'=>$fixture['card']['event_key'],
-          'rules_version'=>'offline-rules','participation_notice_version'=>'offline-rules|2026-09-04-pre-scan-draw-consent',
+          'rules_version'=>'offline-rules','participation_notice_version'=>'offline-rules|2026-09-14-showday-prize-lock',
           'accepted_at'=>'2026-09-14T12:00:00Z','acceptance_id'=>'d3e4a889-7ca4-46f2-8c88-9c637b35a099','excluded_from_master'=>$fixture['privateFixture'])));
       }
       if($action==='fixture_context'||$action==='scan'){
@@ -188,7 +188,7 @@ test('fixture state from another couple or generation cannot be reused across re
 
 const agreementFields = { accepted: '1', rules_version: 'offline-rules', acceptance_source: 'explicit' };
 const agreementReceipt = { recorded: true, couple_id: '90001', event_key: 'offline-event', profile_event_key: 'offline-event',
-  rules_version: 'offline-rules', participation_notice_version: 'offline-rules|2026-09-04-pre-scan-draw-consent',
+  rules_version: 'offline-rules', participation_notice_version: 'offline-rules|2026-09-14-showday-prize-lock',
   accepted_at: '2026-09-14T12:00:00Z', acceptance_id: 'd3e4a889-7ca4-46f2-8c88-9c637b35a099', excluded_from_master: false };
 
 test('real PHP agreement route forwards only current server identity scope and exact consent, without scans or entry', () => {

@@ -746,7 +746,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     $eventName = $eventConfig['event_name'];
     $eventConfigRevision = intval($eventConfig['revision']);
     $officialRulesUrl = $eventConfig['official_rules_url'];
-    $participationNoticeVersion = (string)$eventConfig['rules_version'] . '|2026-09-04-pre-scan-draw-consent';
+    $participationNoticeVersion = (string)$eventConfig['rules_version'] . '|2026-09-14-showday-prize-lock';
     $rulesNoticeStorageKey = 'wwQrRulesNotice:' . hash(
         'sha256',
         'couple|' . (string)$userId . '|' . $eventConfig['event_key'] . '|' . $participationNoticeVersion
@@ -1818,6 +1818,14 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     .vendor-draw-enter{ background:#aa565d; color:#fff; }
     .vendor-draw-status{ color:#666168; font-size:13px; line-height:1.45; margin:12px 0 0; }
     .vendor-draw-status.is-error{ color:#8a2424; }
+    .vendor-draw-dialog{ box-sizing:border-box; min-width:0; overflow-wrap:anywhere; }
+    .vendor-draw-prize{ border-top:1px solid #efd8d5; margin-top:14px; padding-top:12px; }
+    .vendor-draw-prize-title{ font-size:16px; font-weight:800; line-height:1.4; margin:0; }
+    .vendor-draw-prize details > summary{ color:#8f4148; cursor:pointer; font-weight:800; min-height:44px; padding:12px 0; box-sizing:border-box; }
+    .vendor-draw-prize details[open] + a{ margin-top:4px; }
+    .vendor-draw-prize a{ color:#8f4148; display:inline-block; font-weight:800; min-height:44px; padding:12px 0; box-sizing:border-box; text-decoration:underline; }
+    .vendor-draw-prize summary:focus-visible,.vendor-draw-prize a:focus-visible{ outline:2px solid #8f4148; outline-offset:3px; }
+    .vendor-draw-prize details[open] > summary{ margin-bottom:0; }
     @media (max-width:540px){
       .vendor-draw-modal{ padding:12px; }
       .vendor-draw-dialog{ padding:18px 16px; }
@@ -1894,6 +1902,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 	    >
 	      <h2>Before you scan</h2>
 	      <p>While QR scanning is open, including early access, scanning a vendor with its draw turned on offers an optional entry. Choose Yes to enter or No to keep only your scan. The displayed entry deadline and draw date still apply.</p>
+          <p>The updated Terms apply after you agree below. Prize changes close at 11:00 a.m. on show day, in the show’s local time. Review the recorded prize before choosing Yes. The Terms limit liability only as permitted by law.</p>
 	      <div class="qr-rules-notice-row">
 	        <input id="qrRulesNoticeAcknowledged" type="checkbox">
 	        <label for="qrRulesNoticeAcknowledged">
@@ -2009,6 +2018,19 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
   <div class="vendor-draw-modal" id="vendorDrawModal" hidden>
     <section class="vendor-draw-dialog" id="vendorDrawDialog" role="dialog" aria-modal="true" aria-labelledby="vendorDrawTitle" aria-describedby="vendorDrawStatus" tabindex="-1">
       <h2 id="vendorDrawTitle">Enter this vendor’s draw?</h2>
+      <div class="vendor-draw-prize" id="vendorDrawPrize" hidden>
+        <p class="vendor-draw-prize-title" id="vendorDrawPrizeTitle"></p>
+        <p class="vendor-draw-copy" id="vendorDrawPrizeValue"></p>
+        <p class="vendor-draw-copy" id="vendorDrawPrizeSummary"></p>
+        <p class="vendor-draw-copy" id="vendorDrawPreviewNotice" hidden>Preview only. No real prize or draw entry.</p>
+        <details id="vendorDrawPrizeDetails">
+          <summary>Read more</summary>
+          <p class="vendor-draw-copy" id="vendorDrawPrizeDescription"></p>
+          <p class="vendor-draw-copy" id="vendorDrawPrizeFacts"></p>
+          <p class="vendor-draw-copy">Ask the vendor about the prize. The written details and draw rules apply.</p>
+        </details>
+        <a id="vendorDrawPrizeRules" target="_blank" rel="noopener">Draw rules</a>
+      </div>
       <p class="vendor-draw-status" id="vendorDrawStatus" role="status" aria-live="polite"></p>
       <div class="vendor-draw-actions">
         <button class="vendor-draw-decline" id="vendorDrawDecline" type="button">No</button>
@@ -2199,7 +2221,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       const eventKey = String(EVENT_CONFIG.event_key || '').trim();
       const rulesVersion = String(EVENT_CONFIG.rules_version || '').trim();
       if (!storageKey || !eventKey || !rulesVersion ||
-          PARTICIPATION_NOTICE_VERSION !== rulesVersion + '|2026-09-04-pre-scan-draw-consent') return '';
+          PARTICIPATION_NOTICE_VERSION !== rulesVersion + '|2026-09-14-showday-prize-lock') return '';
       // The server-generated key includes the signed-in account. The stored
       // value also binds event and both versions; old generic '1' values never
       // stand in for the expanded pre-scan eligibility/rules agreement.
@@ -2254,6 +2276,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 15000);
       const request = { scope: requestScope, promise: null };
+      let needsExplicitAcceptance = false;
       qrRulesNoticeRequest = request;
       request.promise = (async () => {
         try {
@@ -2266,6 +2289,11 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
           const data = await response.json();
           if (!stillCurrent()) return false;
           if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Your acknowledgement could not be confirmed. Please try again.');
+          if (response.status === 428 && data.code === 'participation_notice_required') {
+            needsExplicitAcceptance = true;
+            try { window.localStorage.removeItem(qrRulesNotice.dataset.storageKey); } catch (error) {}
+            throw new Error('Please read and accept the updated QR Bingo Terms and Draw Rules before scanning.');
+          }
           if (!response.ok || data.ok !== true || !validParticipationReceipt(data.participation_agreement)) {
             throw new Error(data.error || data.message || 'Your acknowledgement could not be saved. Please try again.');
           }
@@ -2276,18 +2304,18 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
             qrRulesNoticeAccepted = false;
             qrRulesNoticeAcceptedScope = '';
             qrRulesNotice.hidden = false;
-            qrRulesNoticeAcknowledged.checked = source === 'cached';
+            qrRulesNoticeAcknowledged.checked = source === 'cached' && !needsExplicitAcceptance;
             if (qrRulesNoticeStatus) qrRulesNoticeStatus.textContent = error.name === 'AbortError'
               ? 'Saving your acknowledgement took too long. Please try again.'
               : error.name === 'SyntaxError' ? 'Your acknowledgement could not be confirmed. Please try again.'
               : error.message || 'Your acknowledgement could not be saved. Please try again.';
-            if (qrRulesNoticeRetry) qrRulesNoticeRetry.hidden = source !== 'cached';
+            if (qrRulesNoticeRetry) qrRulesNoticeRetry.hidden = source !== 'cached' || needsExplicitAcceptance;
           }
           return false;
         } finally {
           window.clearTimeout(timeout);
           if (qrRulesNoticeRequest === request) qrRulesNoticeRequest = null;
-          if (stillCurrent()) qrRulesNoticeAcknowledged.disabled = source === 'cached' && !qrRulesNoticeAccepted;
+          if (stillCurrent()) qrRulesNoticeAcknowledged.disabled = source === 'cached' && !qrRulesNoticeAccepted && !needsExplicitAcceptance;
         }
       })();
       return request.promise;
@@ -2424,6 +2452,15 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const vendorDrawDialog = document.getElementById('vendorDrawDialog');
     const vendorDrawTitle = document.getElementById('vendorDrawTitle');
     const vendorDrawStatus = document.getElementById('vendorDrawStatus');
+    const vendorDrawPrize = document.getElementById('vendorDrawPrize');
+    const vendorDrawPrizeTitle = document.getElementById('vendorDrawPrizeTitle');
+    const vendorDrawPrizeValue = document.getElementById('vendorDrawPrizeValue');
+    const vendorDrawPrizeSummaryText = document.getElementById('vendorDrawPrizeSummary');
+    const vendorDrawPrizeDescription = document.getElementById('vendorDrawPrizeDescription');
+    const vendorDrawPrizeFacts = document.getElementById('vendorDrawPrizeFacts');
+    const vendorDrawPrizeDetails = document.getElementById('vendorDrawPrizeDetails');
+    const vendorDrawPrizeRules = document.getElementById('vendorDrawPrizeRules');
+    const vendorDrawPreviewNotice = document.getElementById('vendorDrawPreviewNotice');
     const vendorDrawDecline = document.getElementById('vendorDrawDecline');
     const vendorDrawEnter = document.getElementById('vendorDrawEnter');
 
@@ -2602,6 +2639,42 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       }
     }
 
+    function vendorDrawPrizeSummary(value, limit = 180) {
+      const words = cleanPromotionText(value).replace(/\s+/g, ' ');
+      const characters = Array.from(words);
+      return characters.length <= limit ? words : characters.slice(0, limit).join('').trimEnd() + '…';
+    }
+
+    function renderVendorDrawPrize(offer, rulesUrl) {
+      const description = cleanPromotionText(offer.prize_description);
+      const value = Number(offer.prize_approx_value_cad);
+      vendorDrawPrizeTitle.textContent = cleanPromotionText(offer.prize_title);
+      vendorDrawPrizeTitle.hidden = !vendorDrawPrizeTitle.textContent;
+      vendorDrawPrizeValue.textContent = Number.isFinite(value) && value > 0
+        ? 'Value or maximum savings: $' + value.toFixed(2) + ' CAD' : '';
+      vendorDrawPrizeValue.hidden = !vendorDrawPrizeValue.textContent;
+      vendorDrawPrizeSummaryText.textContent = vendorDrawPrizeSummary(description);
+      vendorDrawPrizeSummaryText.hidden = !description;
+      vendorDrawPrizeDescription.textContent = description;
+      vendorDrawPrizeDescription.hidden = !description;
+      vendorDrawPrizeFacts.textContent = [
+        offer.prize_count ? String(offer.prize_count) + ' prize' + (offer.prize_count === 1 ? '.' : 's.') : '',
+        offer.eligibility_region ? 'Eligibility: ' + cleanPromotionText(offer.eligibility_region) : '',
+        offer.eligibility_exclusions ? 'Exclusions: ' + cleanPromotionText(offer.eligibility_exclusions) : '',
+        offer.entry_opens_at ? 'Entries open: ' + formatPromotionDate(offer.entry_opens_at) : '',
+        offer.entry_closes_at ? 'Entries close: ' + formatPromotionDate(offer.entry_closes_at) : '',
+        offer.draw_at ? 'Scheduled draw: ' + formatPromotionDate(offer.draw_at) : '',
+        offer.entry_limit ? 'Entry limit: ' + cleanPromotionText(offer.entry_limit) : '',
+        offer.odds_basis ? 'Odds: ' + cleanPromotionText(offer.odds_basis) : '',
+        offer.no_purchase_required ? 'No purchase required.' : '',
+        offer.skill_testing_question_required ? 'A skill-testing question is required to win.' : '',
+      ].filter(Boolean).join('\n');
+      vendorDrawPrizeDetails.open = false;
+      vendorDrawPrizeRules.href = rulesUrl;
+      vendorDrawPreviewNotice.hidden = !(offer.display_only === true || offer.entry_allowed === false);
+      vendorDrawPrize.hidden = false;
+    }
+
     function showVendorDrawOffer(vendor, offer) {
       const rulesUrl = trustedWeddingWinPromotionUrl(offer && offer.terms_url);
       const offerVersion = trustedVendorOfferVersion(offer && offer.vendor_offer_version);
@@ -2630,6 +2703,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       vendorDrawEnter.hidden = false;
       const namedVendor = cleanPromotionText(offer.vendor_business_name) || cleanPromotionText(offer.vendor_name) || cleanPromotionText(vendor && vendor.name) || 'this vendor';
       vendorDrawTitle.textContent = 'Enter ' + namedVendor + '’s draw?';
+      renderVendorDrawPrize(offer, rulesUrl);
       vendorDrawStatus.classList.remove('is-error');
       vendorDrawStatus.textContent = '';
       updateVendorDrawEntryButton();
@@ -2644,6 +2718,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       currentVendorDrawVendor = vendor;
       resetVendorDrawChoice();
       vendorDrawTitle.textContent = 'Draw status';
+      vendorDrawPrize.hidden = true;
+      vendorDrawPrizeDetails.open = false;
       vendorDrawEnter.hidden = true;
       vendorDrawDecline.disabled = false;
       vendorDrawDecline.textContent = 'Close';
@@ -2773,8 +2849,8 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         return;
       }
       if (event.key !== 'Tab') return;
-      const focusable = Array.from(vendorDrawDialog.querySelectorAll('a[href], button, input, select, textarea, [tabindex]'))
-        .filter(element => !element.disabled && !element.hidden && element.getAttribute('tabindex') !== '-1');
+      const focusable = Array.from(vendorDrawDialog.querySelectorAll('a[href], summary, button, input, select, textarea, [tabindex]'))
+        .filter(element => !element.disabled && !element.closest('[hidden]') && element.getAttribute('tabindex') !== '-1');
       if (!focusable.length) {
         event.preventDefault();
         vendorDrawDialog.focus();

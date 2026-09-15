@@ -267,6 +267,19 @@ try {
   );
   await test("migration applies with default grants and existing real settings/offer triggers", () =>
     db.exec(migration));
+  if (process.env.QR_SYNTHETIC_CUTOFF === "1") {
+    await test("show-day cutoff coexists with original synthetic provenance guards", () =>
+      read("../supabase/migrations/20260915005744_enforce_vendor_prize_edit_deadline.sql").then(sql => db.exec(sql)));
+    await test("arbitrary synthetic id or missing setup cannot bypass a real prize deadline", async () => {
+      for (const event of ["niagara-wedding-show-2026", "app-review-missing-setup"]) {
+        await rejected(() => asRole("service_role", async tx => {
+          await tx.query("select set_config('request.qr_bingo_synthetic_setup_id',$1,true)",[uuid(999)]);
+          return tx.query("insert into qr_bingo_raffle_settings(event_key,vendor_bingo_id,vendor_bd_user_id,prize_title,synthetic_fixture_setup_id) values($1,'999','999','Forged prize',$2)",[event,uuid(999)]);
+        }), "55000");
+      }
+      assert.equal((await row("select has_table_privilege('service_role','qr_bingo_event_prize_edit_policies','UPDATE') allowed")).allowed,false);
+    });
+  }
   await test("anonymous/authenticated cannot provision or read provenance; service config/offer/ledger writes stay revoked", async () => {
     for (const role of ["anon", "authenticated"]) {
       await rejected(() => asRole(role, (tx) => rpc(tx)), "42501");

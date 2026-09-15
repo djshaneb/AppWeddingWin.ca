@@ -25,7 +25,7 @@ const sources = [
   section('    function extractWeddingWinQrVendorId(', '    // Event listeners for desktop controls'),
   section('    function initApp()', '    // Ensure DOM is ready before initializing'),
 ];
-const noticeVersion = '2026-09-01-in-person-entry|2026-09-04-pre-scan-draw-consent';
+const noticeVersion = '2026-09-01-in-person-entry|2026-09-14-showday-prize-lock';
 const websiteCsrf = 'd'.repeat(64);
 const vendor = { id: '38970', user_id: '38970', name: 'Fictional Wedding Vendor' };
 const validOffer = {

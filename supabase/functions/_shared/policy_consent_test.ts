@@ -15,18 +15,18 @@ Deno.test("current policy consent accepts only exact versions and a current time
     privacyVersion: CURRENT_PRIVACY_VERSION,
   });
   assert(
-    valid?.termsVersion === "2026-09-01",
+    valid?.termsVersion === CURRENT_TERMS_VERSION,
     "current terms version should be preserved",
   );
   assert(
-    valid?.privacyVersion === "2026-09-01",
+    valid?.privacyVersion === CURRENT_PRIVACY_VERSION,
     "current privacy version should be preserved",
   );
 
   assert(
     currentPolicyConsent({
       acceptedAt: new Date().toISOString(),
-      termsVersion: "2026-08-29",
+      termsVersion: "2026-09-01",
       privacyVersion: CURRENT_PRIVACY_VERSION,
     }) === null,
     "stale terms acceptance must fail closed",

@@ -20,6 +20,28 @@
       : Boolean(data && data.material_terms_locked);
   }
 
+  function prizeEditHelp(data) {
+    const reason = data && data.prize_details_lock_reason;
+    if (reason === 'sending') return 'The winner email is being sent. Prize details are temporarily locked.';
+    if (reason === 'unconfirmed') return 'Email delivery is being checked. Prize details are temporarily locked.';
+    if (reason === 'sent') return 'Prize details are locked because the winner email has been sent.';
+    if (reason === 'synthetic_fixture') return 'This preview has no real prize. Its sample details cannot be changed.';
+    let deadline = '';
+    const date = new Date(data && data.prize_edit_deadline_at || '');
+    if (Number.isFinite(date.getTime()) && data && data.prize_edit_timezone) {
+      try {
+        deadline = new Intl.DateTimeFormat('en-CA', {
+          timeZone: data.prize_edit_timezone, year: 'numeric', month: 'short', day: 'numeric',
+          hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short',
+        }).format(date);
+      } catch (_) { /* Do not promise editing is open without a valid deadline. */ }
+    }
+    if (!deadline || reason === 'unavailable') return 'Prize editing is unavailable until the wedding show deadline is confirmed. Refresh to check.';
+    if (reason === 'deadline') return 'Prize details are locked. The editing deadline was ' + deadline + '.';
+    if (prizeDetailsLocked(data)) return 'Prize details are currently locked. Refresh to check their status.';
+    return 'You can edit until ' + deadline + ', unless a winner email locks the prize earlier.';
+  }
+
   function firstLine(value) {
     return text(value).replaceAll(String.fromCharCode(13), '').split(String.fromCharCode(10))[0].trim();
   }
@@ -196,6 +218,7 @@
     const saveButton = find('[data-action="save"]');
     const reloadButton = find('[data-action="reload"]');
     const materialLock = find('[data-role="material-lock"]');
+    const prizeEditDeadline = find('[data-role="prize-edit-deadline"]');
     const entryCount = find('[data-role="entry-count"]');
     const entryCountLabel = find('[data-role="entry-count-label"]');
     const drawReadiness = find('[data-role="draw-readiness"]');
@@ -1047,13 +1070,8 @@
       const locked = prizeDetailsLocked(data);
       description.disabled = locked;
       prizeValue.disabled = locked;
-      materialLock.textContent = data.prize_details_lock_reason === 'sending'
-        ? 'The winner email is being sent. Prize details are temporarily locked.'
-        : data.prize_details_lock_reason === 'unconfirmed'
-          ? 'Email delivery is being checked. Prize details are temporarily locked.'
-          : data.prize_details_lock_reason === 'sent'
-            ? 'Prize details are locked because the winner email has been sent.'
-            : 'Prize details are currently locked. Refresh to check their status.';
+      materialLock.textContent = prizeEditHelp(data);
+      if (prizeEditDeadline) prizeEditDeadline.textContent = prizeEditHelp(data);
       materialLock.classList.toggle('is-hidden', !locked);
 
       const count = Math.max(0, Math.floor(number(data.entrant_count != null ? data.entrant_count : data.entry_count)));
@@ -1140,7 +1158,7 @@
         ? number(settings.prize_approx_value_cad)
         : number(prizeValue.value);
       // Accepting a newly published rules version remains a fresh vendor action,
-      // independent of the winner-email prize lock.
+      // independent of the deadline and winner-email prize locks.
       const requestLegalAccepted = Boolean(legalAccepted.checked);
       const rulesVersion = text(state.data.rules_version);
       const rulesReviewed = Boolean(

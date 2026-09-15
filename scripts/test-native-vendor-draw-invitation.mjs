@@ -53,7 +53,8 @@ test('the named invitation keeps Yes as the only entry action and No only dismis
   assert.match(invitation, />\s*Yes\s*</);
   assert.match(invitation, />No</);
   assert.match(invitation, /onPress=\{enterRaffle\}/);
-  assert.doesNotMatch(invitation, /prize_description|eligibility_region|entry_access|View draw rules|View vendor/);
+  assert.match(invitation, /<QrVendorPrizeDetails.*offer=\{raffleOffer\}/);
+  assert.doesNotMatch(invitation, /accessibilityRole="checkbox"/);
   const ast = ts.createSourceFile('index.tsx', appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let decline;
   function visit(node) {

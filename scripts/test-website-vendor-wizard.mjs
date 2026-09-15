@@ -71,7 +71,7 @@ function dashboard(patch = {}) {
     entry_opens_at: '2026-09-20T04:00:00Z', entry_closes_at: '2026-09-20T19:00:00Z',
     terms_url: 'https://www.weddingwin.ca/qr-bingo-vendor-draw-rules',
     vendor_responsibility_disclosure: 'Fictional unit-test responsibility text.',
-    material_terms_locked: false, prize_details_locked: false, event_key: 'unit-test-event', draws: [], entry_count: 0,
+    material_terms_locked: false, prize_details_locked: false, prize_edit_deadline_at: '2026-10-18T15:00:00Z', prize_edit_timezone: 'America/Toronto', event_key: 'unit-test-event', draws: [], entry_count: 0,
     settings: {
       enabled: false, prize_title: originalDescription.split('\n')[0],
       prize_description: normalized(originalDescription), prize_approx_value_cad: 500,
@@ -102,7 +102,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 const commonFunctions = [
-  'text', 'number', 'prizeDetailsLocked', 'firstLine', 'formatPrizeDraftDescription',
+  'text', 'number', 'prizeDetailsLocked', 'prizeEditHelp', 'firstLine', 'formatPrizeDraftDescription',
   'samePrizeWording', 'formatDate', 'trustedWeddingWinUrl', 'savedDrawReadiness', 'makeElement',
   'currentDraftSignature', 'drawActivationScope', 'activeDraws', 'verifiedDraws', 'configuredWinnerCount',
   'updateRulesReviewProgress', 'updateWizardSummary', 'setStatus', 'setBusy',
@@ -129,7 +129,7 @@ function harness(options = {}) {
     'enabled', 'description', 'prizeValue',
     'legalAccepted', 'vendorResponsibilityDisclosure', 'vendorResponsibilityDetails',
     'rulesLink', 'acceptanceState', 'eligibility', 'entryClose', 'drawAt', 'odds',
-    'saveButton', 'reloadButton', 'materialLock', 'entryCount', 'entryCountLabel',
+    'saveButton', 'reloadButton', 'materialLock', 'prizeEditDeadline', 'entryCount', 'entryCountLabel',
     'drawReadiness', 'drawReadinessLabel', 'drawReadinessMessage',
     'selectionPoolCount', 'excludedCount', 'participationReportButton', 'entriesReloadButton',
     'reviewConfirmButton', 'reviewReplaceButton', 'drawStatusLabel', 'drawStatus',
@@ -886,13 +886,14 @@ test('linked rules keep the question obligation while replacing technical answer
   }
 });
 
-test('public rules match one winner and prize editing before email without removing replacement or history', () => {
+test('public rules match one winner and the 11am prize cutoff without removing replacement or history', () => {
   const legal = readFileSync(new URL('../brilliant-directories/pages/qr-bingo-official-rules.html', import.meta.url), 'utf8');
   const copy = normalized(legal.replace(/<[^>]*>/g, ''));
   assert.match(copy, /Each draw has one winner\./);
   assert.match(copy, /selects one potential winner at random/);
-  assert.match(copy, /may edit the prize title, description, and value until the winner email starts sending/);
-  assert.match(copy, /stay locked while the email is sending and after it has been sent/);
+  assert.match(copy, /may edit the prize title, description, and (?:approximate CAD )?value before 11:00 a.m. on the wedding-show date/);
+  assert.match(copy, /lock at 11:00 a.m., or earlier/);
+  assert.match(copy, /winner-notice sending has started/);
   assert.match(copy, /Eligibility, event dates, entry limits, and the other draw terms remain locked/);
   assert.match(copy, /Choose a different winner before confirming the current selection/);
   assert.match(copy, /The previous selection and contact details are kept\./);

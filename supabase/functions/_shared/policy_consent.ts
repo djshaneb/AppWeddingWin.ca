@@ -1,5 +1,5 @@
-export const CURRENT_TERMS_VERSION = "2026-09-01";
-export const CURRENT_PRIVACY_VERSION = "2026-09-01";
+export const CURRENT_TERMS_VERSION = "2026-09-14";
+export const CURRENT_PRIVACY_VERSION = "2026-09-14";
 
 export type CurrentPolicyConsent = {
   acceptedAt: string;

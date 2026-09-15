@@ -38,7 +38,7 @@ assert(
 );
 const notice = scanner.slice(noticeStart, noticeEnd);
 const modal = scanner.slice(scanner.indexOf("<Modal"));
-const noticeVersion = "2026-09-04-pre-scan-draw-consent";
+const noticeVersion = "2026-09-14-showday-prize-lock";
 
 Deno.test("one linked short agreement appears before the camera, with full details on the terms page", () => {
   const checkbox = notice.indexOf('testID="qr-bingo-terms-acknowledgement"');
@@ -290,14 +290,14 @@ Deno.test("accepted users can review the agreement without rewriting consent or 
   );
 });
 
-Deno.test("post-scan vendor offer is only the named prompt and Yes or No under the prior agreement", () => {
+Deno.test("post-scan vendor offer keeps named Yes or No with expandable prize details under the current agreement", () => {
   assert(
     modal.replace(/\s+/g, "").includes(
       "visible={vendorDrawsEnabled&&participationNoticeAccepted&&!!raffleOffer}",
     ) && modal.includes("raffleOffer?.vendor_name") &&
-      !modal.includes("prize_description") && !modal.includes("eligibility_region") &&
-      !modal.includes("entry_access") && !modal.includes("View vendor draw rules"),
-    "the offer must stay a simple named Yes/No choice after the existing pre-camera agreement",
+      modal.includes("<QrVendorPrizeDetails") &&
+      !modal.includes('accessibilityRole="checkbox"'),
+    "the offer must retain a named Yes/No choice and expandable details after the current pre-camera agreement",
   );
   const enterStart = modal.indexOf("styles.raffleEnterButton");
   const enter = modal.slice(enterStart, modal.indexOf("</TouchableOpacity>", enterStart));
