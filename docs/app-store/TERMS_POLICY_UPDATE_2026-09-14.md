@@ -2,6 +2,10 @@
 
 The user-authorized prize, disclosure, ticket-sharing and liability changes are implemented and published. This record supersedes the selected findings in the earlier terms consistency review; it does not declare the entire App Store release ready.
 
+## Later couple-screen cleanup
+
+At the user’s request, removed the explanatory paragraph about updated terms, the vendor prize deadline and liability from the native and website couple pre-scan screens. The vendor terms already contain these details. The agreement controls, linked policies and acceptance behavior are unchanged. This small display change passed 51 focused tests and TypeScript checks; the cleaner iPhone and iPad simulator layouts were visually verified. The physical development build succeeded and installed after the iPhone reconnected. Automatic launch was blocked by the phone’s lock; the user can unlock and open WeddingWin. The earlier full-suite results and successful phone installation below describe the preceding policy release.
+
 ## Current behavior
 
 - Vendors may change their prize title, description and value before **11:00 a.m. on the wedding-show date in the show's local time zone**. Niagara's current deadline is October 18, 2026 at 11:00 a.m. America/Toronto (15:00 UTC). Saves at or after the deadline are rejected by the database. Existing earlier winner-notice locks remain effective.

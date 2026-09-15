@@ -1902,7 +1902,6 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 	    >
 	      <h2>Before you scan</h2>
 	      <p>While QR scanning is open, including early access, scanning a vendor with its draw turned on offers an optional entry. Choose Yes to enter or No to keep only your scan. The displayed entry deadline and draw date still apply.</p>
-          <p>The updated Terms apply after you agree below. Prize changes close at 11:00 a.m. on show day, in the show’s local time. Review the recorded prize before choosing Yes. The Terms limit liability only as permitted by law.</p>
 	      <div class="qr-rules-notice-row">
 	        <input id="qrRulesNoticeAcknowledged" type="checkbox">
 	        <label for="qrRulesNoticeAcknowledged">

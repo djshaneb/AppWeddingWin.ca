@@ -3351,11 +3351,6 @@ function NativeQrScanner({
             <View style={styles.qrConsentHeader}>
               <Text style={styles.qrConsentTitle}>Before you scan</Text>
             </View>
-            <Text style={styles.qrConsentSummary}>
-              The updated Terms apply after you agree below. Prize changes close at
-              11:00 a.m. on show day, in the show’s local time. Review the recorded
-              prize before choosing Yes. The Terms limit liability only as permitted by law.
-            </Text>
             <View style={styles.qrConsentLinks}>
               <TouchableOpacity
                 style={styles.qrConsentLink}
@@ -17140,9 +17135,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 25,
     fontWeight: '800',
-  },
-  qrConsentSummary: {
-    color: '#5F5552', fontSize: 13, lineHeight: 19, marginTop: 6, marginBottom: 8,
   },
   qrConsentLinks: {
     flexDirection: 'row',

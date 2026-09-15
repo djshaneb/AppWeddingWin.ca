@@ -124,7 +124,6 @@ test('the updated notice never treats an older cached agreement or receipt as ne
   assert.deepEqual(f.calls, [], 'Old cache cannot create a cached acceptance of the new notice');
   assert.deepEqual(f.accepted, ['']);
   assert.deepEqual(f.writes, []);
-  assert.match(appSource, /The updated Terms apply after you agree below/);
 });
 
 
