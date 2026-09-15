@@ -1,6 +1,6 @@
 # Release verification — September 15, 2026
 
-This is an additional verification record, not a replacement for the historical release matrix or physical-device reports. The checks below passed within their stated scope. App Review submission, final privacy declarations and physical build 6 acceptance remain incomplete. Build 4/5 records below are historical; the latest build 6 checkpoint is at the end of this document.
+This is an additional verification record, not a replacement for the historical release matrix or physical-device reports. The checks below passed within their stated scope. App Review submission, final privacy declarations and physical build 7 acceptance remain incomplete. Build 4/5/6 records below retain their original scope; the latest build 7 checkpoint is at the end of this document.
 
 ## Source and simulator provenance
 
@@ -113,8 +113,38 @@ The build 6 native simulator checks completed the following observed paths, reco
 
 The physical build 6 inspection runner failed **before its test started**, with “Timed out while enabling automation mode.” It made **zero Install taps**. The owner has been asked to unlock the phone; that handoff remains pending at this checkpoint. This is an automation-preparation failure, not a new TestFlight installation attempt or failure. The private runner result is retained locally as `work/app-store-build6-sept15/install-inspect6-result-private.json`; its raw contents are not copied into this package.
 
-The simulator exposed a review-modal header overlapping the status bar. The minimal local provider correction was rebuilt and visually verified at **2026-09-15 23:01:33.264 UTC** on **iPhone 17 Pro / iOS 26.5**. The Review test title and Close are fully below the status bar/Dynamic Island; the body and controls remain readable. The exact source hash and build-evidence filename are recorded under `headerCorrection` in the [native UI observations](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-build6-sept15/native-review-ui-observations.json). This pass applies to the rebuilt local candidate only: the correction is **not present in uploaded build 6**. The owner approved Store build 7 after this local verification. Its production build and upload have not yet started.
+The simulator exposed a review-modal header overlapping the status bar. The minimal local provider correction was rebuilt and visually verified at **2026-09-15 23:01:33.264 UTC** on **iPhone 17 Pro / iOS 26.5**. The Review test title and Close are fully below the status bar/Dynamic Island; the body and controls remain readable. The exact source hash and build-evidence filename are recorded under `headerCorrection` in the [native UI observations](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-build6-sept15/native-review-ui-observations.json). This pass applies to the rebuilt local candidate only: the correction is **not present in uploaded build 6**. The owner approved Store build 7 after this local verification. The subsequent build 7 checkpoint below records its production build and upload progress.
 
 No physical build 6 installation or message/draw push result is verified. Archive validation and Apple processing do not prove phone download availability; the previous iPhone installation failure is not presumed fixed by this feature build.
 
 App Privacy and the remaining device/reviewer/policy gates remain open. Apple Feedback Assistant has the approved report and two original error screenshots attached; its final upload-consent dialog awaits the owner's action-time confirmation, so that report has not yet been submitted. No App Review submission or public release is recorded.
+
+
+## Approved build 7 archive and submission checkpoint
+
+The owner approved build 7 for the minimal review-modal safe-area correction after the local visual check described above. EAS production build `06659611-a344-4d30-a061-29028052916b` finished at **2026-09-15 23:09:01.429 UTC**. Source commit `e7297c7` and build-number configuration commit `0cae23d` are pushed to GitHub. There is no new diagnostic WebView prop in this source.
+
+The archive was verified at **23:14:54.635 UTC**: `ca.weddingwin.app`, version `1.0.0 (7)`, arm64 iPhoneOS, iPhone/iPad families, iOS 26.0 SDK and minimum iOS 15.1. Strict signature verification passed; the signing certificate matches the embedded Store profile. The archive retains production APNs, `get-task-allow=false`, beta reporting and Sign in with Apple; its profile expires August 29, 2027 and has no device allowlist. IPA SHA-256: `ddce2a20a911753a0c397e10d5c11a887e792191a47283848e6ec281d787cf7b`. See the [build 7 archive record](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-build7-sept15/build7-archive-verification.json).
+
+The recorded source hash matches the visually verified header correction, the bundle contains the expected review/safe-area markers and its JavaScript differs from uploaded build 6. These checks support provenance; they are not a reproducible bytecode-to-source comparison or proof of Apple-side download availability, remote credential validity or device notification behavior.
+
+EAS submission `722bb739-c323-4de7-b5b1-b0f0e9d48105` was scheduled at 23:15 UTC. A fresh App Store Connect row shows **1.0.0 (7) Processing**, with creation time 4:15 p.m. in that UI. The upload has reached Apple; **completed processing and internal-group assignment remain unverified at this checkpoint**. The separate version 1.0 draft still selects build 5. No build 7 physical installation or push-delivery pass is claimed.
+
+Apple’s private Notes field was updated with the nonbinding review walkthrough and the controlled couple/vendor and Cedar credentials. A reload and exact DOM comparison confirmed the saved text: **3,636 characters / 3,643 UTF-8 bytes**. Passwords were not displayed or copied into the repository/package. Final access checks on the selected distribution build remain necessary. The completed native review cycle was reset from generation 2 to 3 at **23:06:53.891 UTC**, ready for another controlled test.
+
+The latest case-number Gmail search still found only Apple’s acknowledgement for **102964472775**. Feedback Assistant’s final upload consent remains pending. App Privacy and remaining device/policy gates are open. No App Review submission or public release has occurred.
+
+A subsequent build 7 inspection ran on **Shane’s iPhone 16 Pro / iOS 26.5.2** at **23:17:23–23:17:47 UTC**. Device automation started successfully, resolving the earlier unlock/automation handoff. The helper skipped because the exact build 7 row was absent while Apple processing was underway; **zero Install taps** were made. This is neither an installation failure nor a successful app install. The private result is retained as `work/app-store-build7-sept15/install-inspect7.xcresult`; no raw private contents are copied here.
+
+
+## Build 7 Apple processing and physical installation result
+
+Apple subsequently completed processing build 7: upload **Complete**, **Ready to Submit**, 90 days of testing, **WeddingWin Internal QA** assigned (Internal, one tester), and What to Test saved with Save disabled. Apple build ID: `221d5f3d-a511-4df3-be32-a982c6489743`. These checks supersede the earlier Processing checkpoint above; they are not App Review submission or approval.
+
+A guarded physical XCTest verified the exact **1.0.0 (7)** row on **Shane’s iPhone 16 Pro / iOS 26.5.2**, tapped Install **once at 23:18:46 UTC**, and accepted the exact standard replacement confirmation **once at 23:20:29 UTC**. That confirmation stated that app data might be lost. At **23:20:49 UTC**, the phone displayed:
+
+> Could not install WeddingWin Canada. The requested app is not available or doesn’t exist.
+
+No Open button appeared, and the error alert was left untouched. **Installation failed.** The helper’s guarded UI actions and error inspection succeeded; this is not a successful WeddingWin test. No physical build 7 app-function or push-acceptance checks could run. The authoritative [installation result](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-build7-sept15/iphone-build7-installation-result.json) records the device, OS, build and single-attempt timing.
+
+Build 7 therefore reproduces the earlier TestFlight distribution symptom despite a verified archive, completed Apple processing and correct internal-group assignment. The evidence does not establish the cause, identify another source/signing defect or justify an additional rebuild. Apple’s existing case **102964472775** is being supplemented with the new evidence; Feedback Assistant’s final upload consent remains pending, so no completed follow-up submission is claimed. The private Notes are saved, the version draft still selects build 5, and App Privacy and remaining acceptance/policy gates remain open. No App Review submission or public release occurred.
