@@ -1,5 +1,7 @@
 # WeddingWin App Store release package
 
+**Latest submission check — September 15:** Build 5 is selected and saved for version 1.0. Apple's Add for Review check requires copyright, Content Rights Information and App Privacy; age rating is complete. Functional reviewer access and remaining testing/policy requirements remain open. No App Review submission occurred. See [submission check](SUBMISSION_CHECK_2026-09-15.md); older build-4 selection statements below are historical.
+
 **Current status — September 15, 2026:** Build 5 passed archive checks, uploaded successfully, and remains processed and assigned to WeddingWin Internal QA. Installation failed twice on iPhone 15 and once on iPhone 16 Pro with “The requested app is not available or doesn’t exist.” The newer phone's tester-account switch was verified with iCloud unchanged; development build 3 remains installed. Build 5 is installed on neither phone, so no build 5 iPhone functional tests have run.
 
 An independent audit found no source, packaging, signing or upload mismatch that justifies another rebuild. Apple Developer Support accepted the user-approved report; the cause remains unconfirmed. Installation-error screenshots have not yet been transmitted because the form had no attachment input; an attachment route is being checked. See the [iPhone build 5 installation report](IPHONE_TESTFLIGHT_BUILD5_REPORT.md). Build-4 availability statements below are historical; builds 2–4 are Expired. The full acceptance matrix remains incomplete, with no App Review submission.
