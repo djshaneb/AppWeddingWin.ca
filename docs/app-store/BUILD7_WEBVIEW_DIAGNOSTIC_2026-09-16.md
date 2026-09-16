@@ -1,0 +1,7 @@
+# Build 7 WebView diagnostic — September 16, 2026
+
+A temporary local diagnostic copy in [work/app-privacy-build7-sept16](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-privacy-build7-sept16) compiled as a signed Release simulator build in 336.8 seconds. Its 75 runtime/asset files matched the release source except for the approved `webviewDebuggingEnabled` inspection prop. The app identity remained `ca.weddingwin.app`, version 1.0.0 (7).
+
+At 02:09:53 UTC it was installed and launched on the iPhone 17 Pro simulator running iOS 26.5. Emma and Liam's native-home session remained authenticated, and the vendor-search WebView visibly rendered `/home`. Safari Web Inspector attached, but its network table exposed no rows despite aggregate counters showing 45 resources and 10 domains. A read-only summary probe and a simple console probe returned no usable results. This produced **no new provider or no-tracking finding** and does not identify a Safari or app fault. Earlier September 15 native observations retain their original build/session/page scope; they are not upgraded to build 7 production evidence.
+
+The diagnostic session ended, the simulator app was stopped, and Safari's temporary **Show features for web developers** setting was restored to `0` and verified. Release source, app configuration and the Store build were unchanged. This was not a physical-device, TestFlight or production-push test. The complete provider inventory and final privacy purposes/linkage/tracking decisions remain open.
