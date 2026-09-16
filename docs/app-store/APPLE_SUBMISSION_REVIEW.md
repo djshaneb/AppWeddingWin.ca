@@ -42,6 +42,8 @@ Field formatting and limits are documented in [Apple's app-information fields](h
 
 ## Historical findings and scope
 
+On September 16 the owner clarified that nobody sponsors the draws and that contact information is shared with sponsors in general. General show sponsorship is now explicitly separated from draw responsibility in the [privacy worksheet](APP_PRIVACY_ANSWERS.md#owner-clarification--september-16). The operational follow-up and recipient-use clarification remain open; this statement does not settle Apple's developer-sponsorship requirement or the tracking questionnaire.
+
 Historical build 4 finished from source `533821d` (configuration `58e3438`), passed archive checks and uploaded on September 15 at 04:15:04 UTC. It was selected in the earlier draft and installed on iPad: seven scoped UI tests and two message notifications passed, with the second alert/sound confirmed by the user. These exact-build results remain valid history, but build 4 is now Expired and its passes are not build 7 evidence. See [physical iPad report](IPAD_TESTFLIGHT_BUILD4_REPORT.md).
 
 The earlier files under `package-review/` remain evidence of their original audit. Their missing-prize-detail and old-privacy-copy findings are superseded by [TERMS-POLICY-UPDATE.md](TERMS_POLICY_UPDATE_2026-09-14.md); they must not be presented as current failures. Existing attendance-related wording and early-entry behavior were deliberately left unchanged at the owner's request. That choice is recorded, not described as a completed wording reconciliation.

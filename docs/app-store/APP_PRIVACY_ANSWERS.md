@@ -142,3 +142,9 @@ Before submitting:
 Anonymous, no-cookie requests returned HTTP 200 for the privacy-request, contact and draw-rules pages. The privacy-request email route and About → Delete Account instructions were visible; no request was sent and no staff fulfilment or actual deletion was tested. The join and show pages were inspected in the existing signed-in Chrome vendor session: join advertises a free vendor profile through checkout 17, and the show page links to Eventbrite tickets for a physical event. Inspected native top-frame policy routes the third-party HTTPS link to the external browser. No physical tap or purchase was performed. See [exact routes and limits](PUBLIC_ROUTE_CHECK_2026-09-16.md).
 
 These observations do not complete checkout/provider collection, retention or privacy declarations. Owner confirmation of actual marketing/ad-audience use and actual contest sponsorship remains pending. No purpose, linkage or tracking answer is finalized by this update.
+
+### Owner clarification — September 16
+
+The owner clarified: “Nobody sponsors the draws. Contact information will be shared with sponsors in general.” This confirms sharing with general show sponsors; it does not make those businesses draw sponsors. The specific permitted use by recipients—direct wedding-service outreach versus advertising-audience uploads—still needs clarification before final marketing/tracking answers. The source-supported account linkage and functionality purposes remain applicable alongside any additional confirmed purposes.
+
+Apple's separate requirement that contests be sponsored by the app developer still needs reconciliation with the actual operating arrangement. The follow-up asks whether WeddingWin oversees the draws while vendors provide/award prizes, or vendors run them independently. No responsibility is assigned to WeddingWin or to event sponsors by inference, and no public rules or Apple answers were changed by this clarification.
