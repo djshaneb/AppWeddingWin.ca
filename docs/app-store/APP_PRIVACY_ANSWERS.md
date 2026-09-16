@@ -1,56 +1,60 @@
-# App Privacy draft matrix
+# App Privacy answer matrix
 
-Updated September 16, 2026 for candidate build 7. The isolated review collection was introduced in build 6 (`fd088ee`, configuration `18a0847`) and remains in build 7 (`e7297c7`, configuration `0cae23d`); earlier policy and traffic observations retain their stated scope. **Internal submission worksheet; fourteen data-type selections remain saved as an unpublished App Store Connect draft.** This covers native features, embedded WeddingWin/website-builder pages and their service providers. Observed collection is separated from purposes and provider practices that still need confirmation. No Apple privacy selections, purposes or publication state were changed by this documentation update.
+Updated September 16, 2026 for candidate build 7. **All seventeen category answers are published in App Store Connect.** After the owner's approval, the controlling agent completed Publish and verified Apple's status: “Published a few seconds ago by Shane Blair.” The saved seventeen-category draft was also reloaded before publication, with all data linked, no Set Up items and no Tracking/Not Linked preview section. All seventeen use **Linked Yes / Tracking No**, with purposes below, based on observed flows, retained fields, the owner's sponsor-use statement and documented provider purposes. This is a supported classification, not absolute verification of every provider's processing. See the [decision evidence and limits](APP_PRIVACY_DECISIONS_2026-09-16.md).
 
-The approved notification changes and isolated review backend are implemented and deployed. Candidate **1.0.0 (7)** passed archive checks and Apple processing. TestFlight installation fails at installation-data retrieval with HTTP 404 on iPhone and iPad; a development-signed copy passed only foreground startup. The controlled API and simulator review workflows passed, but physical build 7 distribution/push acceptance remains open. Historical build 4 message-alert evidence remains in the [iPad report](IPAD_TESTFLIGHT_BUILD4_REPORT.md); current evidence is in [release verification](RELEASE_VERIFICATION_2026-09-15.md). These testing limits do not remove implemented collection from the inventory.
+Candidate **1.0.0 (7)** is now installed through TestFlight on iPhone 16 Pro / iOS 26.7. Scoped startup, navigation, login and resume checks passed; the user confirmed a visible message alert and audible sound. Notification tap, badge and draw-push results are not claimed. The user requested no repeated device tests; existing evidence retains its original scope. See the [current iPhone report](IPHONE_TESTFLIGHT_BUILD7_REPORT_2026-09-16.md). Earlier installation failures below or in linked records are historical.
 
-The [build 7 manifest audit](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-build7-sept15/PRIVACY_MANIFEST_AUDIT.md) found that all twelve bundled manifests parse and required-reason metadata is internally consistent, but the app-level manifest has no collected-data entries and records `NSPrivacyTracking=false` despite unresolved tracking decisions. The empty collection list is an authoring completeness gap against [Apple TN3184](https://developer.apple.com/documentation/technotes/tn3184-adding-data-collection-details-to-your-privacy-manifest), separate from Apple's questionnaire and unrelated to any proven cause of the TestFlight HTTP 404. Complete the factual collection, purpose, linkage and tracking inventory before correcting the manifest and producing a replacement candidate; no negative answers are inferred from the current configuration.
+The [build 7 manifest audit](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-build7-sept15/PRIVACY_MANIFEST_AUDIT.md) found twelve parseable manifests and consistent required-reason metadata. The app-level collected-data list is empty: an authoring completeness gap against [Apple TN3184](https://developer.apple.com/documentation/technotes/tn3184-adding-data-collection-details-to-your-privacy-manifest). It is separate from the App Store questionnaire and is not a proven cause of the earlier installation failure. Apple's current Add for Review gate identified App Privacy; this does not establish a manifest-related rejection. No manifest, app configuration or binary is changed by this answer update, and no rebuild is being initiated. The Tracking No classification is based on the evidence below, not inferred from the existing `NSPrivacyTracking=false` value.
 
-## Saved draft state — September 15, 2026
+## Current answer status — September 16, 2026
 
-App Store Connect now saves these fourteen selected data types: Name, Email Address, Phone Number, Contacts, Other Financial Info, Purchase History, Emails or Text Messages, Photos or Videos, Gameplay Content, Other User Content, User ID, Device ID, Product Interaction and Other Diagnostic Data. The latest additions—Contacts, Other Financial Info and Purchase History—were verified against the inspected deployed builder UI; all fourteen selections persisted after reload. Every selected type still shows **Set Up**; no purpose, linkage or tracking questionnaire is finalized, and Publish is disabled. The data types below distinguish those saved selections from additional categories still under review. This is not a published privacy label or a completed App Review requirement.
+The published set adds **Physical Address, Customer Support and Search History** to the fourteen previously saved categories. Purpose, linkage and tracking entry and publication are verified; Device ID has App Functionality only. Historically, on September 15, fourteen category selections persisted but all showed Set Up and Publish was disabled. That historical UI state is superseded.
 
 ## Top-level fields
 
-| Field | Draft |
+| Field | Published answer |
 | --- | --- |
 | Does the app collect data? | Yes |
 | Privacy Policy URL | https://www.weddingwin.ca/about/privacy — published, text verified and URL saved in App Store Connect |
 | Privacy Choices URL | https://www.weddingwin.ca/privacy-request — public request route; URL saved in App Store Connect |
-| Data linked to the user | Proposed Yes for the account, contact, messages, QR, consent and push records below; not finalized in Apple |
-| Tracking | Unresolved until the final production network/provider inventory is complete; do not infer No from native code alone |
+| Data linked to the user | Yes for all seventeen categories |
+| Tracking | No for all seventeen categories, based on the scoped evidence and purpose assessment in the decision record; publication verified September 16 |
 
 Account-linked data is not anonymous merely because an export or public screen hides its identifier. Record collection by embedded pages and service providers too. Apple's labels and purposes must match actual use. [Apple App Privacy guidance](https://developer.apple.com/app-store/app-privacy-details/)
 
 ## Data types
 
-| Apple category | App Store draft status | Observed use | Proposed purpose / remaining decision |
-| --- | --- | --- | --- |
-| Name | Selected; Set Up pending | Accounts, profiles, messages, vendor entries and authorised exports | App Functionality; confirmed sponsor direct outreach also needs Apple's applicable marketing-purpose classification |
-| Email Address | Selected; Set Up pending | Login, verification, contact, draw communications and exports | App Functionality; owner confirms sponsor wedding-service emails, with no advertising-audience uploads for that workflow |
-| Phone Number | Selected; Set Up pending | QR contact profile and other member/contact fields | App Functionality; owner confirms sponsor wedding-service calls, with no advertising-audience uploads for that workflow |
-| Physical Address | Still under review | Profile/address fields, such as city, province and postal code | Confirm exactly retained fields and whether this category applies |
-| Contacts | Selected; Set Up pending | Wedding guest lists and RSVP records; manual/CSV guest collection | App Functionality; confirm full retention and additional purposes |
-| Other Financial Info | Selected; Set Up pending | Wedding budgets, actual costs and paid/pending amounts | App Functionality; verify complete scope and any additional use |
-| Purchase History | Selected; Set Up pending | Manually recorded vendor contracts/payment schedules and paid/owed records | App Functionality; this does not establish card collection or in-app payment processing |
-| Emails or Text Messages | Selected; Set Up pending | Private conversation content and delivery state | App Functionality |
-| Photos or Videos | Selected; Set Up pending | Profile/listing images and retained chat media; new chat-photo sending is capability-gated | App Functionality; verify enabled production upload routes and provider handling |
-| Gameplay Content | Selected; Set Up pending | QR Bingo card progress and draw participation state | App Functionality; verify full scope and any additional use |
-| Other User Content | Selected; Set Up pending | Wedding details, listings, reports, prize terms and consent/eligibility evidence | App Functionality; review actual additional purposes |
-| User ID | Selected; Set Up pending | Account/provider identifiers and account-linked message, notification and draw references | App Functionality; generic push text does not make routing identifiers anonymous |
-| Device ID | Selected; Set Up pending | Existing account-linked push token/device information | App Functionality; do not infer tracking from the token alone |
-| Product Interaction | Selected; Set Up pending | Scans, entry actions and retained feature interaction | App Functionality; Analytics only if actually used that way |
-| Customer Support | Still under review | Contact requests and support records where retained | Confirm collection and applicable disclosure before final answers |
-| Other Diagnostic Data | Selected; Set Up pending | Retained operational delivery status and bounded error/security records | Confirm exact scope, linkage and purposes |
-| Crash Data / Performance Data | Still under review | Potential retained crash or performance records | Select only specific types actually retained; neither is established by selecting Other Diagnostic Data |
+All rows have **Linked Yes / Tracking No**. The controlling agent verified the completed saved draft after reload and the published status after the owner's approval on September 16.
+
+| Apple category | Observed use | Published purposes |
+| --- | --- | --- |
+| Name | Accounts, profiles, entries and authorised contact sharing | App Functionality; Third-Party Advertising |
+| Email Address | Login, verification, messages, draw communications and sponsor outreach | App Functionality; Third-Party Advertising |
+| Phone Number | Contact profiles and sponsor wedding-service calls | App Functionality; Third-Party Advertising |
+| Physical Address | Explicit saved vendor-contact Address fields in the embedded builder | App Functionality |
+| Contacts | Wedding guest lists and RSVP records | App Functionality |
+| Other Financial Info | Wedding budgets, actual costs and paid/pending amounts | App Functionality |
+| Purchase History | Recorded vendor contracts, payments and paid/owed records | App Functionality |
+| Emails or Text Messages | Private conversation content and delivery state | App Functionality |
+| Photos or Videos | Profile/listing images and retained chat media | App Functionality |
+| Gameplay Content | QR Bingo progress and draw participation state | App Functionality |
+| Other User Content | Wedding details, listings, prize terms and consent/eligibility evidence | App Functionality |
+| User ID | Account/provider IDs and account-linked message, notification and draw references | App Functionality |
+| Device ID | Account-linked push registration and operational device information | App Functionality |
+| Product Interaction | Scans/entry actions and provider request/usage statistics | App Functionality; Analytics |
+| Customer Support | Persisted user-requested conversation reports and their handling state | App Functionality |
+| Search History | Observed Google autocomplete queries, with provider-retained request parameters | App Functionality; Analytics |
+| Other Diagnostic Data | Operational delivery status and bounded error/security records | App Functionality |
 
 The owner confirms that general show sponsors receive couples' contact information for wedding-service emails and calls only, with no Facebook, Google or other advertising-audience uploads for that workflow. This establishes direct marketing use that must be classified under Apple's applicable purposes; it must not be labelled only App Functionality. It does not establish that every native/WebView provider is free of tracking or settle other recipients' additional uses. Administrative access to an export does not by itself authorise a new marketing purpose.
 
-The proposed purpose mapping for shared Name, Email Address and Phone Number is **App Functionality plus Third-Party Advertising**, linked to the account. This is an inference from Apple's definitions applied to sponsors promoting their own services; their outreach alone does not establish WeddingWin's own Developer Advertising or Marketing purpose. Apple's published examples do not specifically address one-to-one sponsor email/call outreach. The source-supported linkage/functionality findings and the review-only manifest mapping are retained in the [source supplement](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-build7-sept15/PRIVACY_SOURCE_SUPPLEMENT.md). App Store fields and manifest tracking values are not finalized by this proposal.
+The prepared sponsor purpose mapping is **App Functionality plus Third-Party Advertising** for Name, Email Address and Phone Number. This is an inference from Apple's definitions for sponsors promoting their own services; it does not establish WeddingWin's own Developer Advertising or Marketing use. Apple's examples do not expressly decide one-to-one sponsor outreach. The earlier [source supplement](/Users/shane/Documents/Codex/2026-09-10/one-of-my-previous-chats-won/work/app-store-build7-sept15/PRIVACY_SOURCE_SUPPLEMENT.md) retains its historical unresolved statements; the current decision record supersedes them for this answer preparation.
 
-Confirm search/browsing-history retention, website analytics/advertising, ticket purchase history, checkout data and location derived from IP addresses before omitting those categories. The inspected deployed builder supports selecting Contacts, Other Financial Info and Purchase History as described below; full retention, additional purposes and other specifically requested fields remain under review. Free app features do not prove that no paid event-ticket flow is reachable. Do not select precise device location, microphone/audio or address-book Contacts solely because users provide a city, phone number or selected photo. Generic free-form text does not require declaring every possible sensitive fact a user might type.
+**Not selected:** Crash Data, Performance Data and Browsing History have no affirmative collection evidence in this bounded source/provider review. Error/delivery records fit Other Diagnostic Data; browser navigation capability does not establish retained external browsing history. No precise device location, microphone/audio or payment-card collection is inferred from address fields, selected photos or an external Eventbrite link. Generic text does not require declaring every sensitive fact someone might type. These decisions use current observed scope rather than requiring an exhaustive proof of absence.
 
 ## Deployed builder and supporting source evidence
+
+The following historical observations keep their original dates and limits. Phrases describing earlier unresolved answers are superseded by the current decision matrix; they do not reopen completed classifications or request repeated device tests.
 
 A read-only September 15 Chrome inspection of the existing John and Jane demo session verified the following current deployed collection UI. No records were created and nothing was sent. This supports the three saved additions—Contacts, Other Financial Info and Purchase History—and is consistent with the clean local builder checkout at commit `c334452` (September 7); it does not establish wholesale source/deployment parity, complete retention or the boundary with ticket checkout.
 
@@ -131,24 +135,23 @@ The owner confirms that vendors run their draws independently; general show spon
 
 The business name appears publicly as **Wedding Win Inc.**, and the public support address is **info@weddingwin.ca**. The authenticated App Store record displays **Shane Blair** as seller. The owner confirmed Wedding Win Inc. as copyright holder, and `2026 Wedding Win Inc.` was saved and verified after reload September 15 at 21:46 UTC. Those identity facts do not resolve the confirmed independent vendor operation's mismatch with Apple's developer-sponsorship requirement. [Privacy policy](https://www.weddingwin.ca/about/privacy), [support](https://www.weddingwin.ca/about/contact).
 
-Before submitting:
+Current privacy completion:
 
-- [ ] Complete the exact-build and embedded-page network/provider inventory.
-- [ ] Approve data purposes, linked status, any tracking answer and associated consent requirements.
-- [ ] Reconcile ticket, search, support, diagnostic and media data with actual production use.
-- [ ] Approve operational retention/deletion handling and determine whether the final provider/purpose inventory requires any further policy update.
-- [ ] Verify public privacy-request access and end-to-end account deletion on the selected build.
-- [ ] Compare final App Store answers with the selected signed archive's privacy report/manifests and actual production settings. Required-reason API entries in `app.json` alone are not a complete data-collection declaration.
+- [x] Prepare seventeen category/purpose/linkage/tracking answers from retained fields, scoped observations and provider documentation; record in [decision evidence](APP_PRIVACY_DECISIONS_2026-09-16.md).
+- [x] Verify all seventeen saved answers after reload and publish with the owner's approval. Apple displayed “Published a few seconds ago by Shane Blair”; the seventeen categories are linked to the user.
+- [ ] Recheck Add for Review after publication; privacy publication alone does not establish App Review submission.
+
+The earlier retention/deletion and policy records keep their stated limits; they are not new questionnaire blockers or instructions for a blanket retest. Required-reason API metadata is not a replacement for the questionnaire, and the separate empty manifest collection list remains a documented authoring gap. No manifest rebuild is initiated by this work.
 
 
 ## Partial public-route check — September 16
 
 Anonymous, no-cookie requests returned HTTP 200 for the privacy-request, contact and draw-rules pages. The privacy-request email route and About → Delete Account instructions were visible; no request was sent and no staff fulfilment or actual deletion was tested. The join and show pages were inspected in the existing signed-in Chrome vendor session: join advertises a free vendor profile through checkout 17, and the show page links to Eventbrite tickets for a physical event. Inspected native top-frame policy routes the third-party HTTPS link to the external browser. No physical tap or purchase was performed. See [exact routes and limits](PUBLIC_ROUTE_CHECK_2026-09-16.md).
 
-These observations do not complete checkout/provider collection, retention or privacy declarations. The owner has now confirmed sponsor direct-contact use without advertising-audience uploads and independent vendor draw operation, as recorded below. No App Store purpose, linkage or tracking answer is finalized by this update.
+At that earlier route-check checkpoint, these observations did not finalize declarations or establish staff fulfilment. The current answer matrix now records the classification decision; it does not expand the historical route check's scope.
 
 ### Owner clarification — September 16
 
-The owner confirms that vendors run their draws independently. General show sponsors receive couples' contact information for wedding-service emails and calls only; they do not upload that information to Facebook, Google or other advertising audiences. These are facts about the business workflow, not verification of every recipient's systems or every native/WebView provider. General show sponsorship does not make those businesses draw sponsors. Account-linked functionality and direct marketing uses must both be represented accurately; final Apple purpose categories and provider tracking remain unresolved.
+The owner confirms that vendors run their draws independently. General show sponsors receive couples' contact information for wedding-service emails and calls only; they do not upload that information to Facebook, Google or other advertising audiences. These are facts about the business workflow, not verification of every recipient's systems or every native/WebView provider. General show sponsorship does not make those businesses draw sponsors. The current matrix represents both account-linked functionality and sponsor promotion, with Tracking No as the evidence-based classification described in the decision record.
 
 Independent vendor operation is a known mismatch needing reconciliation with [Apple guideline 5.3.1](https://developer.apple.com/app-store/review/guidelines/#gaming-gambling-and-lotteries). The owner-approved [guideline clarification](APP_REVIEW_DRAW_INQUIRY_DRAFT.md) was sent through Apple's Suggest a guideline change form, with receipt verified September 16 at 02:07:06 UTC. This confirms delivery only: no case ID, promised response or app-specific clearance was provided. No responsibility is assigned to WeddingWin or to general show sponsors by inference, and no public rules, app configuration or Apple answers were changed by this clarification.
