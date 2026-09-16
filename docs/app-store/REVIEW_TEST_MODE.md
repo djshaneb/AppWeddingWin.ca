@@ -1,6 +1,6 @@
-# Controlled draw review mode — build 6 candidate
+# Controlled draw review mode
 
-Prepared September 15, 2026. This guide covers the approved native review feature intended for build 6. It does not establish that build 6 has been uploaded, installed through TestFlight, or tested for physical notification delivery. Current execution evidence belongs in [release verification](RELEASE_VERIFICATION_2026-09-15.md).
+Prepared September 15, 2026; status reconciled September 16 for candidate build 7. The feature was introduced in build 6 and retained in build 7. Its API and simulator walkthroughs passed, and matching private Notes are saved in Apple. Final distribution-build access and physical notification delivery remain unverified. Current execution evidence belongs in [release verification](RELEASE_VERIFICATION_2026-09-15.md).
 
 ## Accounts and scope
 
@@ -42,6 +42,6 @@ For the next cycle, turn the test draw on, enable notifications again on both pa
 
 ## App Store Connect handoff
 
-Before submitting a build containing this feature, verify both private sign-ins against the actual selected build and update Apple's private review notes to match this walkthrough. The existing screenshot QR attachment should remain explicitly described as display-only, or be replaced with an attachment that accurately explains **Use review QR sample**; it must not be represented as the sample control's physical QR test. [App Review notes](APP_REVIEW_NOTES.md) tracks the private text handoff.
+Apple’s private review Notes already match this walkthrough and were verified after reload. Before submission, verify both private sign-ins against the actual selected distribution build and preserve working access through review. The existing screenshot QR attachment should remain explicitly described as display-only, or be replaced with an attachment that accurately explains **Use review QR sample**; it must not be represented as the sample control's physical QR test. [App Review notes](APP_REVIEW_NOTES.md) tracks the private text handoff.
 
-Passwords must not be pasted into this guide, a public listing, screenshots, repository changes or test output. Screenshot uploads and older build evidence retain their original provenance; this guide does not mark build 6 uploaded or any release requirement complete.
+Passwords must not be pasted into this guide, a public listing, screenshots, repository changes or test output. Screenshot uploads and older build evidence retain their original provenance; the guide itself is not evidence of physical TestFlight or production-push acceptance.
