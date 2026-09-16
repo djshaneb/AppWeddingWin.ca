@@ -1,0 +1,19 @@
+{
+  "recordedReceiptVerificationAtUtc": "2026-09-16T02:07:06Z",
+  "channel": "Apple signed-in Suggest a guideline change form",
+  "formAcceptsPolicyClarityRequests": true,
+  "ownerApprovedSending": true,
+  "observedReceiptHeading": "We've received your suggested changes for the following guideline(s):",
+  "observedGuideline": "5.3 - Gaming, Gambling, and Lotteries",
+  "receiptResponseSummary": "Suggestions are evaluated and may inform future guideline updates.",
+  "submittedBodyCharacters": 1392,
+  "submittedBodySha256": "ebf874b928ec700db8425bc2f03931f19a662fa84348eefed7a24c2774adc1bf",
+  "submittedBodyDocument": "../APP_REVIEW_DRAW_INQUIRY_DRAFT.md",
+  "caseIdDisplayed": null,
+  "responsePromised": false,
+  "appSpecificClearanceGranted": false,
+  "appReviewSubmissionOccurred": false,
+  "attachmentCount": 0,
+  "policyMismatchResolved": false,
+  "scope": "Minimal receipt facts only; no private account fields or raw accessibility output."
+}
