@@ -11654,7 +11654,7 @@ true;
       status: number,
       data: unknown,
     ): boolean => {
-      if (!isConfirmedNativeSessionExpiry(status, data)) return false;
+      if (accountDeletionIsInFlight() || !isConfirmedNativeSessionExpiry(status, data)) return false;
       const current = nativeBridgeSessionRef.current;
       if (
         nativeSessionGenerationRef.current !== sessionGeneration ||
@@ -11684,6 +11684,8 @@ true;
       session: NativeBridgeSession,
       targetPath: '/account/home' | '/builder-sso',
     ) => {
+      if (accountDeletionIsInFlight()) throw new Error('Account deletion is in progress.');
+      const deletionGeneration = getAccountDeletionGeneration();
       const sessionGeneration = nativeSessionGenerationRef.current;
       const controller = new AbortController();
       const timeout = setTimeout(
@@ -11709,6 +11711,9 @@ true;
           },
         );
       } catch (error) {
+        if (!accountMutationIsCurrent(deletionGeneration)) {
+          throw new Error('The account changed before the website could open.');
+        }
         if (controller.signal.aborted) {
           throw new Error(
             'The website took too long to open. Check your connection and try again.',
@@ -11719,6 +11724,10 @@ true;
         clearTimeout(timeout);
       }
       const data = await response.json().catch(() => ({}));
+      // A deletion may retire this request even if its guard has since closed.
+      if (!accountMutationIsCurrent(deletionGeneration)) {
+        throw new Error('The account changed before the website could open.');
+      }
       if (expireNativeSessionIfCurrent(session, sessionGeneration, response.status, data)) {
         throw new Error('Please sign in again.');
       }
@@ -12164,6 +12173,8 @@ true;
 
   const openDashboardWithBridge = useCallback(
     async (existingNavigationIntent?: number) => {
+      if (accountDeletionIsInFlight()) return;
+      const deletionGeneration = getAccountDeletionGeneration();
       const navigationIntent =
         typeof existingNavigationIntent === 'number'
           ? existingNavigationIntent
@@ -12198,11 +12209,13 @@ true;
           activeSession,
           '/account/home',
         );
-        if (navigationIntentGenerationRef.current !== navigationIntent) return;
+        if (!accountMutationIsCurrent(deletionGeneration) ||
+          navigationIntentGenerationRef.current !== navigationIntent) return;
         startBridgeRedirect();
         openAbsoluteUrl(bridgeUrl);
       } catch (error) {
-        if (navigationIntentGenerationRef.current !== navigationIntent) return;
+        if (!accountMutationIsCurrent(deletionGeneration) ||
+          navigationIntentGenerationRef.current !== navigationIntent) return;
         Alert.alert(
           'Dashboard unavailable',
           error instanceof Error
@@ -12225,6 +12238,8 @@ true;
 
   const openWebsiteBuilderWithBridge = useCallback(
     async (existingNavigationIntent?: number) => {
+      if (accountDeletionIsInFlight()) return;
+      const deletionGeneration = getAccountDeletionGeneration();
       const navigationIntent =
         typeof existingNavigationIntent === 'number'
           ? existingNavigationIntent
@@ -12259,11 +12274,13 @@ true;
           activeSession,
           '/builder-sso',
         );
-        if (navigationIntentGenerationRef.current !== navigationIntent) return;
+        if (!accountMutationIsCurrent(deletionGeneration) ||
+          navigationIntentGenerationRef.current !== navigationIntent) return;
         startBridgeRedirect('/builder-sso');
         openAbsoluteUrl(bridgeUrl);
       } catch (error) {
-        if (navigationIntentGenerationRef.current !== navigationIntent) return;
+        if (!accountMutationIsCurrent(deletionGeneration) ||
+          navigationIntentGenerationRef.current !== navigationIntent) return;
         Alert.alert(
           'Website builder unavailable',
           error instanceof Error
@@ -12352,12 +12369,13 @@ true;
 
   const refreshNativeBridgeSession = useCallback(
     (session: NativeBridgeSession | null | undefined) => {
-      if (!hasNativeBridgeSession(session)) return Promise.resolve(null);
+      if (accountDeletionIsInFlight() || !hasNativeBridgeSession(session)) return Promise.resolve(null);
       const bridgeSession = session as NativeBridgeSession;
       const refreshKey = `${bridgeSession.user_id}:${bridgeSession.token}`;
       const existingRequest =
         nativeSessionRefreshPromisesRef.current.get(refreshKey);
       if (existingRequest) return existingRequest;
+      const deletionGeneration = getAccountDeletionGeneration();
       const sessionGeneration = nativeSessionGenerationRef.current;
       const request = (async () => {
         const controller = new AbortController();
@@ -12389,6 +12407,7 @@ true;
             },
           );
           const data = await response.json();
+          if (!accountMutationIsCurrent(deletionGeneration)) return null;
           if (expireNativeSessionIfCurrent(bridgeSession, sessionGeneration, response.status, data)) return null;
           if (!response.ok || !data?.ok || !data?.native_session) return null;
           const activeSession = nativeBridgeSessionRef.current;
@@ -13391,6 +13410,8 @@ true;
   }, [nativeChatThreads, selectedChatThreadToken, syncNativeChat]);
 
   const refreshChatStatus = useCallback(() => {
+    if (accountDeletionIsInFlight()) return Promise.resolve();
+    const deletionGeneration = getAccountDeletionGeneration();
     let activeNativeSession = logoutInFlightRef.current
       ? null
       : nativeBridgeSessionRef.current;
@@ -13415,6 +13436,7 @@ true;
       : '';
     const requestIsCurrent = () =>
       chatStatusRequestGenerationRef.current === requestGeneration &&
+      accountMutationIsCurrent(deletionGeneration) &&
       !logoutInFlightRef.current &&
       String(nativeBridgeSessionRef.current?.user_id || '') === statusUserId &&
       (nativeChatThreadOpenRef.current

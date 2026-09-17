@@ -4,6 +4,7 @@ import { appDeclaration, appSource, loadAppDeclarations } from './native-app-sou
 
 // Actual client declarations with offline network/storage/UI doubles only.
 const session = { user_id: '990001', token: 'offline-session', email: 'offline@example.invalid' };
+const bridgeUrl = `https://www.weddingwin.ca/app-login?code=${'a'.repeat(43)}`;
 const expired = { error: 'Stored session expired. Please sign in again.' };
 const response = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
 function deferred() {
@@ -16,6 +17,8 @@ function harness(fetchImpl = async () => response(401, expired)) {
     session: { ...session }, member: { user_id: session.user_id, email: session.email, account_role: 'vendor' },
     generation: 1, navigation: 1, authGeneration: 1, clears: 0, resets: 0, hidden: 0,
     websiteClears: 0, scanner: true, loginRequest: null, alerts: [], urls: [], requests: [], events: [],
+    deleting: false, deletionGeneration: 0, unreadCounts: [], statusLabels: [], inboxPaths: [],
+    badgeUpdates: [], unreadAlerts: [], storageWrites: [],
   };
   const refreshes = new Map();
   let app;
@@ -23,7 +26,7 @@ function harness(fetchImpl = async () => response(401, expired)) {
     'hasNativeBridgeSession', 'isTrustedWebsiteBridgeUrl', 'isOneTimeAppLoginUrl',
     'isConfirmedNativeSessionExpiry', 'expireNativeSessionIfCurrent',
     'createWebsiteLoginBridge', 'refreshNativeBridgeSession', 'openDashboardWithBridge',
-    'openWebsiteBuilderWithBridge',
+    'openWebsiteBuilderWithBridge', 'refreshChatStatus',
   ], {
     useCallback: fn => fn, AbortController, setTimeout, clearTimeout,
     TARGET_URL: 'https://www.weddingwin.ca', APP_BACKEND_URL: 'https://backend.example.invalid',
@@ -33,6 +36,19 @@ function harness(fetchImpl = async () => response(401, expired)) {
     nativeSessionGenerationRef: { get current() { return state.generation; } },
     navigationIntentGenerationRef: { get current() { return state.navigation; } },
     nativeSessionRefreshPromisesRef: { current: refreshes }, logoutInFlightRef: { current: false },
+    accountDeletionIsInFlight: () => state.deleting,
+    getAccountDeletionGeneration: () => state.deletionGeneration,
+    accountMutationIsCurrent: generation => !state.deleting && generation === state.deletionGeneration,
+    chatStatusRequestGenerationRef: { current: 0 }, chatStatusInFlightRef: { current: null },
+    nativeChatThreadOpenRef: { current: false }, selectedChatThreadTokenRef: { current: '' },
+    chatUnreadSnapshotRef: { current: null }, CHAT_UNREAD_SESSION_KEY: 'offline-unread',
+    DEFAULT_CHAT_INBOX_PATH: '/account/messages',
+    setChatUnreadCount: value => state.unreadCounts.push(value),
+    setChatStatusLabel: value => state.statusLabels.push(value),
+    setChatInboxPath: value => state.inboxPaths.push(value),
+    updateAppBadge: value => state.badgeUpdates.push(value),
+    updateChatUnreadAlert: value => state.unreadAlerts.push(value),
+    SecureStore: { setItemAsync: async (...args) => { state.storageWrites.push(args); } },
     invalidateNavigationIntent() { state.navigation++; state.events.push('invalidate'); },
     clearNativeSession() {
       state.events.push('clear'); state.clears++; state.generation++; state.authGeneration++;
@@ -184,3 +200,120 @@ test('expired-session UI explicitly opens login and clears old signup password/a
   assert.match(appSource, /expiredSessionLoginRequest=\{expiredSessionLoginRequest\}/);
   assert.match(appDeclaration('commitNativeMember'), /if \(member\) \{\s*pendingAppLogoutRef.current = false;\s*setExpiredSessionLoginRequest\(null\);/);
 });
+
+test('confirmed expiry stays silent while account deletion owns the current identity', () => {
+  const { state, app } = harness();
+  state.deleting = true;
+  state.deletionGeneration++;
+  assert.equal(app.expireNativeSessionIfCurrent(session, 1, 401, expired), false);
+  assert.equal(state.clears, 0);
+  assert.equal(state.alerts.length, 0);
+  assert.equal(state.session.user_id, session.user_id);
+});
+
+test('deletion in progress prevents new bridge, refresh and background chat status requests', async () => {
+  const { state, app } = harness();
+  state.deleting = true;
+  state.deletionGeneration++;
+  await assert.rejects(app.createWebsiteLoginBridge(session, '/account/home'), /deletion is in progress/);
+  assert.equal(await app.refreshNativeBridgeSession(session), null);
+  await app.refreshChatStatus();
+  await app.openDashboardWithBridge();
+  await app.openWebsiteBuilderWithBridge();
+  assert.equal(state.requests.length, 0);
+  assert.equal(state.clears, 0);
+  assert.equal(state.alerts.length, 0);
+  assert.equal(state.urls.length, 0);
+  assert.equal(state.unreadCounts.length, 0);
+});
+
+for (const guardStillActive of [true, false]) {
+  for (const kind of ['expired', 'successful']) {
+    test(`session refresh ${kind} response cannot mutate after deletion starts (guard active: ${guardStillActive})`, async () => {
+      const pending = deferred();
+      const { state, app, refreshes } = harness(() => pending.promise);
+      const request = app.refreshNativeBridgeSession(session);
+      state.deletionGeneration++;
+      state.deleting = guardStillActive;
+      pending.resolve(kind === 'expired' ? response(401, expired) : response(200, {
+        ok: true, native_session: { ...session, cookie: 'must-not-be-adopted' },
+        user: { user_id: session.user_id, email: session.email, first_name: 'Stale result' },
+      }));
+      assert.equal(await request, null);
+      assert.equal(state.clears, 0);
+      assert.equal(state.alerts.length, 0);
+      assert.equal(state.session.cookie, undefined);
+      assert.equal(state.member.first_name, undefined);
+      assert.equal(refreshes.size, 0);
+    });
+  }
+}
+
+for (const name of ['openDashboardWithBridge', 'openWebsiteBuilderWithBridge']) {
+  for (const kind of ['expired', 'successful', 'network-error']) {
+    test(`${name} discards ${kind} result after a completed deletion attempt without opening or prompting`, async () => {
+      const pending = deferred();
+      const { state, app } = harness(async () => {
+        await pending.promise;
+        if (kind === 'network-error') throw new TypeError('Network request failed');
+        return kind === 'expired' ? response(401, expired) : response(200, {
+          ok: true, app_login_url: bridgeUrl,
+          native_session: { ...session, cookie: 'must-not-be-adopted' },
+        });
+      });
+      const request = app[name]();
+      // The deletion guard can be released before an older request finishes.
+      state.deletionGeneration++;
+      state.deleting = false;
+      pending.resolve();
+      await request;
+      assert.equal(state.clears, 0);
+      assert.equal(state.alerts.length, 0);
+      assert.equal(state.urls.length, 0);
+      assert.equal(state.session.cookie, undefined);
+    });
+  }
+}
+
+for (const kind of ['expired', 'successful']) {
+  test(`background chat ${kind} result after deletion does not refresh or update old account state`, async () => {
+    const pending = deferred();
+    const { state, app } = harness(() => pending.promise);
+    const request = app.refreshChatStatus();
+    state.deletionGeneration++;
+    state.deleting = false;
+    pending.resolve(kind === 'expired' ? response(401, { error: 'Native session expired' }) : response(200, {
+      ok: true, unread_count: 8, inbox_path: '/account/messages', latest_label: 'Stale inbox',
+    }));
+    await request;
+    assert.equal(state.requests.length, 1, 'obsolete status must not start session refresh');
+    assert.equal(state.clears, 0);
+    assert.equal(state.alerts.length, 0);
+    for (const field of ['unreadCounts', 'statusLabels', 'inboxPaths', 'badgeUpdates', 'unreadAlerts', 'storageWrites']) {
+      assert.equal(state[field].length, 0, `${field} must not adopt the obsolete status`);
+    }
+  });
+}
+
+test('background chat still adopts a current successful status outside deletion', async () => {
+  const { state, app } = harness(async () => response(200, { ok: true, unread_count: 2, inbox_path: '/account/messages' }));
+  await app.refreshChatStatus();
+  assert.deepEqual(state.unreadCounts, [2]);
+  assert.deepEqual(state.badgeUpdates, [2]);
+  assert.deepEqual(state.unreadAlerts, [2]);
+  assert.equal(state.storageWrites.length, 1);
+  assert.equal(state.clears, 0);
+});
+
+for (const name of ['openDashboardWithBridge', 'openWebsiteBuilderWithBridge']) {
+  test(`${name} still opens a current successful bridge outside deletion`, async () => {
+    const { state, app } = harness(async () => response(200, {
+      ok: true, app_login_url: bridgeUrl, native_session: { ...session, cookie: 'current-cookie' },
+    }));
+    await app[name]();
+    assert.deepEqual(state.urls, [bridgeUrl]);
+    assert.equal(state.session.cookie, 'current-cookie');
+    assert.equal(state.alerts.length, 0);
+    assert.equal(state.clears, 0);
+  });
+}

@@ -22,7 +22,10 @@ import {
   finishAccountDeletion,
   notifyAccountDeleted,
 } from '@/lib/account_deletion_state';
-import { readNativeSessionStorage } from '@/lib/native_session_storage';
+import {
+  getNativeSessionStorageGeneration,
+  readNativeSessionStorage,
+} from '@/lib/native_session_storage';
 import {
   ChevronRight,
   FileText,
@@ -42,6 +45,8 @@ const APP_BACKEND_PUBLISHABLE_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBzemNqb3lhYnd2enN4eGp0a2hzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2OTMxMTYsImV4cCI6MjA5NDI2OTExNn0.QLCEmNcn1WAks0IHkCLmI3iY5K4GnRxZ9Sfy89GYrLo';
 const NATIVE_BRIDGE_SESSION_KEY = 'weddingwin.nativeBridgeSession.v1';
 const ACCOUNT_DELETED_EVENT_KEY = 'weddingwin.accountDeleted.v1';
+// Supabase's gateway can wait 150 seconds; do not abandon confirmed cleanup at 18 seconds.
+const ACCOUNT_DELETION_TIMEOUT_MS = 160000;
 
 type NativeBridgeSession = {
   email?: string;
@@ -57,6 +62,16 @@ type DeleteAccountResponse = {
   diagnostic_id?: string;
   requires_apple_reauthentication?: boolean;
 };
+
+class DeletionConfirmationUnavailableError extends Error {
+  constructor(readonly cause: unknown, diagnosticId = '') {
+    super(
+      'We could not confirm the result of your deletion request. It may still have completed. Please contact info@weddingwin.ca to confirm before requesting deletion again.' +
+        (diagnosticId ? `\n\nDiagnostic: ${diagnosticId}` : ''),
+    );
+    this.name = 'DeletionConfirmationUnavailableError';
+  }
+}
 
 async function openExternal(url: string, fallbackUrl?: string) {
   try {
@@ -105,13 +120,31 @@ function sameNativeSessionIdentity(
   );
 }
 
+async function deletionSessionIsCurrent(
+  deletionSession: NativeBridgeSession,
+  allowSignedOut = false,
+) {
+  const generation = getNativeSessionStorageGeneration();
+  try {
+    const current = await loadNativeSession();
+    return (
+      generation === getNativeSessionStorageGeneration() &&
+      (sameNativeSessionIdentity(current, deletionSession) ||
+        (allowSignedOut && current === null))
+    );
+  } catch {
+    // If storage cannot establish the current identity, do not act on another account.
+    return false;
+  }
+}
+
 async function requestAccountDeletion(
   nativeSession: NativeBridgeSession,
   appleAuthorizationCode = '',
   appleNonce = '',
 ) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 18000);
+  const timeout = setTimeout(() => controller.abort(), ACCOUNT_DELETION_TIMEOUT_MS);
   try {
     const response = await fetch(
       `${APP_BACKEND_URL}/functions/v1/bd-delete-account`,
@@ -131,17 +164,28 @@ async function requestAccountDeletion(
         }),
       },
     );
-    const result = (await response
-      .json()
-      .catch(() => ({}))) as DeleteAccountResponse;
-    return { response, result };
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error(
-        'Account deletion took too long. Check your connection and try again.',
+    // A dropped/malformed response says nothing about whether server cleanup ran.
+    const result = (await response.json()) as DeleteAccountResponse;
+    if (controller.signal.aborted) throw new Error('Deletion request timed out.');
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      throw new DeletionConfirmationUnavailableError(new Error('Invalid deletion response.'));
+    }
+    if (response.status >= 500 || response.status === 408) {
+      throw new DeletionConfirmationUnavailableError(
+        new Error(`Deletion response HTTP ${response.status}`),
+        typeof result.diagnostic_id === 'string' ? result.diagnostic_id : '',
       );
     }
-    throw error;
+    const confirmed = response.ok && result.ok === true && result.deleted === true;
+    const rejected = result.ok === false && typeof result.error === 'string' && !!result.error.trim();
+    const appleReauthentication = response.status === 409 && result.requires_apple_reauthentication === true;
+    if (!confirmed && !rejected && !appleReauthentication) {
+      throw new DeletionConfirmationUnavailableError(new Error('Unrecognized deletion response.'));
+    }
+    return { response, result };
+  } catch (error) {
+    if (error instanceof DeletionConfirmationUnavailableError) throw error;
+    throw new DeletionConfirmationUnavailableError(error);
   } finally {
     clearTimeout(timeout);
   }
@@ -156,7 +200,9 @@ async function clearDeletedAccountSession(deletedSession: NativeBridgeSession) {
   await SecureStore.setItemAsync(
     ACCOUNT_DELETED_EVENT_KEY,
     JSON.stringify({ deleted_at: deletedAt, user_id: userId, token }),
-  );
+  ).catch(() => undefined);
+  // The server has confirmed deletion. A failed persistence write must not
+  // prevent the mounted Home screen from clearing this identity immediately.
   notifyAccountDeleted({ deletedAt, userId, token });
 }
 
@@ -223,15 +269,11 @@ export default function AboutScreen() {
   const deleteNativeAccount = useCallback(
     async (deletionSession: NativeBridgeSession) => {
       try {
-        const session = await loadNativeSession();
-        if (!sameNativeSessionIdentity(session, deletionSession)) {
-          throw new Error(
-            'Your signed-in account changed. Return to this page and try again.',
-          );
-        }
+        if (!(await deletionSessionIsCurrent(deletionSession))) return;
 
         let deletion = await requestAccountDeletion(deletionSession);
-        if (deletion.result.requires_apple_reauthentication) {
+        if (!(await deletionSessionIsCurrent(deletionSession))) return;
+        if (deletion.response.status === 409 && deletion.result.requires_apple_reauthentication) {
           if (
             Platform.OS !== 'ios' ||
             !(await AppleAuthentication.isAvailableAsync())
@@ -240,6 +282,7 @@ export default function AboutScreen() {
               'Sign in with Apple confirmation is unavailable on this device.',
             );
           }
+          if (!(await deletionSessionIsCurrent(deletionSession))) return;
           const appleState = Crypto.randomUUID();
           const appleNonce = Crypto.randomUUID();
           const credential = await AppleAuthentication.signInAsync({
@@ -247,6 +290,7 @@ export default function AboutScreen() {
             state: appleState,
             nonce: appleNonce,
           });
+          if (!(await deletionSessionIsCurrent(deletionSession))) return;
           if (credential.state !== appleState) {
             throw new Error(
               'Apple confirmation did not match this deletion request.',
@@ -264,6 +308,8 @@ export default function AboutScreen() {
           );
         }
 
+        if (!(await deletionSessionIsCurrent(deletionSession))) return;
+
         if (
           !deletion.response.ok ||
           !deletion.result.ok ||
@@ -278,14 +324,22 @@ export default function AboutScreen() {
         }
 
         await clearDeletedAccountSession(deletionSession);
+        // Home may already have consumed the identity-scoped deletion event.
+        if (!(await deletionSessionIsCurrent(deletionSession, true))) return;
         nativeSessionRef.current = null;
         setHasNativeSession(false);
         Alert.alert(
           'Account deleted',
           'Your WeddingWin account and account-only app data were permanently deleted. Shared message history may remain visible to the other participant under WeddingWin’s retention policy.',
-          [{ text: 'OK', onPress: () => router.replace('/') }],
+          [{
+            text: 'OK',
+            onPress: async () => {
+              if (await deletionSessionIsCurrent(deletionSession, true)) router.replace('/');
+            },
+          }],
         );
       } catch (error) {
+        if (!(await deletionSessionIsCurrent(deletionSession))) return;
         const code =
           error && typeof error === 'object' && 'code' in error
             ? String(error.code)
@@ -293,7 +347,12 @@ export default function AboutScreen() {
         if (code === 'ERR_REQUEST_CANCELED') return;
         const message =
           error instanceof Error ? error.message : 'Account deletion failed.';
-        Alert.alert('Could not delete account', message);
+        Alert.alert(
+          error instanceof DeletionConfirmationUnavailableError
+            ? 'Deletion confirmation unavailable'
+            : 'Could not delete account',
+          message,
+        );
       } finally {
         finishAccountDeletion(deletionSession.user_id, deletionSession.token);
         deleteInFlightRef.current = false;
@@ -303,11 +362,11 @@ export default function AboutScreen() {
     [router],
   );
 
-  const startNativeAccountDeletion = useCallback(() => {
+  const startNativeAccountDeletion = useCallback((confirmedSession: NativeBridgeSession | null) => {
     if (deleteInFlightRef.current) return;
     const session = nativeSessionRef.current;
-    if (!session) {
-      setHasNativeSession(false);
+    if (!session || !sameNativeSessionIdentity(session, confirmedSession)) {
+      if (!session) setHasNativeSession(false);
       Alert.alert(
         'Sign-in changed',
         'Return to this page and try again, or use the secure account deletion page.',
@@ -329,6 +388,7 @@ export default function AboutScreen() {
   }, [deleteNativeAccount]);
 
   const confirmDeleteAccount = useCallback(() => {
+    const confirmedSession = nativeSessionRef.current;
     if (!hasNativeSession) {
       Alert.alert(
         'Delete account?',
@@ -353,7 +413,7 @@ export default function AboutScreen() {
         {
           text: 'Delete Account',
           style: 'destructive',
-          onPress: startNativeAccountDeletion,
+          onPress: () => startNativeAccountDeletion(confirmedSession),
         },
       ],
     );

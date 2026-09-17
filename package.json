@@ -22,7 +22,7 @@
     "test:apple-native": "node --test scripts/test-native-apple-login.mjs scripts/test-native-apple-browser-login.mjs scripts/test-apple-scope-diagnostics.mjs",
     "test:member-role": "node --test scripts/test-native-member-role.mjs",
     "test:contact-email": "node --test scripts/test-native-contact-email.mjs scripts/test-native-contact-email-races.mjs",
-    "test:session-expiry": "node --test scripts/test-native-session-expiry.mjs",
+    "test:session-expiry": "node --test scripts/test-native-session-expiry.mjs scripts/test-native-account-deletion-confirmation.mjs",
     "test:auth-keyboard": "node --test scripts/test-native-auth-keyboard.mjs",
     "test:wedding-date": "node --test scripts/test-native-wedding-date-input.mjs",
     "test:bingo-contacts": "node --test scripts/test-native-bingo-contact-profile.mjs scripts/test-native-wedding-date-input.mjs scripts/test-qr-contact-admin-ui.mjs",
