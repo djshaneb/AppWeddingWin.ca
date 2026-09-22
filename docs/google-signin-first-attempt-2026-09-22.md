@@ -2,7 +2,7 @@
 
 ## Status
 
-The user approved applying the isolated backend fix on September 22. Google start v17 and callback v26 are active. Fresh-cookie and repeat ordinary Google logins passed on the physical iPhone using the unchanged App Store build. CMS and App Store configuration remain unchanged.
+The app is reinstalled and the user is signed in. Google start v17 / callback v27 are active; a fresh-cookie signup and repeat ordinary login passed at 19:11–19:12 UTC. The earlier v26 mitigation was incomplete: binding_missing recurred after reinstallation at 18:56 UTC. Callback v27 adds a bounded recovery path, but neither latest successful physical attempt needed that path (callback_check=0), so its effectiveness against the intermittent cookie loss is not yet established. CMS and App Store configuration remain unchanged.
 
 - Released baseline: `20cde6c09195f2f8d19c7e9d816dde156593c9cb`, App Store build 8.
 - Isolated branch: `codex/fix-google-signin-first-attempt`.
@@ -123,3 +123,31 @@ Dashboard logs and source downloads were used first. Supabase MCP became availab
 - https://supabase.com/docs/guides/functions/http-methods
 
 The log API uses ClickHouse `logs`, explicit bounds of 24 hours or less, and selected fields. The older `logs.all` endpoint is scheduled for removal September 23. Supabase GET `text/html` responses are rewritten to plain text, so a proposed HTML interstitial on that endpoint is not a valid fix.
+
+## Reinstallation recurrence, September 22
+
+- The user restarted the iPhone after a separate App Store download-service failure. Re-Download then completed and the app launched; no new app build was used.
+- At 18:56:31–36 UTC, the first Google login ran start v17 with cookie_check=0 followed by cookie_check=1 and an attempt insertion. Callback v26 included the authorization code but made no redemption RPC; its fixed diagnostic reason was binding_missing. The device showed the original interrupted-or-expired alert. This disproves a complete fix from start-side cookie confirmation alone.
+- A second login at approximately 19:01 UTC returned the no-WeddingWin-account message after Google authentication. The user confirmed they had used Delete account inside the app before reinstalling. That missing-account result is expected and distinct from browser-cookie loss. No replacement account has been created.
+- Standalone device artifacts iphone-reinstall-21.xcresult and iphone-reinstall-23.xcresult retain the two different failures privately.
+
+## Callback recovery candidate
+
+A narrowly scoped candidate adds one signed same-origin callback continuation after valid OAuth state when the browser-binding cookie is missing. The marker binds the original query, has a separate purpose and expires within 60 seconds or the original state expiry, whichever comes first. The destination is the configured backend callback, never the incoming Host. The response sets no cookie and creates no attempt. A second missing cookie or an invalid marker fails closed; a returning cookie must still pass the original browser-bound atomic redemption, Google verification and native PKCE.
+
+- Focused checks: 98 passed.
+- Complete backend suite: 1,079 passed, zero failed.
+- Exact candidate deployment bundle passed type checking; nine unrelated deployed dependencies are preserved byte-for-byte.
+- Pending physical confirmation. A self-redirect may inherit Safari cookie blocking, so this candidate is not yet described as a verified fix.
+
+### Candidate deployment
+
+At 19:06 UTC, callback v27 was deployed after an independent security review found no blocking issue. A fresh preflight read verified callback v26 still matched the rollback bundle. Only the callback entrypoint changed and the new recovery helper was added; nine other deployed dependencies remain identical. Post-deploy source reads matched all eleven files exactly. Start remains v17 and the app/CMS are unchanged. Physical fresh-cookie verification is still pending; do not describe this candidate as proven.
+
+### Physical result and remaining limit
+
+- After the user explicitly approved accepting Terms/Privacy and replacing the deleted couple account, signup ran at 19:11:43–50 UTC. The previous binding had expired naturally. Start v17 used cookie_check=1; callback v27 redeemed the attempt and native exchange v7 returned HTTP 200. The device reached the signed-in dashboard on the first attempt.
+- After allowing the existing notification prompt under prior authorization, a sign-out and ordinary Google login at 19:12:39–44 UTC also returned native exchange HTTP 200 and the dashboard. Both XCTest checks assert the signed-in name, sign-out control and absence of an app error; the final screen was visually verified.
+- The device is left signed in to the newly authorized replacement account. Deleted account data is not restored.
+- Both successful callbacks had callback_check=0. The physical phone did not exercise v27's new missing-cookie continuation. These passes confirm current access and no observed regression; they do not prove the intermittent first-attempt problem permanently resolved.
+- If binding_missing recurs, correlate the new continuation flag and fixed reason before changing anything. A possible next bounded experiment is a nonempty HTTP 200 text/plain response with Refresh pointing to the same signed fixed-origin continuation, because WebKit processes Refresh after document commit. This is not implemented or device-verified. Primary sources: https://github.com/WebKit/WebKit/blob/main/Source/WebCore/loader/FrameLoader.cpp ; https://github.com/WebKit/WebKit/blob/main/Source/WebCore/loader/NavigationScheduler.cpp ; https://webkit.org/tracking-prevention/ .

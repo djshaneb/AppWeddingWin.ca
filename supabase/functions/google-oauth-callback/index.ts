@@ -10,6 +10,7 @@ import {
   redeemOAuthLoginAttempt,
 } from "../_shared/oauth_attempt.ts";
 import { googleOAuthErrorResponse } from "../_shared/google_oauth_error.ts";
+import { retryGoogleCallbackCookieOnce } from "../_shared/google_callback_cookie_recovery.ts";
 import { requireCurrentPolicyConsent } from "../_shared/policy_consent.ts";
 import { assertAppleSignupAccountType } from "../_shared/apple_signup_role.ts";
 import {
@@ -473,6 +474,21 @@ Deno.serve(async (req: Request) => {
     verifiedReturnUrl = finalRedirect;
     const subscriptionId = state.s;
     const consent = state.c;
+
+    try {
+      const continuation = await retryGoogleCallbackCookieOnce(req, {
+        backendUrl: SUPABASE_URL,
+        signingSecret: APP_LOGIN_SECRET,
+        stateExpiresAt: state.exp,
+      });
+      if (continuation) return continuation;
+    } catch {
+      console.warn(JSON.stringify({
+        event: "google_oauth_callback_failed",
+        reason: "callback_continuation_rejected",
+      }));
+      return errorPage("Invalid Google sign-in state continuation.");
+    }
 
     try {
       await redeemOAuthLoginAttempt({

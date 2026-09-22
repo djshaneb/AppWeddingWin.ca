@@ -37,6 +37,7 @@ async function fixture(
       oauthError?: string,
       authorizationCode?: string,
     ) => Promise<Response>;
+    callbackRequest: (url: string | URL, cookie?: string) => Promise<Response>;
     verify: typeof verifyState;
     records: {
       creates: URLSearchParams[];
@@ -303,6 +304,9 @@ async function fixture(
       start,
       begin,
       finish,
+      callbackRequest: (url, cookie = "") => callbackHandler(new Request(url, {
+        headers: { Cookie: cookie },
+      })),
       verify: verifyState,
       records,
       existing,
@@ -361,12 +365,20 @@ function assertCallbackDiagnostic(
   }
 }
 
-Deno.test("Google callback logs only binding_missing for absent or malformed cookies before redemption", async () => {
+Deno.test("Google callback stops after one absent or malformed cookie continuation before redemption", async () => {
   for (const cookie of ["", "__Host-ww_google_oauth=PRIVATE-malformed-binding"]) {
     await fixture(async (f) => {
       const attempt = await f.begin();
       const code = "PRIVATE-authorization-code";
-      const response = await f.finish({ ...attempt, cookie }, undefined, code);
+      const first = await f.finish({ ...attempt, cookie }, undefined, code);
+      const continuation = new URL(first.headers.get("Location")!);
+      assert(
+        continuation.origin === "https://offline-google-db.example.invalid" &&
+          continuation.searchParams.has("ww_callback_cookie_check") &&
+          !first.headers.has("Set-Cookie"),
+        "missing binding must only re-request the trusted callback once",
+      );
+      const response = await f.callbackRequest(continuation, cookie);
       const target = new URL(response.headers.get("Location")!);
       assert(
         target.searchParams.get("error") === "google_sign_in_failed" &&
@@ -699,20 +711,23 @@ Deno.test("Google signup rejects role insertion, removal and tampering before pr
   }
 });
 
-Deno.test("Google callback with a missing browser cookie returns a native error before exchange and permits a bound retry", async () => {
+Deno.test("Google callback recovers only when its one continuation supplies the original binding", async () => {
   await fixture(async (f) => {
     f.existing("18");
     const attempt = await f.begin();
     const response = await f.finish({ ...attempt, cookie: "" });
     assert(
       response.status === 302,
-      "verified native failure did not return to the app",
+      "verified missing binding did not request one continuation",
     );
     const target = new URL(response.headers.get("Location")!);
     assert(
-      target.origin === "null" && target.protocol === "weddingwin:" &&
-        target.hostname === "bd-login" && target.pathname === "" &&
-        target.searchParams.get("error") === "google_sign_in_failed" &&
+      target.origin === "https://offline-google-db.example.invalid" &&
+        target.pathname === "/functions/v1/google-oauth-callback" &&
+        target.searchParams.has("ww_callback_cookie_check") &&
+        target.searchParams.get("state") === attempt.state &&
+        target.searchParams.get("code") === "offline-code" &&
+        !response.headers.has("Set-Cookie") &&
         !target.searchParams.has("exchange_code") &&
         !target.searchParams.has("ok"),
       "cookie failure produced an unsafe or successful callback",
@@ -723,12 +738,80 @@ Deno.test("Google callback with a missing browser cookie returns a native error 
         f.records.updates.length === 0,
       "missing browser binding reached provider, member or session operations",
     );
-    const retry = await f.finish(attempt);
+    const retry = await f.callbackRequest(target, attempt.cookie);
     assert(
       new URL(retry.headers.get("Location")!).searchParams.get("ok") === "1" &&
         Number(f.records.exchanges.length) === 1,
-      "missing-cookie failure consumed the valid browser-bound attempt",
+      "continuation did not redeem the original browser-bound attempt",
     );
+    const replay = await f.callbackRequest(target, attempt.cookie);
+    assert(
+      new URL(replay.headers.get("Location")!).searchParams.get("error") === "google_sign_in_failed" &&
+        Number(f.records.tokenRequests) === 1 && Number(f.records.exchanges.length) === 1 &&
+        f.records.attempts === 1,
+      "continuation replay repeated provider exchange or created an attempt/session",
+    );
+  });
+});
+
+Deno.test("Google callback continuation rejects substituted cookies and never rotates the binding", async () => {
+  await fixture(async (f) => {
+    f.existing("18");
+    const attempt = await f.begin(undefined, false);
+    const first = await f.finish({ ...attempt, cookie: "" });
+    const retry = await f.callbackRequest(first.headers.get("Location")!, `__Host-ww_google_oauth=${"Z".repeat(43)}`);
+    assert(
+      new URL(retry.headers.get("Location")!).searchParams.get("error") === "google_sign_in_failed" &&
+        !retry.headers.has("Set-Cookie") && f.records.attempts === 1 &&
+        f.records.redemptions === 1 && f.records.tokenRequests === 0 &&
+        f.records.creates.length === 0 && f.records.exchanges.length === 0,
+      "substituted binding reached provider exchange, member/session creation, or another continuation",
+    );
+  });
+});
+
+Deno.test("Google callback rejects changed or duplicated continuation markers before authentication", async () => {
+  for (const change of ["code", "state", "marker", "duplicate"] as const) {
+    await fixture(async (f) => {
+      const attempt = await f.begin(undefined, false);
+      const first = await f.finish({ ...attempt, cookie: "" });
+      const target = new URL(first.headers.get("Location")!);
+      if (change === "code") target.searchParams.set("code", "PRIVATE-changed-code");
+      if (change === "state") target.searchParams.set("state", mutateState(attempt.state, "couple"));
+      if (change === "marker") target.searchParams.set("ww_callback_cookie_check", "PRIVATE-invalid-marker");
+      if (change === "duplicate") target.searchParams.append("ww_callback_cookie_check", target.searchParams.get("ww_callback_cookie_check")!);
+      const result = await f.callbackRequest(target, attempt.cookie);
+      assert(
+        !result.headers.has("Set-Cookie") && f.records.attempts === 1 &&
+          f.records.redemptions === 0 && f.records.tokenRequests === 0 &&
+          f.records.creates.length === 0 && f.records.updates.length === 0 &&
+          f.records.exchanges.length === 0 &&
+          !result.headers.get("Location")?.includes("ww_callback_cookie_check"),
+        "altered continuation reached an authentication operation or another continuation",
+      );
+    });
+  }
+});
+
+Deno.test("Google callback rejects an expired continuation before redemption even if its cookie returns", async () => {
+  await fixture(async (f) => {
+    const attempt = await f.begin(undefined, false);
+    const first = await f.finish({ ...attempt, cookie: "" });
+    const originalNow = Date.now;
+    const later = originalNow() + 61_000;
+    try {
+      Date.now = () => later;
+      const result = await f.callbackRequest(first.headers.get("Location")!, attempt.cookie);
+      assert(
+        new URL(result.headers.get("Location")!).searchParams.get("error") === "google_sign_in_failed" &&
+          !result.headers.has("Set-Cookie") && f.records.redemptions === 0 &&
+          f.records.tokenRequests === 0 && f.records.exchanges.length === 0 &&
+          f.records.creates.length === 0 && f.records.updates.length === 0 &&
+          f.records.attempts === 1,
+        "expired continuation reached authentication operations or another continuation",
+      );
+      assertCallbackDiagnostic(f.records.logs, "callback_continuation_rejected", [attempt.state, attempt.cookie]);
+    } finally { Date.now = originalNow; }
   });
 });
 
