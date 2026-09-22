@@ -258,13 +258,31 @@ async function callBd(path: string, init: RequestInit = {}): Promise<{ response:
   return { response, body };
 }
 
-async function fetchFullBdUserById(userId: unknown): Promise<BdUser | undefined> {
-  const fullUser = await callBd(`/api/v2/user/get/${encodeURIComponent(String(userId))}`);
-  if (fullUser.response.ok && fullUser.body.status === "success") {
-    return unwrapBdUser(fullUser.body.message);
-  }
+const BD_LOOKUP_UNAVAILABLE = "WeddingWin could not check your account right now. Please try again shortly.";
 
-  return undefined;
+function validBdUser(value: unknown): value is BdUser {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const id = (value as BdUser).user_id;
+  return typeof id === "string" ? Boolean(id.trim()) :
+    typeof id === "number" && Number.isFinite(id) && id > 0;
+}
+
+async function fetchFullBdUserById(userId: unknown): Promise<BdUser> {
+  try {
+    const fullUser = await callBd(`/api/v2/user/get/${encodeURIComponent(String(userId))}`);
+    const message = fullUser.body?.message;
+    const user = unwrapBdUser(message);
+    if (
+      fullUser.response.ok && fullUser.body?.status === "success" &&
+      (!Array.isArray(message) || message.length === 1) &&
+      validBdUser(user) && String(user.user_id) === String(userId)
+    ) {
+      return user;
+    }
+  } catch {
+    // Do not expose backend errors or treat a failed read as a missing member.
+  }
+  throw new Error(BD_LOOKUP_UNAVAILABLE);
 }
 
 async function fetchBdUserByEmail(email: string): Promise<BdUser | undefined> {
@@ -274,11 +292,25 @@ async function fetchBdUserByEmail(email: string): Promise<BdUser | undefined> {
   usersUrl.searchParams.set("property_value", email);
   usersUrl.searchParams.set("property_operator", "eq");
 
-  const users = await callBd(`${usersUrl.pathname}${usersUrl.search}`);
-  const rows = Array.isArray(users.body.message) ? users.body.message : [];
-  const user = rows[0] as BdUser | undefined;
-
-  return user?.user_id ? await fetchFullBdUserById(user.user_id) : user;
+  try {
+    const users = await callBd(`${usersUrl.pathname}${usersUrl.search}`);
+    if (
+      !users.response.ok || users.body?.status !== "success" ||
+      !Array.isArray(users.body.message)
+    ) throw new Error(BD_LOOKUP_UNAVAILABLE);
+    const rows = users.body.message;
+    if (rows.length === 0) return undefined;
+    if (rows.length !== 1 || !validBdUser(rows[0])) {
+      throw new Error(BD_LOOKUP_UNAVAILABLE);
+    }
+    const user = await fetchFullBdUserById(rows[0].user_id);
+    if (String(user?.email || "").trim().toLowerCase() !== email) {
+      throw new Error(BD_LOOKUP_UNAVAILABLE);
+    }
+    return user;
+  } catch {
+    throw new Error(BD_LOOKUP_UNAVAILABLE);
+  }
 }
 
 async function createBdUserForGoogle(
@@ -354,6 +386,9 @@ async function makeDirectBdGoogleLoginResult(args: {
   let user = await fetchBdUserByEmail(email);
   assertAppleSignupAccountType(user, args.expectedSignupRole);
   if (!user?.user_id) {
+    if (!args.consent && !args.expectedSignupRole) {
+      throw new Error("No WeddingWin account uses this Google email yet. Please create an account, then sign in with Google.");
+    }
     user = await createBdUserForGoogle(
       email,
       args.fullName,

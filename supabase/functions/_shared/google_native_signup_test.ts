@@ -30,6 +30,7 @@ async function fixture(
     start: (query?: string) => Promise<Response>;
     begin: (
       role?: "vendor" | "couple",
+      includeConsent?: boolean,
     ) => Promise<{ state: string; cookie: string; nonce: string }>;
     finish: (
       attempt: { state: string; cookie: string; nonce: string },
@@ -50,6 +51,7 @@ async function fixture(
     existing: (plan: string) => void;
     race: (plan: string) => void;
     redemptionError: (message: string) => void;
+    bdReadResponse: (read: "search" | "full", response: Response | Error) => void;
   }) => Promise<void>,
 ) {
   const originalFetch = globalThis.fetch;
@@ -83,6 +85,12 @@ async function fixture(
   let storedAttempt: Record<string, unknown> | undefined;
   let attemptConsumed = false;
   let redemptionErrorMessage = "";
+  const bdReadResponses = new Map<"search" | "full", Response | Error>();
+  const mockedBdRead = (read: "search" | "full") => {
+    const response = bdReadResponses.get(read);
+    if (response instanceof Error) throw response;
+    return response?.clone();
+  };
   const existing = (plan: string) => {
     member = {
       user_id: "offline-google-member",
@@ -152,7 +160,7 @@ async function fixture(
       }
       if (url.origin === settings.BD_API_BASE_URL) {
         if (url.pathname === "/api/v2/user/get" && method === "GET") {
-          return Response.json({
+          return mockedBdRead("search") || Response.json({
             status: "success",
             message: member ? [member] : [],
           });
@@ -160,7 +168,7 @@ async function fixture(
         if (
           url.pathname === "/api/v2/user/get/offline-google-member" &&
           method === "GET"
-        ) return Response.json({ status: "success", message: member });
+        ) return mockedBdRead("full") || Response.json({ status: "success", message: member });
         const body = new URLSearchParams(String(init?.body || ""));
         if (url.pathname === "/api/v2/user/create" && method === "POST") {
           records.creates.push(body);
@@ -210,31 +218,34 @@ async function fixture(
       verifyState = callback.verifyGoogleState;
     }
     Deno.serve = originalServe;
-    const defaultParams = () =>
+    const defaultParams = (includeConsent = true) =>
       new URLSearchParams({
         redirect_to: "weddingwin://bd-login",
         code_challenge: "A".repeat(43),
-        accepted_terms: "1",
-        accepted_privacy: "1",
-        accepted_at: new Date().toISOString(),
-        terms_version: CURRENT_TERMS_VERSION,
-        privacy_version: CURRENT_PRIVACY_VERSION,
+        ...(includeConsent ? {
+          accepted_terms: "1",
+          accepted_privacy: "1",
+          accepted_at: new Date().toISOString(),
+          terms_version: CURRENT_TERMS_VERSION,
+          privacy_version: CURRENT_PRIVACY_VERSION,
+        } : {}),
       });
-    const start = (query = "") =>
+    const start = (query = "", includeConsent = true) =>
       startHandler(
         new Request(
-          `https://offline-google-db.example.invalid/functions/v1/google-oauth-start?${defaultParams()}${
+          `https://offline-google-db.example.invalid/functions/v1/google-oauth-start?${defaultParams(includeConsent)}${
             query ? `&${query}` : ""
           }`,
         ),
       );
-    const begin = async (role?: "vendor" | "couple") => {
+    const begin = async (role?: "vendor" | "couple", includeConsent = true) => {
       let response = await start(
         role
           ? `signup_role=${role}&subscription_id=${
             role === "vendor" ? "17" : "18"
           }`
           : "subscription_id=17",
+        includeConsent,
       );
       assert(response.status === 302, "Google authorization did not start");
       let location = new URL(response.headers.get("Location")!);
@@ -300,6 +311,9 @@ async function fixture(
       },
       redemptionError: (message) => {
         redemptionErrorMessage = message;
+      },
+      bdReadResponse: (read, response) => {
+        bdReadResponses.set(read, response);
       },
     });
   } finally {
@@ -520,14 +534,15 @@ Deno.test("Google explicit signup blocks conflicting existing accounts without m
   }
 });
 
-Deno.test("Google ordinary login and old in-flight state without signup role preserve existing membership", async () => {
+Deno.test("Google ordinary login without signup consent preserves existing membership", async () => {
   for (const plan of ["18", "17", "38"]) {
     await fixture(async (f) => {
       f.existing(plan);
-      const attempt = await f.begin();
+      const attempt = await f.begin(undefined, false);
       assert(
-        (await f.verify(attempt.state)).g === undefined,
-        "ordinary login invented signup intent",
+        (await f.verify(attempt.state)).g === undefined &&
+          (await f.verify(attempt.state)).c === null,
+        "ordinary login invented signup intent or consent",
       );
       const response = await f.finish(attempt);
       assert(
@@ -536,6 +551,114 @@ Deno.test("Google ordinary login and old in-flight state without signup role pre
         "ordinary existing-member login was blocked by picker role",
       );
     });
+  }
+});
+
+Deno.test("Google ordinary login explains a confirmed missing account without attempting signup", async () => {
+  await fixture(async (f) => {
+    const response = await f.finish(await f.begin(undefined, false));
+    const target = new URL(response.headers.get("Location")!);
+    assert(
+      target.searchParams.get("error") === "google_app_bridge_failed" &&
+        target.searchParams.get("error_description") ===
+          "No WeddingWin account uses this Google email yet. Please create an account, then sign in with Google." &&
+        !target.searchParams.has("exchange_code"),
+      "missing-account login did not give an actionable error",
+    );
+    assert(
+      f.records.creates.length === 0 && f.records.updates.length === 0 &&
+        f.records.exchanges.length === 0 && f.records.cacheReads === 0,
+      "ordinary missing-account login attempted account or session changes",
+    );
+  });
+});
+
+Deno.test("Google legacy signup with current consent and no explicit role still creates the selected plan", async () => {
+  await fixture(async (f) => {
+    const attempt = await f.begin();
+    const state = await f.verify(attempt.state);
+    assert(state.g === undefined && state.c !== null, "legacy signup fixture lost consent");
+    const response = await f.finish(attempt);
+    assert(
+      new URL(response.headers.get("Location")!).searchParams.get("ok") === "1" &&
+        f.records.creates.length === 1 &&
+        f.records.creates[0].get("subscription_id") === "17" &&
+        f.records.creates[0].get("signup_terms_version") === CURRENT_TERMS_VERSION &&
+        f.records.creates[0].get("signup_privacy_version") === CURRENT_PRIVACY_VERSION &&
+        f.records.exchanges.length === 1,
+      "legacy consented signup lost its selected plan, recorded consent or session",
+    );
+  });
+});
+
+Deno.test("Google member search errors and malformed replies fail closed for ordinary login and consented signup", async () => {
+  const failures = [
+    Response.json({ status: "success", message: [] }, { status: 503 }),
+    Response.json({ status: "error", message: "PRIVATE database failure" }),
+    new Response("PRIVATE invalid JSON"),
+    Response.json(null),
+    Response.json({ status: "success", message: {} }),
+    Response.json({ status: "success", message: [null] }),
+    Response.json({ status: "success", message: [{ email: "native-google@example.invalid" }] }),
+    new Error("PRIVATE backend network failure"),
+  ];
+  for (const includeConsent of [false, true]) {
+    for (const failure of failures) {
+      await fixture(async (f) => {
+        f.bdReadResponse("search", failure);
+        const response = await f.finish(await f.begin(undefined, includeConsent));
+        const target = new URL(response.headers.get("Location")!);
+        assert(
+          target.searchParams.get("error") === "google_app_bridge_failed" &&
+            target.searchParams.get("error_description") ===
+              "WeddingWin could not check your account right now. Please try again shortly." &&
+            !target.searchParams.has("exchange_code"),
+          "member search failure was exposed or mistaken for an absent account",
+        );
+        assert(
+          f.records.creates.length === 0 && f.records.updates.length === 0 &&
+            f.records.exchanges.length === 0 && f.records.cacheReads === 0,
+          "failed member search created an account or session",
+        );
+      });
+    }
+  }
+});
+
+Deno.test("Google full member read failures cannot become account creation or an incorrect session", async () => {
+  const failures = [
+    Response.json({ status: "success", message: {} }, { status: 503 }),
+    Response.json({ status: "error", message: "PRIVATE full-read failure" }),
+    new Response("PRIVATE invalid JSON"),
+    Response.json(null),
+    Response.json({ status: "success", message: [] }),
+    Response.json({ status: "success", message: [{ user_id: "offline-google-member", email: "native-google@example.invalid" }, {}] }),
+    Response.json({ status: "success", message: { email: "native-google@example.invalid" } }),
+    Response.json({ status: "success", message: { user_id: "different-member", email: "native-google@example.invalid" } }),
+    Response.json({ status: "success", message: { user_id: "offline-google-member", email: "different@example.invalid" } }),
+    new Error("PRIVATE full-read network failure"),
+  ];
+  for (const includeConsent of [false, true]) {
+    for (const failure of failures) {
+      await fixture(async (f) => {
+        f.existing("18");
+        f.bdReadResponse("full", failure);
+        const response = await f.finish(await f.begin(undefined, includeConsent));
+        const target = new URL(response.headers.get("Location")!);
+        assert(
+          target.searchParams.get("error") === "google_app_bridge_failed" &&
+            target.searchParams.get("error_description") ===
+              "WeddingWin could not check your account right now. Please try again shortly." &&
+            !target.searchParams.has("exchange_code"),
+          "full member read failure was exposed or mistaken for an absent account",
+        );
+        assert(
+          f.records.creates.length === 0 && f.records.updates.length === 0 &&
+            f.records.exchanges.length === 0 && f.records.cacheReads === 0,
+          "failed full member read created an account or session",
+        );
+      });
+    }
   }
 });
 

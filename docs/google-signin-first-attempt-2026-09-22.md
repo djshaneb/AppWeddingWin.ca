@@ -15,7 +15,7 @@ The first Google attempt fails and a second attempt succeeds. Exact supplied mes
 
 > Google sign-in failed. Your Google sign-in was interrupted or expired. Please close this window and tap Sign in with Google again.
 
-Ordinary login versus first-ever signup, account role, failed-attempt time, and whether the error appeared inside the authentication browser or as a native alert remain unconfirmed.
+The original report was followed by an ordinary couple-login test on a physical iPhone. The requested Google identity was not yet a WeddingWin member; that exposed a separate post-authentication error described below.
 
 ## Evidence
 
@@ -65,16 +65,36 @@ The additional round trip proves initial cookie storage and return. It cannot by
 
 ## Validation
 
-- 86 targeted Deno tests passed with zero failures: fresh-cookie confirmation and bounded failure, Google native login/signup and callback diagnostics, browser binding, safe errors, Apple web/native compatibility, and signed state.
+- 90 targeted Deno tests passed with zero failures: fresh-cookie confirmation and bounded failure, Google native login/signup and callback diagnostics, browser binding, safe errors, Apple web/native compatibility, and signed state.
 - Both modified Google handlers passed `deno check`.
 - `git diff --check` passed.
 - Released checkout rechecked: clean on `codex/app-store-preparation` at `20cde6c09195f2f8d19c7e9d816dde156593c9cb`.
 - Existing native Google UI suite previously passed 33/33 against the unchanged app source. No new native code or build-number change is included.
 - Physical first-attempt verification and deployment are pending. These automated tests mock cookie transport and do not certify Safari behavior.
 
+## Physical iPhone investigation (September 22)
+
+- Connected to Shane's iPhone 16 Pro, iOS 26.7, and launched the existing `ca.weddingwin.app` without replacing it.
+- The user's latest 17:21:42 start inserted an attempt; the 17:21:46 callback included Google's code but again made no redemption RPC. Production remains start v16 / callback v25.
+- A separate manual-redirect server probe at 17:26:20 confirmed that the start endpoint actually returns the browser-binding cookie with Secure, HttpOnly, Path=/, Max-Age=600 and SameSite=None. It did not follow the Google redirect or authenticate an account.
+- The first UI inspection timed out while enabling automation. After the user accepted the iPhone automation prompt, inspection passed. This is a test-control issue, separate from the sign-in failure.
+- Using a standalone XCTest helper outside the app repository, opened the observed couple login action, Google button and Apple's normal sign-in confirmation. Google's account chooser displayed correctly.
+- The user selected a different Google identity after the first chooser reached a password screen. No password was read or entered by the helper.
+- At 17:34:40–45 UTC, ordinary couple login authenticated with Google, redeemed the browser-bound attempt (HTTP 200), then returned a native error requiring explicit Terms/Privacy acceptance. A read-only exact-email membership lookup returned success with zero members. The callback had attempted member creation even though the action was ordinary login without signup consent.
+- The user authorized creating a couple account and explicitly accepted the Terms/Privacy step. At approximately 17:46 UTC, the existing production signup flow completed and the device showed the signed-in account dashboard. This confirms signup using that identity, not the undeployed cookie candidate. The notification-permission prompt remained open.
+- Private device logs/screenshots and the standalone helper are under the sibling `google-signin-diagnostics-sept22` directory. Do not include these private artifacts in a public PR or app package.
+
+## Missing-member login correction
+
+- Ordinary Google login with no WeddingWin member and no signup consent now returns: “No WeddingWin account uses this Google email yet. Please create an account, then sign in with Google.”
+- An unsuccessful, malformed, or inconsistent directory lookup stops with a fixed temporary message. It cannot be mistaken for a missing member and cannot trigger member or session creation.
+- Existing-member login, valid-consent legacy signup, explicit signup roles, and policy-consent requirements remain intact.
+- Regression cases cover real no-consent ordinary login, missing members, directory HTTP/API/network/shape errors and full-member mismatches.
+- Independent review found no material actionable issues.
+
 ## Access
 
-Supabase MCP tools are unavailable and the existing CLI credential could not be retrieved. Dashboard access is now authenticated. Source downloads and log queries used the dashboard; no authentication tokens were extracted.
+Dashboard logs and source downloads were used first. Supabase MCP became available after session recovery and read-only access to the correct project was verified. Current start v16 and callback v25 bundles were fetched again; deployment payloads replace only each Google handler and its oauth_attempt dependency, preserving all other deployed files. No authentication tokens were extracted.
 
 ## Next diagnostic steps
 
