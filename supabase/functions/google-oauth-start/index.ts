@@ -2,6 +2,8 @@ import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import {
   createOAuthLoginAttempt,
   prepareOAuthBinding,
+  readOAuthBindingCookie,
+  sha256Base64Url,
 } from "../_shared/oauth_attempt.ts";
 import {
   NativeSignupIntentError,
@@ -21,6 +23,8 @@ const APP_LOGIN_SECRET = Deno.env.get("APP_LOGIN_SECRET") || "";
 const GOOGLE_CALLBACK_URL =
   Deno.env.get("GOOGLE_CALLBACK_URL") ||
   "https://www.weddingwin.ca/auth/google-callback";
+const COOKIE_CHECK_PARAMETER = "ww_cookie_check";
+const COOKIE_CHECK_TTL_SECONDS = 60;
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -77,6 +81,96 @@ async function signState(payload: Record<string, unknown>) {
   }));
 }
 
+async function validCookieConfirmation(
+  marker: string,
+  bindingSecret: string | null,
+  query: string,
+): Promise<boolean> {
+  if (!bindingSecret || !/^[A-Za-z0-9_-]{1,1024}$/.test(marker) || !APP_LOGIN_SECRET) {
+    return false;
+  }
+  try {
+    const bytes = Uint8Array.from(
+      atob(marker.replace(/-/g, "+").replace(/_/g, "/")),
+      (value) => value.charCodeAt(0),
+    );
+    const { h, ...payload } = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    const now = Math.floor(Date.now() / 1000);
+    if (
+      typeof h !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(h) ||
+      payload.purpose !== "google-cookie-confirmation" ||
+      !Number.isInteger(payload.exp) || payload.exp <= now ||
+      payload.exp > now + COOKIE_CHECK_TTL_SECONDS ||
+      payload.b !== await sha256Base64Url(bindingSecret) ||
+      payload.q !== await sha256Base64Url(query)
+    ) return false;
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(APP_LOGIN_SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    const signature = Uint8Array.from(
+      atob(h.replace(/-/g, "+").replace(/_/g, "/")),
+      (value) => value.charCodeAt(0),
+    );
+    return await crypto.subtle.verify(
+      "HMAC", key, signature, new TextEncoder().encode(JSON.stringify(payload)),
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function confirmBrowserCookie(req: Request, url: URL): Promise<Response | null> {
+  const hasConfirmation = url.searchParams.has(COOKIE_CHECK_PARAMETER);
+  const marker = url.searchParams.get(COOKIE_CHECK_PARAMETER) || "";
+  url.searchParams.delete(COOKIE_CHECK_PARAMETER);
+  const query = url.searchParams.toString();
+  const existingBinding = readOAuthBindingCookie(req, "google");
+
+  if (hasConfirmation) {
+    if (
+      new URL(req.url).searchParams.getAll(COOKIE_CHECK_PARAMETER).length === 1 &&
+      await validCookieConfirmation(marker, existingBinding, query)
+    ) return null;
+    // Stop after one same-origin round trip. Never rotate the binding or retry
+    // automatically when storage is unavailable or the continuation was changed.
+    console.warn("Google OAuth cookie confirmation failed.");
+    return new Response(
+      "Google sign-in could not confirm this browser. Please close this window and tap Sign in with Google again.",
+      { status: 400, headers: { ...corsHeaders, "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } },
+    );
+  }
+  if (existingBinding) return null;
+
+  const binding = prepareOAuthBinding(req, "google");
+  // Use only the configured backend origin and this endpoint's fixed path.
+  // Neither request Host headers nor client-provided redirects choose the host.
+  const continuation = new URL("/functions/v1/google-oauth-start", SUPABASE_URL);
+  if (continuation.protocol !== "https:") throw new Error("OAuth backend URL must use HTTPS.");
+  continuation.search = query;
+  continuation.searchParams.set(COOKIE_CHECK_PARAMETER, await signState({
+    purpose: "google-cookie-confirmation",
+    b: await sha256Base64Url(binding.bindingSecret),
+    q: await sha256Base64Url(query),
+    exp: Math.floor(Date.now() / 1000) + COOKIE_CHECK_TTL_SECONDS,
+  }));
+  // Confirm that this browser returns the new host cookie before creating an
+  // OAuth attempt or leaving for Google. The marker contains hashes, not secrets.
+  return new Response(null, {
+    status: 302,
+    headers: {
+      ...corsHeaders,
+      Location: continuation.toString(),
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+      "Set-Cookie": binding.setCookie,
+    },
+  });
+}
+
 function requestedSubscriptionId(value: string | null): string {
   return value === "17" ? "17" : "18";
 }
@@ -116,6 +210,8 @@ Deno.serve(async (req: Request) => {
         headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
       });
     }
+    const cookieConfirmation = await confirmBrowserCookie(req, url);
+    if (cookieConfirmation) return cookieConfirmation;
     const stateCodeChallenge = requestedCodeChallenge || b64urlBytes(crypto.getRandomValues(new Uint8Array(32)));
     const subscriptionId = signupRole ? nativeSignupSubscriptionId(signupRole) : requestedSubscriptionId(url.searchParams.get("subscription_id"));
     const consent = consentFromUrl(url);
@@ -175,6 +271,7 @@ Deno.serve(async (req: Request) => {
         ...corsHeaders,
         Location: googleUrl,
         "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
         "Set-Cookie": binding.setCookie,
       },
     });

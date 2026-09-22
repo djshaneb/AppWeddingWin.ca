@@ -1,5 +1,7 @@
 import {
   createOAuthLoginAttempt,
+  type OAuthAttemptFailureReason,
+  OAuthAttemptValidationError,
   prepareOAuthBinding,
   readOAuthBindingCookie,
   redeemOAuthLoginAttempt,
@@ -14,12 +16,20 @@ function assert(condition: unknown, message: string) {
 async function assertRejects(
   run: () => Promise<unknown> | unknown,
   expectedMessage: RegExp,
+  expectedReason?: OAuthAttemptFailureReason,
 ) {
   try {
     await run();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     assert(expectedMessage.test(message), `unexpected rejection: ${message}`);
+    if (expectedReason) {
+      assert(error instanceof OAuthAttemptValidationError, "missing typed failure");
+      assert(
+        (error as OAuthAttemptValidationError).reason === expectedReason,
+        "incorrect safe failure reason",
+      );
+    }
     return;
   }
   throw new Error("expected operation to reject");
@@ -206,6 +216,7 @@ Deno.test("OAuth redemption fails closed for a missing cookie, replay, or databa
           state: STATE,
         }),
       /same browser/i,
+      "binding_missing",
     );
   }
 
@@ -228,6 +239,7 @@ Deno.test("OAuth redemption fails closed for a missing cookie, replay, or databa
         state: STATE,
       }),
     /invalid, expired, already used, or belongs to another browser/i,
+    "attempt_rejected",
   );
 
   const failedAdmin = {
@@ -246,6 +258,7 @@ Deno.test("OAuth redemption fails closed for a missing cookie, replay, or databa
         state: STATE,
       }),
     /temporarily unavailable/i,
+    "attempt_unavailable",
   );
 });
 

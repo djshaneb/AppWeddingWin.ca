@@ -34,6 +34,7 @@ async function fixture(
     finish: (
       attempt: { state: string; cookie: string; nonce: string },
       oauthError?: string,
+      authorizationCode?: string,
     ) => Promise<Response>;
     verify: typeof verifyState;
     records: {
@@ -44,13 +45,17 @@ async function fixture(
       attempts: number;
       redemptions: number;
       cacheReads: number;
+      logs: unknown[][];
     };
     existing: (plan: string) => void;
     race: (plan: string) => void;
+    redemptionError: (message: string) => void;
   }) => Promise<void>,
 ) {
   const originalFetch = globalThis.fetch;
   const originalServe = Deno.serve;
+  const originalWarn = console.warn;
+  const originalError = console.error;
   const settings: Record<string, string> = {
     SUPABASE_URL: "https://offline-google-db.example.invalid",
     SUPABASE_SERVICE_ROLE_KEY: "offline-only-service-key",
@@ -70,12 +75,14 @@ async function fixture(
     attempts: 0,
     redemptions: 0,
     cacheReads: 0,
+    logs: [] as unknown[][],
   };
   let member: Record<string, unknown> | undefined;
   let racePlan = "";
   let idToken = "";
   let storedAttempt: Record<string, unknown> | undefined;
   let attemptConsumed = false;
+  let redemptionErrorMessage = "";
   const existing = (plan: string) => {
     member = {
       user_id: "offline-google-member",
@@ -85,6 +92,8 @@ async function fixture(
     };
   };
   try {
+    console.warn = (...args: unknown[]) => records.logs.push(args);
+    console.error = (...args: unknown[]) => records.logs.push(args);
     for (const [key, value] of Object.entries(settings)) {
       Deno.env.set(key, value);
     }
@@ -115,6 +124,9 @@ async function fixture(
         ) {
           const body = JSON.parse(String(init?.body));
           records.redemptions++;
+          if (redemptionErrorMessage) {
+            return Response.json({ message: redemptionErrorMessage }, { status: 500 });
+          }
           const valid = !attemptConsumed &&
             body.p_provider === storedAttempt?.provider &&
             body.p_state_hash === storedAttempt?.state_hash &&
@@ -217,7 +229,7 @@ async function fixture(
         ),
       );
     const begin = async (role?: "vendor" | "couple") => {
-      const response = await start(
+      let response = await start(
         role
           ? `signup_role=${role}&subscription_id=${
             role === "vendor" ? "17" : "18"
@@ -225,16 +237,33 @@ async function fixture(
           : "subscription_id=17",
       );
       assert(response.status === 302, "Google authorization did not start");
-      const location = new URL(response.headers.get("Location")!);
+      let location = new URL(response.headers.get("Location")!);
+      const cookie = response.headers.get("Set-Cookie")!.split(";")[0];
+      if (
+        location.origin === settings.SUPABASE_URL &&
+        location.pathname === "/functions/v1/google-oauth-start"
+      ) {
+        assert(location.searchParams.has("ww_cookie_check"), "missing cookie continuation marker");
+        assert(records.attempts === 0, "cold start created an unconfirmed login attempt");
+        response = await startHandler(new Request(location, { headers: { Cookie: cookie } }));
+        assert(response.status === 302, "cookie confirmation did not continue authorization");
+        location = new URL(response.headers.get("Location")!);
+        assert(
+          response.headers.get("Set-Cookie")!.split(";")[0] === cookie,
+          "cookie confirmation replaced the established binding",
+        );
+      }
+      assert(location.origin === "https://accounts.google.com", "Google start looped or changed provider");
       return {
         state: location.searchParams.get("state")!,
         nonce: location.searchParams.get("nonce")!,
-        cookie: response.headers.get("Set-Cookie")!.split(";")[0],
+        cookie,
       };
     };
     const finish = async (
       attempt: { state: string; cookie: string; nonce: string },
       oauthError?: string,
+      authorizationCode = "offline-code",
     ) => {
       idToken = await new SignJWT({
         email: "native-google@example.invalid",
@@ -253,7 +282,7 @@ async function fixture(
           `https://offline-google-db.example.invalid/functions/v1/google-oauth-callback?${new URLSearchParams(
             oauthError
               ? { error: oauthError, state: attempt.state }
-              : { code: "offline-code", state: attempt.state },
+              : { code: authorizationCode, state: attempt.state },
           )}`,
           { headers: { Cookie: attempt.cookie } },
         ),
@@ -269,9 +298,14 @@ async function fixture(
       race: (plan) => {
         racePlan = plan;
       },
+      redemptionError: (message) => {
+        redemptionErrorMessage = message;
+      },
     });
   } finally {
     Deno.serve = originalServe;
+    console.warn = originalWarn;
+    console.error = originalError;
     globalThis.fetch = originalFetch;
     activeFetch = undefined;
     for (const [key, value] of previous) {
@@ -291,6 +325,144 @@ function mutateState(state: string, value: unknown, remove = false) {
   return btoa(JSON.stringify(parsed)).replaceAll("+", "-").replaceAll("/", "_")
     .replaceAll("=", "");
 }
+
+function assertCallbackDiagnostic(
+  logs: unknown[][],
+  reason: string,
+  privateValues: string[] = [],
+) {
+  const expected = [
+    ...(reason === "attempt_unavailable"
+      ? [["OAuth login attempt redemption failed."]]
+      : []),
+    [JSON.stringify({ event: "google_oauth_callback_failed", reason })],
+  ];
+  const serialized = JSON.stringify(logs);
+  assert(
+    serialized === JSON.stringify(expected),
+    "callback logs must contain only the fixed event and safe reason",
+  );
+  for (const value of privateValues) {
+    assert(value && !serialized.includes(value), "callback log exposed private input");
+  }
+}
+
+Deno.test("Google callback logs only binding_missing for absent or malformed cookies before redemption", async () => {
+  for (const cookie of ["", "__Host-ww_google_oauth=PRIVATE-malformed-binding"]) {
+    await fixture(async (f) => {
+      const attempt = await f.begin();
+      const code = "PRIVATE-authorization-code";
+      const response = await f.finish({ ...attempt, cookie }, undefined, code);
+      const target = new URL(response.headers.get("Location")!);
+      assert(
+        target.searchParams.get("error") === "google_sign_in_failed" &&
+          target.searchParams.get("error_description") ===
+            "Your Google sign-in was interrupted or expired. Please close this window and tap Sign in with Google again." &&
+          [...target.searchParams.keys()].length === 2,
+        "diagnostics changed the public native error contract",
+      );
+      assertCallbackDiagnostic(f.records.logs, "binding_missing", [
+        attempt.state, attempt.cookie, attempt.nonce, code, "PRIVATE-malformed-binding",
+      ]);
+      assert(
+        f.records.redemptions === 0 && f.records.tokenRequests === 0 &&
+          f.records.creates.length === 0 && f.records.updates.length === 0 &&
+          f.records.exchanges.length === 0,
+        "missing browser binding reached authentication operations",
+      );
+    });
+  }
+});
+
+Deno.test("Google callback distinguishes a rejected bound attempt without logging secrets", async () => {
+  await fixture(async (f) => {
+    const attempt = await f.begin();
+    const cookie = `__Host-ww_google_oauth=${"Z".repeat(43)}`;
+    const code = "PRIVATE-authorization-code";
+    const response = await f.finish({ ...attempt, cookie }, undefined, code);
+    assert(
+      new URL(response.headers.get("Location")!).searchParams.get("error") ===
+        "google_sign_in_failed",
+      "mismatched binding was accepted",
+    );
+    assertCallbackDiagnostic(f.records.logs, "attempt_rejected", [
+      attempt.state, attempt.cookie, attempt.nonce, cookie, code,
+    ]);
+    assert(
+      f.records.redemptions === 1 && f.records.tokenRequests === 0 &&
+        f.records.creates.length === 0 && f.records.updates.length === 0 &&
+        f.records.exchanges.length === 0,
+      "rejected attempt reached provider or identity operations",
+    );
+  });
+});
+
+Deno.test("Google callback distinguishes unavailable redemption and redacts database diagnostics", async () => {
+  await fixture(async (f) => {
+    const attempt = await f.begin();
+    const code = "PRIVATE-authorization-code";
+    const privateError = `PRIVATE-database-error ${attempt.state} ${attempt.cookie} ${code} private@example.invalid`;
+    f.redemptionError(privateError);
+    const response = await f.finish(attempt, undefined, code);
+    const location = response.headers.get("Location")!;
+    assert(
+      new URL(location).searchParams.get("error_description") ===
+        "Google sign-in could not be completed. Please try again.",
+      "redemption outage changed the safe error message",
+    );
+    assertCallbackDiagnostic(f.records.logs, "attempt_unavailable", [
+      attempt.state, attempt.cookie, attempt.nonce, code, privateError,
+      "private@example.invalid",
+    ]);
+    assert(!location.includes("PRIVATE"), "database diagnostics leaked into redirect");
+    assert(
+      f.records.redemptions === 1 && f.records.tokenRequests === 0 &&
+        f.records.creates.length === 0 && f.records.updates.length === 0 &&
+        f.records.exchanges.length === 0,
+      "redemption outage reached provider or identity operations",
+    );
+  });
+});
+
+Deno.test("Google callback logs missing authorization code only after valid binding redemption", async () => {
+  await fixture(async (f) => {
+    const attempt = await f.begin();
+    const response = await f.finish(attempt, undefined, "");
+    const target = new URL(response.headers.get("Location")!);
+    assert(
+      target.searchParams.get("error") === "google_sign_in_failed" &&
+        !target.searchParams.has("exchange_code"),
+      "missing authorization code produced success",
+    );
+    assertCallbackDiagnostic(f.records.logs, "authorization_code_missing", [
+      attempt.state, attempt.cookie, attempt.nonce,
+    ]);
+    assert(
+      f.records.redemptions === 1 && f.records.tokenRequests === 0 &&
+        f.records.creates.length === 0 && f.records.updates.length === 0 &&
+        f.records.exchanges.length === 0,
+      "missing authorization code skipped redemption or reached provider operations",
+    );
+  });
+});
+
+Deno.test("Google successful and cancelled callbacks do not emit failure diagnostics", async () => {
+  for (const oauthError of [undefined, "access_denied"]) {
+    await fixture(async (f) => {
+      f.existing("18");
+      const attempt = await f.begin();
+      const response = await f.finish(attempt, oauthError);
+      const target = new URL(response.headers.get("Location")!);
+      assert(
+        oauthError
+          ? target.searchParams.get("error") === "access_denied"
+          : target.searchParams.get("ok") === "1",
+        "expected success or cancellation response",
+      );
+      assert(f.records.logs.length === 0, "success or cancellation was logged as a failure");
+    });
+  }
+});
 
 Deno.test("Google native signup carries explicit role through signed state, provider verification and exact-plan account creation", async () => {
   for (const role of ["vendor", "couple"] as const) {
@@ -475,6 +647,9 @@ Deno.test("Google successful native callback cannot redeem the same authorizatio
     );
     const replay = await f.finish(attempt);
     const target = new URL(replay.headers.get("Location")!);
+    assertCallbackDiagnostic(f.records.logs, "attempt_rejected", [
+      attempt.state, attempt.cookie, attempt.nonce,
+    ]);
     assert(
       replay.status === 302 &&
         target.searchParams.get("error") === "google_sign_in_failed" &&

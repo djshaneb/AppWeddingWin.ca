@@ -2,6 +2,21 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2.58.0";
 
 export type WebOAuthProvider = "apple" | "google";
 
+export type OAuthAttemptFailureReason =
+  | "binding_missing"
+  | "attempt_rejected"
+  | "attempt_unavailable";
+
+export class OAuthAttemptValidationError extends Error {
+  constructor(
+    readonly reason: OAuthAttemptFailureReason,
+    message: string,
+  ) {
+    super(message);
+    this.name = "OAuthAttemptValidationError";
+  }
+}
+
 const OAUTH_ATTEMPT_TTL_SECONDS = 600;
 const BINDING_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -125,7 +140,8 @@ export async function redeemOAuthLoginAttempt(args: {
 }): Promise<void> {
   const bindingSecret = readOAuthBindingCookie(args.request, args.provider);
   if (!bindingSecret) {
-    throw new Error(
+    throw new OAuthAttemptValidationError(
+      "binding_missing",
       "OAuth sign-in must be completed in the same browser where it was started.",
     );
   }
@@ -141,13 +157,16 @@ export async function redeemOAuthLoginAttempt(args: {
   });
 
   if (error) {
-    console.error("OAuth login attempt redemption failed:", error.message);
-    throw new Error(
+    // Database diagnostics can contain request values; log only a fixed event.
+    console.error("OAuth login attempt redemption failed.");
+    throw new OAuthAttemptValidationError(
+      "attempt_unavailable",
       "OAuth sign-in validation is temporarily unavailable. Please try again.",
     );
   }
   if (data !== true) {
-    throw new Error(
+    throw new OAuthAttemptValidationError(
+      "attempt_rejected",
       "OAuth sign-in state is invalid, expired, already used, or belongs to another browser.",
     );
   }

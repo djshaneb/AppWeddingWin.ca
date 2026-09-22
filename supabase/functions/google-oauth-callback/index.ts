@@ -5,7 +5,10 @@ import {
   createNativeAuthExchange,
 } from "../_shared/auth_exchange.ts";
 import { findAuthUserByEmail } from "../_shared/auth_users.ts";
-import { redeemOAuthLoginAttempt } from "../_shared/oauth_attempt.ts";
+import {
+  OAuthAttemptValidationError,
+  redeemOAuthLoginAttempt,
+} from "../_shared/oauth_attempt.ts";
 import { googleOAuthErrorResponse } from "../_shared/google_oauth_error.ts";
 import { requireCurrentPolicyConsent } from "../_shared/policy_consent.ts";
 import { assertAppleSignupAccountType } from "../_shared/apple_signup_role.ts";
@@ -444,11 +447,24 @@ Deno.serve(async (req: Request) => {
         state: stateRaw,
       });
     } catch (error) {
+      // Fixed reason codes only: never log OAuth inputs or exception messages.
+      console.warn(JSON.stringify({
+        event: "google_oauth_callback_failed",
+        reason: error instanceof OAuthAttemptValidationError
+          ? error.reason
+          : "attempt_unavailable",
+      }));
       return errorPage(error instanceof Error ? error.message : "Invalid Google sign-in state.");
     }
 
     if (oauthError) return errorPage(`Google returned: ${oauthError}`);
-    if (!code) return errorPage("Missing authorization code.");
+    if (!code) {
+      console.warn(JSON.stringify({
+        event: "google_oauth_callback_failed",
+        reason: "authorization_code_missing",
+      }));
+      return errorPage("Missing authorization code.");
+    }
 
     const { id: clientId, secret: clientSecret } = await getConfig();
 
