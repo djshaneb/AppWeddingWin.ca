@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed backend fix and regression tests are isolated on the fix branch. No production backend, CMS, or App Store configuration changes have been deployed.
+The user approved applying the isolated backend fix on September 22. Google start v17 and callback v26 are active. Fresh-cookie and repeat ordinary Google logins passed on the physical iPhone using the unchanged App Store build. CMS and App Store configuration remain unchanged.
 
 - Released baseline: `20cde6c09195f2f8d19c7e9d816dde156593c9cb`, App Store build 8.
 - Isolated branch: `codex/fix-google-signin-first-attempt`.
@@ -54,14 +54,14 @@ Downloaded current function ZIPs were compared locally. Google start v16 is iden
 
 No raw cookies, authorization codes, signed OAuth state, account identifiers, or session credentials were added to this report.
 
-## Proposed change
+## Google browser-cookie change
 
 - When no valid Google browser cookie exists, set the existing secure HttpOnly cookie and make one same-origin request to confirm that the browser returns it before creating an OAuth attempt or navigating to Google.
 - Bind the continuation to the cookie hash and original query with a signed, purpose-specific marker expiring after 60 seconds. No raw cookie is placed in the URL. Invalid, changed, expired, duplicated, or cookie-less continuations stop without another redirect or cookie rotation.
 - Keep the existing-cookie path, signed OAuth state, consent, native PKCE, nonce verification, atomic attempt redemption, and existing native callback behavior.
 - Add fixed callback failure reasons to distinguish missing cookie, rejected attempt, validation unavailable, and missing authorization code. Do not log inputs or exception messages.
 
-The additional round trip proves initial cookie storage and return. It cannot by itself prove delivery through the later Google → WeddingWin → Supabase redirect chain. Treat this as a targeted candidate fix until a fresh physical iPhone sign-in passes.
+The additional round trip proves initial cookie storage and return. It cannot by itself prove delivery through the later Google → WeddingWin → Supabase redirect chain. The physical fresh-cookie check below passed through that complete chain. This is evidence for the tested device and account, not a guarantee about every Safari configuration.
 
 ## Validation
 
@@ -70,7 +70,9 @@ The additional round trip proves initial cookie storage and return. It cannot by
 - `git diff --check` passed.
 - Released checkout rechecked: clean on `codex/app-store-preparation` at `20cde6c09195f2f8d19c7e9d816dde156593c9cb`.
 - Existing native Google UI suite previously passed 33/33 against the unchanged app source. No new native code or build-number change is included.
-- Physical first-attempt verification and deployment are pending. These automated tests mock cookie transport and do not certify Safari behavior.
+- Physical fresh-cookie and repeat login verification passed. The mocked unit tests alone do not certify Safari behavior; the device result and server logs provide the end-to-end evidence.
+- After correcting the existing stale assertion, the complete local Deno backend suite passed 1,071/1,071.
+- Initial GitHub CI passed 1,070 Deno cases and failed one obsolete account-deletion source assertion, reproduced on the untouched released baseline. Only that test was corrected to check the existing storage reread and identity/generation guard; app deletion behavior is unchanged. Its focused suite passed 3/3.
 
 ## Physical iPhone investigation (September 22)
 
@@ -94,15 +96,24 @@ The additional round trip proves initial cookie storage and return. It cannot by
 
 ## Access
 
-Dashboard logs and source downloads were used first. Supabase MCP became available after session recovery and read-only access to the correct project was verified. Current start v16 and callback v25 bundles were fetched again; deployment payloads replace only each Google handler and its oauth_attempt dependency, preserving all other deployed files. No authentication tokens were extracted.
+Dashboard logs and source downloads were used first. Supabase MCP became available after session recovery and read-only access to the correct project was verified. Immediately before deployment, start v16 and callback v25 were fetched again and exactly matched the rollback copies. Deployment replaced only each Google handler and its oauth_attempt dependency, preserving all other deployed files. No authentication tokens were extracted.
 
-## Next diagnostic steps
+## Deployment and live checks (September 22, UTC)
 
-1. Complete local regression and type checks; review only the isolated branch changes.
-2. Apply only the Google start and callback changes to the shared backend, preserving the downloaded function bundles and keeping rollback copies.
-3. Verify deployed source, a fresh-cookie continuation, a blocked-cookie bounded failure, and unchanged existing-cookie behavior.
-4. Complete a fresh physical iPhone Google login and one repeat login; inspect the safe callback reason if it still fails. No new App Store binary is required for this server-only candidate.
-5. If the callback still loses its cookie after a successful initial round trip, investigate a first-party start/callback bridge instead of removing the binding check.
+- User approval received before live deployment.
+- At approximately 17:50 UTC, callback v26 was deployed first, followed by start v17. Both report ACTIVE. JWT gateway settings remain unchanged; signed OAuth state and browser binding remain required by the handlers.
+- Round-trip source reads matched every deployed file against the prepared payload; eight unrelated callback dependencies were preserved exactly.
+- Live endpoint checks passed for: fresh-cookie same-origin confirmation; missing-cookie bounded failure without another redirect or cookie rotation; tampered-query rejection; confirmed-cookie navigation to Google; and the unchanged existing-cookie fast path. These checks stopped before Google and did not create member accounts.
+- Rollback bundles and exact deployed payloads are saved privately in the sibling diagnostics directory. They contain function source, not environment credentials.
+- Before physical verification, the previous browser cookie expired naturally (600 seconds); no Safari data was cleared. The user-authorized couple account was used for ordinary login.
+
+## Physical verification after deployment
+
+- **Fresh login, 17:57:02–09 UTC:** the first start request reached v17 without a continuation marker; a second request had `cookie_check=1`. The browser-bound attempt was then created and redeemed (HTTP 200), callback v26 returned to the app, and native exchange v7 returned HTTP 200. The iPhone showed its signed-in dashboard with no error or manual retry.
+- **Repeat login, 17:57:50–55 UTC:** after signing out, the existing-cookie start used the direct path (`cookie_check=0`, no confirmation request). Attempt redemption and native exchange both returned HTTP 200. The dashboard opened again without an error.
+- Both standalone XCTest checks explicitly asserted the signed-in dashboard and absence of an app error alert, rather than treating successful tapping as login success. The final screen was visually inspected.
+- The device is left signed in to the user-authorized couple account. Its existing notification prompt was allowed under the user's prior notification-testing authorization.
+- No app source, build number, App Store listing, CMS bridge or unrelated deployed helper was changed. The separate GitHub fix branch contains the backend changes and test evidence; the released checkout remains clean.
 
 ## Documentation reviewed
 

@@ -107,11 +107,40 @@ Deno.test(
       start >= 0 && guard > start && dispatch > guard,
       'the process-wide deletion guard must be acquired before the first async session read',
     );
-    assert(
-      aboutSource.includes(
-        'sameNativeSessionIdentity(session, deletionSession)',
+    const identityGuardStart = aboutSource.indexOf(
+      'async function deletionSessionIsCurrent',
+    );
+    const identityGuard = aboutSource.slice(
+      identityGuardStart,
+      aboutSource.indexOf(
+        'async function requestAccountDeletion',
+        identityGuardStart,
       ),
-      'account deletion must refuse a cached identity after the stored account changes',
+    );
+    assert(
+      identityGuardStart >= 0 &&
+        identityGuard.includes('const current = await loadNativeSession()') &&
+        identityGuard.includes(
+          'generation === getNativeSessionStorageGeneration()',
+        ) &&
+        identityGuard.includes(
+          'sameNativeSessionIdentity(current, deletionSession)',
+        ),
+      'account deletion must re-read storage and reject a changed identity or storage generation',
+    );
+    const deletionStart = aboutSource.indexOf('const deleteNativeAccount');
+    const currentIdentityCheck = aboutSource.indexOf(
+      'if (!(await deletionSessionIsCurrent(deletionSession))) return;',
+      deletionStart,
+    );
+    const deletionRequest = aboutSource.indexOf(
+      'await requestAccountDeletion(deletionSession)',
+      deletionStart,
+    );
+    assert(
+      deletionStart >= 0 && currentIdentityCheck > deletionStart &&
+        deletionRequest > currentIdentityCheck,
+      'account deletion must verify the stored identity before sending the deletion request',
     );
 
     const generation = getAccountDeletionGeneration();
