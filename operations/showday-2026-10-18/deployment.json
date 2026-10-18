@@ -31,7 +31,7 @@
     "Live website loaded 58 vendors and increasing saved scan counts."
   ],
   "limitations": [
-    "No physical phone is connected to this incident workspace; attendee confirmation requested.",
+    "This incident was verified through live backend and browser observations; attendee phone confirmation is still requested.",
     "Provider cap remains; changes reduce requests rather than increase the provider limit."
   ],
   "rollback": "Use incident live-backups for exact previous Edge bundles and widget-258-full-live-before.json for the original complete website source. Do not use files marked truncated. Manual push-sweep restore SQL is guarded until show end.",
