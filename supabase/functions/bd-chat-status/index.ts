@@ -104,6 +104,20 @@ Deno.serve(async (request) => {
       return jsonResponse({ ok: false, error: "Native session required" }, 401);
     }
 
+    // Temporary show-day load relief: background badges must not exhaust BD's
+    // shared API quota. No member data is returned without authentication;
+    // active conversations keep the normal checks. Automatically ends at 3 PM ET.
+    if (!activeThreadToken && Date.now() < Date.parse("2026-10-18T19:00:00.000Z")) {
+      const response = jsonResponse({
+        ok: false,
+        code: "showday_background_chat_paused",
+        error: "Background chat status temporarily paused",
+        retriable: true,
+      }, 503);
+      response.headers.set("Retry-After", "60");
+      return response;
+    }
+
     await loadSharedRateLimit();
 
     const authenticatedUser = await getSessionUser(nativeSession);

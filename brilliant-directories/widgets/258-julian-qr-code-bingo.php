@@ -444,10 +444,10 @@ if (!function_exists('ww_qr_bingo_vendor_draw_request')) {
 }
 
 if (!function_exists('ww_qr_bingo_contact_profile')) {
-    function ww_qr_bingo_contact_profile($user) {
+    function ww_qr_bingo_contact_profile($user, $preloadedResponse = null) {
         // QR contact details belong to the authenticated couple and current event.
         // They never change, confirm, or replace the account's login email.
-        $response = ww_qr_bingo_vendor_draw_request('contact_profile_get', array());
+        $response = is_array($preloadedResponse) ? $preloadedResponse : ww_qr_bingo_vendor_draw_request('contact_profile_get', array());
         $body = isset($response['body']) && is_array($response['body']) ? $response['body'] : array();
         $available = isset($response['status_code']) && (int)$response['status_code'] === 200
             && isset($body['ok']) && $body['ok'] === true
@@ -767,8 +767,29 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         '38519' => '066'
     ];
     $isCoupleScannerMember = ($loggedInUser['subscription_id'] == 4 || $loggedInUser['subscription_id'] == 18);
-    $fixtureProbeResponse = $isCoupleScannerMember
-        ? ww_qr_bingo_vendor_draw_request('fixture_context', array()) : null;
+    // Combine page and progress reads. Scan POST must read card state after acquiring its lock.
+    $qrCombinedResponse = null;
+    $fixtureProbeResponse = null;
+    if ($isCoupleScannerMember && ($_SERVER['REQUEST_METHOD'] === 'GET'
+        || ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_scanned'))) {
+        $qrCombinedResponse = ww_qr_bingo_vendor_draw_request('contact_profile_get', array('include_fixture_context' => true));
+        $combinedBody = isset($qrCombinedResponse['body']) && is_array($qrCombinedResponse['body']) ? $qrCombinedResponse['body'] : array();
+        if (isset($qrCombinedResponse['status_code']) && (int)$qrCombinedResponse['status_code'] === 200
+            && isset($combinedBody['ok'], $combinedBody['fixture_context']) && $combinedBody['ok'] === true
+            && is_array($combinedBody['fixture_context'])) {
+            $fixtureProbeResponse = array('status_code' => 200, 'body' => $combinedBody['fixture_context']);
+        } elseif (isset($qrCombinedResponse['status_code'], $combinedBody['ok'])
+            && (int)$qrCombinedResponse['status_code'] === 200 && $combinedBody['ok'] === true) {
+            // Older Edge versions retain the original authenticated read sequence.
+            $qrCombinedResponse = null;
+        } else {
+            // A provider outage must not trigger two more upstream requests.
+            $fixtureProbeResponse = $qrCombinedResponse;
+        }
+    }
+    if ($isCoupleScannerMember && $fixtureProbeResponse === null) {
+        $fixtureProbeResponse = ww_qr_bingo_vendor_draw_request('fixture_context', array());
+    }
     $fixtureContext = ww_qr_bingo_fixture_context($fixtureProbeResponse);
     $fixtureProbeBody = is_array($fixtureProbeResponse) && isset($fixtureProbeResponse['body']) && is_array($fixtureProbeResponse['body'])
         ? $fixtureProbeResponse['body'] : array();
@@ -786,10 +807,15 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         ww_qr_bingo_prepare_json_response(); http_response_code(503);
         echo json_encode(array('status' => 'error', 'message' => 'Your Bingo card is being updated. Please scan again.')); exit();
     }
-    $qrContactProfile = ww_qr_bingo_contact_profile($loggedInUser);
+    $qrContactProfile = ww_qr_bingo_contact_profile($loggedInUser, $qrCombinedResponse);
     $qrCardState = ww_qr_bingo_card_state($qrContactProfile['card_state'], $qrCardEventKey, (string)$userId);
     if ($isCoupleScannerMember && !$qrCardState) {
         ww_qr_bingo_prepare_json_response(); http_response_code(503);
+        if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
+            header('Content-Type: text/html; charset=UTF-8');
+            echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Vendor Bingo | WeddingWin</title><style>body{margin:0;padding:32px 20px;background:#fff8f6;color:#3c3035;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{box-sizing:border-box;max-width:480px;margin:10vh auto;padding:28px;background:#fff;border:1px solid #ead8d5;border-radius:18px}h1{font-size:26px;line-height:1.2;margin:0 0 16px}p{font-size:18px;line-height:1.5;margin:0 0 24px}button{min-height:48px;width:100%;padding:12px 20px;border:0;border-radius:10px;background:#aa565d;color:#fff;font:inherit;font-size:18px;font-weight:600;cursor:pointer}button:focus-visible{outline:3px solid #59262b;outline-offset:3px}</style></head><body><main><h1>Vendor Bingo</h1><p>Bingo is busy right now. Please try again in a moment.</p><form method="get" action="/qr"><button type="submit">Try again</button></form></main></body></html>';
+            exit();
+        }
         echo json_encode(array('status' => 'error', 'message' => 'Your Bingo card could not be checked. Please try again.')); exit();
     }
     if ($fixtureContext && ($fixtureContext['card_state']['generation'] !== $qrCardState['generation']

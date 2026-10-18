@@ -1,3 +1,4 @@
+import { fetchQrBdMember, QrBdMemberLookupUnavailableError } from "../_shared/qr_bingo_bd_member.ts";
 import { handleReviewDrawAction, ReviewDrawError, REVIEW_DRAW_MODE } from "../_shared/qr_bingo_review_draw.ts";
 import { setReviewDrawPushEnabled, ReviewDrawNotificationError } from "../_shared/review_draw_notifications.ts";
 import { parseQrBingoPrizeEditStatus } from "../_shared/qr_bingo_prize_edit.ts";
@@ -10,6 +11,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { qrBingoScannerWindowOpen, qrBingoInShowScannedIds } from "../_shared/qr_bingo_scan_schedule.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import { nativeSessionMatchesCachedBdIdentity } from "../_shared/bd_identity.ts";
+import { parseQrPageProgress, type QrPageProgress } from "../_shared/qr_bingo_page_progress.ts";
 import { normalizeContactEmail } from "../_shared/contact_email.ts";
 import {
   isApplePrivateRelayEmail,
@@ -211,6 +213,7 @@ type QrPage = {
   vendors: QrVendor[];
   scanned: string[];
   requestCsrf?: string;
+  progress?: QrPageProgress;
 };
 type AppReviewRaffleFixture = {
   synthetic_fixture_setup_id?: string | null;
@@ -739,14 +742,7 @@ async function callBd(path: string, init: RequestInit = {}) {
 }
 
 async function fetchFullBdUserById(userId: string | number) {
-  const fullUser = await callBd(
-    `/api/v2/user/get/${encodeURIComponent(String(userId))}?include_tags=1`,
-  );
-  if (fullUser.response.ok && fullUser.body.status === "success") {
-    return unwrapBdUser(fullUser.body.message);
-  }
-
-  return undefined;
+  return await fetchQrBdMember(userId, callBd);
 }
 
 function appendCookie(
@@ -908,7 +904,15 @@ async function getQrPage(cookieJar: Map<string, string>, expectedMemberId?: stri
     .map((value) => String(value || "").trim())
     .filter(Boolean);
 
-  return { vendors, scanned, requestCsrf };
+  const config = qrBingoConfig();
+  const progress = expectedMemberId ? parseQrPageProgress({
+    eventConfig: extractJsonAssignment<unknown>(html, "EVENT_CONFIG", null),
+    fixture: extractJsonAssignment<unknown>(html, "QR_SCANNER_FIXTURE", null),
+    scanned: extractJsonAssignment<unknown>(html, "INITIAL_SCANNED", null),
+    inShowScanned: extractJsonAssignment<unknown>(html, "IN_SHOW_SCANNED", null),
+    vendorDrawScanned: extractJsonAssignment<unknown>(html, "VENDOR_DRAW_SCANNED", null),
+  }, vendors.map((vendor) => vendor.id), config.event_key, config.revision) : undefined;
+  return { vendors, scanned, requestCsrf, progress };
 }
 
 async function postQrAction(
@@ -4401,6 +4405,9 @@ Deno.serve(async (request) => {
           // A normal scan does not use pre-save history. Its successful write
           // is followed by the authoritative read and in-show draw proof.
           : action === "scan" ? { scanned: page.scanned, inShowScanned: [], vendorDrawScanned: [] }
+          // A list is a read-only snapshot. Mutating/draw actions still refresh
+          // website history, including the fresh read after every saved scan.
+          : action === "list" && page.progress ? page.progress
           : await getFreshScanned(cookieJar, page);
         scanned = [...new Set(progress.scanned)];
         inShowScanned = [...new Set(progress.inShowScanned)];
@@ -5384,6 +5391,9 @@ Deno.serve(async (request) => {
       );
     });
   } catch (error) {
+    if (error instanceof QrBdMemberLookupUnavailableError) {
+      return jsonResponse({ ok: false, code: error.code, error: error.message, retriable: true, retry_after_seconds: 10 }, 503);
+    }
     if (error instanceof QrParticipationError) return jsonResponse({ok:false,code:error.code,error:error.message,retriable:error.status===503},error.status);
     if (error instanceof QrBingoCardStateError) return jsonResponse({ok:false,code:error.code,error:error.message},error.status);
     if (error && typeof error === "object" && "code" in error && error.code === "55000" && "message" in error && String(error.message).includes("stale_card_generation")) {

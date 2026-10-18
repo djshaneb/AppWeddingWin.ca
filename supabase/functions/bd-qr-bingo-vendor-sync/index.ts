@@ -1,3 +1,5 @@
+import { websiteFixtureContextIsConfirmedEmpty } from "../_shared/qr_bingo_fixture_empty.ts";
+import { fetchQrBdMember, QrBdMemberLookupUnavailableError } from "../_shared/qr_bingo_bd_member.ts";
 import { handleReviewDrawAction, ReviewDrawError, REVIEW_DRAW_MODE } from "../_shared/qr_bingo_review_draw.ts";
 import { setReviewDrawPushEnabled, ReviewDrawNotificationError } from "../_shared/review_draw_notifications.ts";
 import { parseQrBingoPrizeEditStatus } from "../_shared/qr_bingo_prize_edit.ts";
@@ -739,14 +741,7 @@ async function callBd(path: string, init: RequestInit = {}) {
 }
 
 async function fetchFullBdUserById(userId: string | number) {
-  const fullUser = await callBd(
-    `/api/v2/user/get/${encodeURIComponent(String(userId))}?include_tags=1`,
-  );
-  if (fullUser.response.ok && fullUser.body.status === "success") {
-    return unwrapBdUser(fullUser.body.message);
-  }
-
-  return undefined;
+  return await fetchQrBdMember(userId, callBd);
 }
 
 function appendCookie(
@@ -4117,6 +4112,9 @@ Deno.serve(async (request) => {
         }
       }
       const authenticatedMemberId = websitePrincipal?.userId || String(nativeSession!.user_id);
+      if (await websiteFixtureContextIsConfirmedEmpty(websitePrincipal, action, requireAdmin())) {
+        return jsonResponse(await isolatedFixtureContext(null, authenticatedMemberId));
+      }
       const websiteCoupleUser = websitePrincipal?.kind === "couple"
         ? await fetchFullBdUserById(authenticatedMemberId) : undefined;
       if (websitePrincipal?.kind === "couple" && (!websiteCoupleUser?.user_id ||
@@ -4294,7 +4292,12 @@ Deno.serve(async (request) => {
             dateSyncDiagnostic = error.diagnostic;
           }
         }
+        // A website GET can obtain both read contexts with one authenticated
+        // member lookup. Existing review, role and card-state checks still run.
+        const fixtureContext = action === "contact_profile_get" && body.include_fixture_context === true
+          ? await isolatedFixtureContext(reviewFixture, authenticatedMemberId) : undefined;
         return jsonResponse({ok:true,event_key:contactEventKey,contact_profile:bingoContactProfile,
+          ...(fixtureContext ? {fixture_context:fixtureContext} : {}),
           participation_agreement:participationAgreement,
           card_state:cardState,card_generation:cardState?.generation,
           profile_complete:bingoContactProfile!.complete,missing_profile_fields:bingoContactProfile!.missing_fields,
@@ -5384,6 +5387,9 @@ Deno.serve(async (request) => {
       );
     });
   } catch (error) {
+    if (error instanceof QrBdMemberLookupUnavailableError) {
+      return jsonResponse({ ok: false, code: error.code, error: error.message, retriable: true, retry_after_seconds: 10 }, 503);
+    }
     if (error instanceof QrParticipationError) return jsonResponse({ok:false,code:error.code,error:error.message,retriable:error.status===503},error.status);
     if (error instanceof QrBingoCardStateError) return jsonResponse({ok:false,code:error.code,error:error.message},error.status);
     if (error && typeof error === "object" && "code" in error && error.code === "55000" && "message" in error && String(error.message).includes("stale_card_generation")) {

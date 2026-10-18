@@ -1,0 +1,50 @@
+{
+  "incident_date": "2026-10-18",
+  "scope": "Live server and website only; no native build or App Store update.",
+  "cause": "Brilliant Directories returned 429 under show traffic; repeated member lookups multiplied requests. Some failures were misreported as expired sessions or wrong roles.",
+  "deployed": {
+    "bd-qr-bingo-sync": 79,
+    "bd-qr-bingo-vendor-sync": 81,
+    "bd-chat-status": 37,
+    "website_widget": 258
+  },
+  "changes": [
+    "Return retryable member_lookup_unavailable errors for provider failures without authorizing access.",
+    "Combine authenticated fixture and contact/card context reads for GET and read-only get_scanned.",
+    "Reuse validated authenticated website progress only for native list requests; actual scans and draw actions keep fresh proof.",
+    "Avoid provider lookup for signed website probes with confirmed absence of any test fixture; real actions retain member checks.",
+    "Render a manual mobile retry page for temporary GET card-check failures."
+  ],
+  "temporary_relief": {
+    "background_chat_status_resumes_utc": "2026-10-18T19:00:00Z",
+    "push_sweep_job": 2,
+    "restore_job": 10,
+    "restores_schedule": "* * * * *",
+    "note": "Restorer verifies the original job and removes itself. It was observed succeeding with a no-op before the deadline. Background badges and website-message notification delivery may be delayed during the relief window."
+  },
+  "validation": [
+    "Deployed Edge function bundles round-trip byte matched.",
+    "Full website source round-trip byte matched, CSS/JS unchanged.",
+    "Existing scanner session/CSRF/role PHP tests: 6 passed.",
+    "Repository helper regression tests: 12 passed.",
+    "Additional exact-candidate PHP context, reset-lock, retry and native-routing tests passed in incident workspace.",
+    "Live website loaded 58 vendors and increasing saved scan counts."
+  ],
+  "limitations": [
+    "No physical phone is connected to this incident workspace; attendee confirmation requested.",
+    "Provider cap remains; changes reduce requests rather than increase the provider limit."
+  ],
+  "rollback": "Use incident live-backups for exact previous Edge bundles and widget-258-full-live-before.json for the original complete website source. Do not use files marked truncated. Manual push-sweep restore SQL is guarded until show end.",
+  "latest_live_window": {
+    "start": "2026-10-18T16:03:30Z",
+    "end": "2026-10-18T16:04:15Z",
+    "bingo_http_200": 34,
+    "bingo_http_403": 2,
+    "bingo_401_500_502_503": 0,
+    "explicit_rate_limit_or_scan_failure_logs": 0,
+    "raffle_entries_created": 1,
+    "participation_acceptances": 1,
+    "contact_profiles_saved": 1,
+    "qualification": "403 response bodies/actions are unavailable in logs; these may be legitimate access denials. A short sample does not establish every phone flow."
+  }
+}
