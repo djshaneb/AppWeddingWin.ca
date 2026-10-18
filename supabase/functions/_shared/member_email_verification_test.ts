@@ -243,10 +243,13 @@ Deno.test("chat proof and QR contact gates re-read the authenticated member inst
     assert(auth >= 0 && fresh > auth && proof > fresh);
     assert(!handler.includes("loadMemberEmailVerification(authenticatedUser.user_id, authenticatedUser.email)"));
   }
+  const memberLookup = await Deno.readTextFile(new URL("./qr_bingo_bd_member.ts", import.meta.url));
+  assert(memberLookup.includes("await callBd(") && memberLookup.includes("/api/v2/user/get/"));
+  assert(!/cache|cached/i.test(memberLookup));
   for (const path of ["../bd-qr-bingo-sync/index.ts", "../bd-qr-bingo-vendor-sync/index.ts"]) {
     const source = await Deno.readTextFile(new URL(path, import.meta.url));
     const fetcher = source.slice(source.indexOf("async function fetchFullBdUserById("), source.indexOf("function appendCookie("));
-    assert(fetcher.includes("await callBd(") && fetcher.includes("/api/v2/user/get/"));
+    assert(fetcher.includes("await fetchQrBdMember(userId, callBd)"));
     assert(!/cache|cached/i.test(fetcher));
     const handler = source.slice(source.indexOf("Deno.serve(async"));
     const fresh = handler.indexOf("const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)");

@@ -30,20 +30,11 @@ function sourceBlock(source: string, marker: string) {
   throw new Error(`${marker} is unterminated`);
 }
 
-function normalizedEdgeSource(source: string) {
-  return source
-    .replace(
-      'const action = String(body?.action || "vendor_raffle_get");',
-      'const action = String(body?.action || "list");',
-    )
-    .replace(
-      'console.error("bd-qr-bingo-vendor-sync request failed", failure);',
-      'console.error("bd-qr-bingo-sync request failed", failure);',
-    )
-    .replace(
-      'error: "QR Bingo vendor sync unavailable",',
-      'error: "QR Bingo sync unavailable",',
-    );
+function sourceRange(source: string, first: string, next: string) {
+  const start = source.indexOf(first);
+  const end = source.indexOf(next, start + first.length);
+  assert(start >= 0 && end > start, `Shared contact section ${first} is missing`);
+  return source.slice(start, end);
 }
 
 Deno.test("QR sync endpoints fail closed for incomplete couple contact details", async () => {
@@ -227,14 +218,28 @@ Deno.test("native, website, and both Edge endpoints use one versioned participat
   }
 });
 
-Deno.test("couple and vendor Edge endpoints remain behaviorally identical", async () => {
+Deno.test("couple and vendor endpoints retain identical shared contact and participation gates", async () => {
   const [coupleSource, vendorSource] = await Promise.all(
     syncUrls.map((url) => Deno.readTextFile(url)),
   );
-  assert(
-    normalizedEdgeSource(vendorSource) === normalizedEdgeSource(coupleSource),
-    "Edge copies may differ only by default action, log label, and generic error label",
-  );
+  // Read transport and optional response context differ by endpoint. Compare
+  // the complete shared security gates and contact mutations themselves.
+  for (const marker of [
+    "function qrContactProfile(",
+    'if (action === "contact_profile_save")',
+    "if (bingoContactProfile!.date_sync_pending)",
+  ]) {
+    assert(sourceBlock(vendorSource, marker) === sourceBlock(coupleSource, marker),
+      `Shared contact behavior drifted at ${marker}`);
+  }
+  for (const [first, next] of [
+    ['const websiteCoupleUser =', 'if (action === "fixture_context")'],
+    ['const isContactProfileAction =', 'if (isContactProfileAction)'],
+    ['const contactProfile = bingoContactProfile', '// Website proof is the authentication.'],
+  ]) {
+    assert(sourceRange(vendorSource, first, next) === sourceRange(coupleSource, first, next),
+      `Shared contact authorization, reset or participation gate drifted at ${first}`);
+  }
 });
 
 Deno.test("couple QR notice gate requires the revised version and never upgrades earlier agreements", async () => {

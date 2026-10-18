@@ -36,15 +36,32 @@
   ],
   "rollback": "Use incident live-backups for exact previous Edge bundles and widget-258-full-live-before.json for the original complete website source. Do not use files marked truncated. Manual push-sweep restore SQL is guarded until show end.",
   "latest_live_window": {
-    "start": "2026-10-18T16:03:30Z",
-    "end": "2026-10-18T16:04:15Z",
-    "bingo_http_200": 34,
-    "bingo_http_403": 2,
-    "bingo_401_500_502_503": 0,
+    "start": "2026-10-18T16:10:47Z",
+    "end": "2026-10-18T16:12:47Z",
+    "native_bingo_http_200": 19,
+    "vendor_bingo_http_200": 124,
+    "vendor_bingo_http_403": 1,
+    "public_config_http_200": 137,
+    "bingo_401_429_5xx": 0,
     "explicit_rate_limit_or_scan_failure_logs": 0,
-    "raffle_entries_created": 1,
-    "participation_acceptances": 1,
-    "contact_profiles_saved": 1,
-    "qualification": "403 response bodies/actions are unavailable in logs; these may be legitimate access denials. A short sample does not establish every phone flow."
+    "qualification": "This two-minute sample overlaps the polling deployment; it does not establish every phone flow or capacity for 300 simultaneously active users. The single 403 may be a legitimate access denial."
+  },
+  "website_poll_relief": {
+    "status": "deployed",
+    "widget_id": 258,
+    "verified_utc_approximate": "2026-10-18T16:12:35Z",
+    "live_verification": "Saved widget reloaded and matched all 216051 candidate characters exactly; widget_style and widget_javascript were unchanged.",
+    "candidate": "widget-258-poll-relief-candidate.json",
+    "behavior": "Keep 30-second public event and schedule checks; refresh saved progress only when the configuration revision changes or on return/focus after at least 60 seconds.",
+    "validation": "Three executable JavaScript behavior tests and full PHP syntax validation passed. The tracked widget receives only the polling diff from the exact deployed read-progress candidate.",
+    "limitations": "Already open pages must reload to receive this change. Admin resets or progress from another device may remain visually stale until return or reload; server authorization and generation fencing are unchanged."
+  },
+  "provider_support": {
+    "status": "email_sent_and_verified",
+    "sent_utc_approximate": "2026-10-18T16:12:00Z",
+    "recipient": "support@brilliantdirectories.com",
+    "request": "Temporary API limit of at least 2000 requests per minute until 2026-10-18T19:00:00Z.",
+    "paid_change_authorized": false,
+    "capacity_increase_confirmed": false
   }
 }

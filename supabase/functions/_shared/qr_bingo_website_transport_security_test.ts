@@ -1,6 +1,8 @@
 // Execute the real narrow transport function bodies from both Edge mirrors.
 // Only network/BD dependencies are replaced; no production account or request
 // is used, and the fixtures contain no real credentials or contact data.
+import { parseQrPageProgress } from "./qr_bingo_page_progress.ts";
+
 const endpointPaths = [
   "../bd-qr-bingo-sync/index.ts",
   "../bd-qr-bingo-vendor-sync/index.ts",
@@ -293,6 +295,7 @@ for (const path of endpointPaths) {
     )
       .replaceAll("extractJsonAssignment<string>", "extractJsonAssignment")
       .replaceAll("extractJsonAssignment<unknown[]>", "extractJsonAssignment")
+      .replaceAll("extractJsonAssignment<unknown>", "extractJsonAssignment")
       .replaceAll("(vendor): vendor is QrVendor =>", "(vendor) =>");
     const implementation = new AsyncFunction(
       "cookieJar",
@@ -301,6 +304,8 @@ for (const path of endpointPaths) {
       "fetchWithCookies",
       "extractJsonAssignment",
       "normalizeVendor",
+      "qrBingoConfig",
+      "parseQrPageProgress",
       body,
     );
     let normalized = 0;
@@ -328,6 +333,8 @@ for (const path of endpointPaths) {
           normalized++;
           return value;
         },
+        () => ({ event_key: "unit-test-event", revision: 1 }),
+        parseQrPageProgress,
       );
     }
     for (
@@ -365,9 +372,10 @@ for (const path of endpointPaths) {
     const body = bodyBetween(source, "getQrPage", 'let bootstrapCsrf = ""', "postQrAction")
       .replaceAll("extractJsonAssignment<string>", "extractJsonAssignment")
       .replaceAll("extractJsonAssignment<unknown[]>", "extractJsonAssignment")
+      .replaceAll("extractJsonAssignment<unknown>", "extractJsonAssignment")
       .replaceAll("(vendor): vendor is QrVendor =>", "(vendor) =>");
     const pageImpl = new AsyncFunction("cookieJar", "expectedMemberId", "BD_API_BASE_URL", "fetchWithCookies",
-      "extractJsonAssignment", "normalizeVendor", body);
+      "extractJsonAssignment", "normalizeVendor", "qrBingoConfig", "parseQrPageProgress", body);
     const fetchImpl = new AsyncFunction("url", "cookieJar", "init", "fetch", "cookieHeader", "getSetCookieHeaders", "appendCookie",
       bodyBetween(source, "fetchWithCookies", "const target =", "loginWebsiteSession"));
     const functions = cookieFunctions();
@@ -390,7 +398,8 @@ for (const path of endpointPaths) {
       const extract = (_html: string, name: string) => name === "QR_AUTHENTICATED_MEMBER_ID" ? "37823"
         : name === "QR_WEBSITE_CSRF" ? pageCsrf : [];
       try {
-        const result = await pageImpl(jar, expectedId, "https://www.weddingwin.ca", transport, extract, (v: unknown) => v);
+        const result = await pageImpl(jar, expectedId, "https://www.weddingwin.ca", transport, extract, (v: unknown) => v,
+          () => ({ event_key: "unit-test-event", revision: 1 }), parseQrPageProgress);
         return { result, calls };
       } catch (error) {
         return { error, calls };

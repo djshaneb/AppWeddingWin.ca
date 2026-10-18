@@ -117,14 +117,28 @@ Deno.test("both authenticated QR endpoints use authoritative status for the dash
   }
 });
 
-Deno.test("QR mirror preserves its vendor default action and diagnostic identity", async () => {
+Deno.test("QR endpoints preserve shared prize controls and their distinct diagnostic identities", async () => {
   const couple = await Deno.readTextFile(new URL("../bd-qr-bingo-sync/index.ts", import.meta.url));
   const vendor = await Deno.readTextFile(new URL("../bd-qr-bingo-vendor-sync/index.ts", import.meta.url));
   assert(couple.includes('String(body?.action || "list")'));
   assert(vendor.includes('String(body?.action || "vendor_raffle_get")'));
   assert(vendor.includes('console.error("bd-qr-bingo-vendor-sync request failed", failure)'));
   assert(vendor.includes('error: "QR Bingo vendor sync unavailable"'));
-  assertEquals(vendor.replace('String(body?.action || "vendor_raffle_get")', 'String(body?.action || "list")')
-    .replace('"bd-qr-bingo-vendor-sync request failed"', '"bd-qr-bingo-sync request failed"')
-    .replace('"QR Bingo vendor sync unavailable"', '"QR Bingo sync unavailable"'), couple);
+  function section(source: string, first: string, next: string) {
+    const start = source.indexOf(first);
+    const end = source.indexOf(next, start + first.length);
+    assert(start >= 0 && end > start, `Shared prize section ${first} is missing`);
+    return source.slice(start, end);
+  }
+  // Endpoint-specific progress reads must not change authoritative prize
+  // status, vendor authorization, dashboard disclosure or mutation checks.
+  for (const [first, next] of [
+    ["function materialSettingsFingerprint(", "function nonConsentMaterialSettingsFingerprint("],
+    ["async function getVendorRaffleDashboard(", "async function loadQrDrawEmailSigningKey("],
+    ['if (action === "vendor_raffle_get")', 'if (action === "vendor_raffle_export")'],
+    ['if (action === "vendor_raffle_update")', 'if (action === "vendor_raffle_draw")'],
+  ]) {
+    assertEquals(section(vendor, first, next), section(couple, first, next),
+      `Shared prize behavior drifted at ${first}`);
+  }
 });

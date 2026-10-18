@@ -3057,6 +3057,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     /* WW_QR_WEB_SCANNER_WINDOW_START */
     let scannerConfigUnavailable = false, scannerSettingsRequireRefresh = false;
     let scannerPublicPollInFlight = false, scannerAvailabilityState = '';
+    let scannerLastProgressRefreshAt = Date.now();
     function isWebsiteScannerWindowOpen(now = Date.now()) {
       if (scannerConfigUnavailable || scannerSettingsRequireRefresh || EVENT_CONFIG.scan_enabled !== true) return false;
       if (typeof QR_SCANNER_FIXTURE !== 'undefined' && QR_SCANNER_FIXTURE === true) return true;
@@ -3112,7 +3113,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       if (identityFields.some(key => payload[key] !== EVENT_CONFIG[key])) return null;
       return { revision: payload.revision, scan_enabled: payload.scan_enabled, vendor_draws_enabled: payload.vendor_draws_enabled, scan_open_early: early, scan_opens_at: opens, scan_history_starts_at: floor };
     }
-    async function refreshWebsiteScannerConfig() {
+    async function refreshWebsiteScannerConfig(refreshProgressOnReturn = false) {
       if (scannerPublicPollInFlight || document.hidden || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
       scannerPublicPollInFlight = true;
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
@@ -3124,16 +3125,22 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         if (vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
         scannerConfigUnavailable = false;
         if (!next) { scannerSettingsRequireRefresh = true; syncWebsiteScannerAvailability(); return; }
+        const shouldRefreshProgress = next.revision !== EVENT_CONFIG.revision
+          || (refreshProgressOnReturn && Date.now() - scannerLastProgressRefreshAt >= 60000);
         Object.keys(next).forEach(key => { EVENT_CONFIG[key] = next[key]; });
         scannerSettingsRequireRefresh = false; syncWebsiteScannerAvailability();
-        if (CONTACT_PROFILE_COMPLETE) await loadScannedVendors();
+        // Keep schedule checks frequent without spending BD API quota on idle cards.
+        if (CONTACT_PROFILE_COMPLETE && shouldRefreshProgress) {
+          scannerLastProgressRefreshAt = Date.now();
+          await loadScannedVendors();
+        }
       } catch (error) { scannerConfigUnavailable = true; syncWebsiteScannerAvailability(); }
       finally { clearTimeout(timeout); scannerPublicPollInFlight = false; }
     }
     function initializeWebsiteScannerPolling() {
       syncWebsiteScannerAvailability();
       setInterval(() => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(); } }, 30000);
-      const refreshOnReturn = () => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(); } };
+      const refreshOnReturn = () => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(true); } };
       document.addEventListener('visibilitychange', refreshOnReturn);
       window.addEventListener('focus', refreshOnReturn);
     }
