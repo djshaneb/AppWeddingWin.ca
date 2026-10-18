@@ -1,3 +1,4 @@
+import { verifiedWebsiteCoupleMember, WebsiteMemberSnapshotError } from "../_shared/qr_bingo_website_member.ts";
 import { websiteFixtureContextIsConfirmedEmpty } from "../_shared/qr_bingo_fixture_empty.ts";
 import { fetchQrBdMember, QrBdMemberLookupUnavailableError } from "../_shared/qr_bingo_bd_member.ts";
 import { handleReviewDrawAction, ReviewDrawError, REVIEW_DRAW_MODE } from "../_shared/qr_bingo_review_draw.ts";
@@ -4112,11 +4113,13 @@ Deno.serve(async (request) => {
         }
       }
       const authenticatedMemberId = websitePrincipal?.userId || String(nativeSession!.user_id);
+      const websiteAttestedMember = verifiedWebsiteCoupleMember(websitePrincipal, body);
+      if (websiteAttestedMember) console.info("qr_bingo_website_member_snapshot_used", { action });
       if (await websiteFixtureContextIsConfirmedEmpty(websitePrincipal, action, requireAdmin())) {
         return jsonResponse(await isolatedFixtureContext(null, authenticatedMemberId));
       }
       const websiteCoupleUser = websitePrincipal?.kind === "couple"
-        ? await fetchFullBdUserById(authenticatedMemberId) : undefined;
+        ? websiteAttestedMember ?? await fetchFullBdUserById(authenticatedMemberId) : undefined;
       if (websitePrincipal?.kind === "couple" && (!websiteCoupleUser?.user_id ||
         String(websiteCoupleUser.user_id) !== authenticatedMemberId ||
         !["4", "18"].includes(String(websiteCoupleUser.subscription_id)))) {
@@ -5387,6 +5390,9 @@ Deno.serve(async (request) => {
       );
     });
   } catch (error) {
+    if (error instanceof WebsiteMemberSnapshotError) {
+      return jsonResponse({ ok: false, code: error.code, error: error.message }, error.status);
+    }
     if (error instanceof QrBdMemberLookupUnavailableError) {
       return jsonResponse({ ok: false, code: error.code, error: error.message, retriable: true, retry_after_seconds: 10 }, 503);
     }

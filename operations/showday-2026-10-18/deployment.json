@@ -4,7 +4,7 @@
   "cause": "Brilliant Directories returned 429 under show traffic; repeated member lookups multiplied requests. Some failures were misreported as expired sessions or wrong roles.",
   "deployed": {
     "bd-qr-bingo-sync": 79,
-    "bd-qr-bingo-vendor-sync": 81,
+    "bd-qr-bingo-vendor-sync": 82,
     "bd-chat-status": 37,
     "website_widget": 258
   },
@@ -13,7 +13,8 @@
     "Combine authenticated fixture and contact/card context reads for GET and read-only get_scanned.",
     "Reuse validated authenticated website progress only for native list requests; actual scans and draw actions keep fresh proof.",
     "Avoid provider lookup for signed website probes with confirmed absence of any test fixture; real actions retain member checks.",
-    "Render a manual mobile retry page for temporary GET card-check failures."
+    "Render a manual mobile retry page for temporary GET card-check failures.",
+    "Attach a fresh, strictly whitelisted local website member snapshot to the signed couple request; retain HMAC/nonce, active-role, contact, reset and draw checks without a redundant provider member lookup."
   ],
   "temporary_relief": {
     "background_chat_status_resumes_utc": "2026-10-18T19:00:00Z",
@@ -36,15 +37,20 @@
   ],
   "rollback": "Use incident live-backups for exact previous Edge bundles and widget-258-full-live-before.json for the original complete website source. Do not use files marked truncated. Manual push-sweep restore SQL is guarded until show end.",
   "latest_live_window": {
-    "start": "2026-10-18T16:10:47Z",
-    "end": "2026-10-18T16:12:47Z",
-    "native_bingo_http_200": 19,
-    "vendor_bingo_http_200": 124,
+    "start": "2026-10-18T16:19:10Z",
+    "end": "2026-10-18T16:19:35Z",
+    "native_bingo_http_200": 2,
+    "vendor_bingo_http_200": 16,
     "vendor_bingo_http_403": 1,
-    "public_config_http_200": 137,
-    "bingo_401_429_5xx": 0,
-    "explicit_rate_limit_or_scan_failure_logs": 0,
-    "qualification": "This two-minute sample overlaps the polling deployment; it does not establish every phone flow or capacity for 300 simultaneously active users. The single 403 may be a legitimate access denial."
+    "public_config_http_200": 19,
+    "http_429_5xx": 0,
+    "snapshot_marker_window_end": "2026-10-18T16:19:45Z",
+    "snapshot_actions": {
+      "contact_profile_get": 18,
+      "fixture_context": 6,
+      "raffle_offer": 2
+    },
+    "qualification": "Real traffic used the new signed snapshot path. This short sample does not establish every phone flow or capacity for 300 simultaneous users. The single 403 may be a legitimate access denial."
   },
   "website_poll_relief": {
     "status": "deployed",
@@ -62,6 +68,25 @@
     "recipient": "support@brilliantdirectories.com",
     "request": "Temporary API limit of at least 2000 requests per minute until 2026-10-18T19:00:00Z.",
     "paid_change_authorized": false,
-    "capacity_increase_confirmed": false
+    "capacity_increase_confirmed": false,
+    "support_acknowledged": true,
+    "acknowledgement": "Automatic new-ticket acknowledgement received; no capacity increase confirmed."
+  },
+  "website_member_snapshot": {
+    "status": "deployed",
+    "verified_utc": "2026-10-18T16:19:10Z",
+    "edge_version": 82,
+    "widget_id": 258,
+    "live_verification": "All 23 deployed Edge bundle files matched exactly; widget source reloaded and matched all 218452 candidate UTF-16 characters exactly; CSS and JavaScript fields unchanged.",
+    "authorization": "Fresh users_data identity, active state and couple plan come from the existing authenticated website ID; only approved fields are signed. Client snapshot injection is rejected. Present malformed signed snapshots fail closed. Missing snapshots and native/vendor requests retain the existing fresh provider lookup.",
+    "contact_behavior": "Latest wedding_date metadata shadows are preserved, including explicit blanks. Saved Bingo contact profiles remain authoritative and pending date changes still use provider update and readback.",
+    "compatibility_limit": "Other name/phone metadata shadows are not mirrored and may change unsaved contact prefills.",
+    "validation": [
+      "Five targeted Deno tests passed, including malformed snapshot rejection and real HMAC tampering/nonce replay regression.",
+      "Full vendor function Deno typecheck passed.",
+      "Full PHP 7.4 syntax parse and synthetic fresh identity/whitelist/metadata/fallback/injection tests passed.",
+      "Independent PHP and Edge security review found no blocker.",
+      "Seventeen shared contact/participation and prize-gate regression tests passed after the narrowly allowlisted website lookup substitution."
+    ]
   }
 }

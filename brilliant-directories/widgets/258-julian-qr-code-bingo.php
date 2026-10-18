@@ -343,6 +343,42 @@ if (!function_exists('ww_qr_bingo_vendor_draw_request')) {
     function ww_qrb_request_error($status, $message) {
         return array('status_code' => $status, 'body' => array('ok' => false, 'error' => $message));
     }
+    /* WW_QR_FRESH_MEMBER_SNAPSHOT_START */
+    function ww_qrb_fresh_member_snapshot($memberId) {
+        global $w;
+        if (!is_string($memberId) || !preg_match('/^[1-9][0-9]{0,17}$/D', $memberId)
+            || !isset($w['database'])) return null;
+        // Fresh local row; never serialize the complete row or any credentials.
+        $rows = mysql($w['database'], "SELECT * FROM users_data WHERE user_id='" . $memberId . "' LIMIT 1");
+        if ($rows === false) return null;
+        $row = mysql_fetch_assoc($rows);
+        if (!is_array($row) || !isset($row['user_id'], $row['active'], $row['subscription_id'])
+            || (string)$row['user_id'] !== $memberId || (string)$row['active'] !== '2'
+            || !in_array((string)$row['subscription_id'], array('4', '18'), true)) return null;
+        $snapshot = array('version' => 1);
+        $limits = array('user_id' => 18, 'active' => 1, 'subscription_id' => 2,
+            'first_name' => 500, 'last_name' => 500, 'email' => 320,
+            'phone_number' => 160, 'phone' => 160, 'wedding_date' => 40);
+        foreach ($limits as $field => $limit) {
+            $value = isset($row[$field]) ? $row[$field] : '';
+            if (!is_string($value) && !is_int($value)) return null;
+            $value = (string)$value;
+            if (strlen($value) > $limit || strpos($value, chr(0)) !== false) return null;
+            $snapshot[$field] = $value;
+        }
+        // Match the existing BD metadata precedence, including an explicit blank.
+        $metaRows = mysql($w['database'], "SELECT `value` FROM users_meta WHERE `database`='users_data' AND database_id='" . $memberId . "' AND `key`='wedding_date' ORDER BY meta_id DESC LIMIT 1");
+        if ($metaRows === false) return null;
+        $meta = mysql_fetch_assoc($metaRows);
+        if (is_array($meta) && array_key_exists('value', $meta)) {
+            $value = $meta['value'] === null ? '' : $meta['value'];
+            if (!is_string($value) || strlen($value) > 40 || strpos($value, chr(0)) !== false) return null;
+            $snapshot['wedding_date'] = $value;
+        }
+        return $snapshot;
+    }
+    /* WW_QR_FRESH_MEMBER_SNAPSHOT_END */
+
     function ww_qr_bingo_vendor_draw_request($action, $payload) {
         global $w;
         // A website couple is authenticated only by BD's current member session.
@@ -386,12 +422,15 @@ if (!function_exists('ww_qr_bingo_vendor_draw_request')) {
         unset($candidate, $row);
         if ($secret === '') return ww_qrb_request_error(503, 'Website sign-in verification is temporarily unavailable.');
         $requestBody = is_array($payload) ? $payload : array();
-        foreach (array('native_session', 'website_member_id', 'website_session_token', 'user_id', 'userid', 'token', 'cookie') as $forbidden) {
+        foreach (array('native_session', 'website_member_id', 'website_session_token', 'website_member_snapshot', 'user_id', 'userid', 'token', 'cookie') as $forbidden) {
             if (array_key_exists($forbidden, $requestBody)) return ww_qrb_request_error(400, 'An unsupported identity was provided.');
         }
         $memberId = (string)$member['user_id'];
         $requestBody['action'] = (string)$action;
         $requestBody['website_member_id'] = $memberId;
+        $memberSnapshot = ww_qrb_fresh_member_snapshot($memberId);
+        if (is_array($memberSnapshot)) $requestBody['website_member_snapshot'] = $memberSnapshot;
+        unset($memberSnapshot);
         $requestBody['client_platform'] = 'website';
         // Existing canonical token is used only for server-to-server BD history
         // transport. Website proof is the sole authentication; never cache or emit it.

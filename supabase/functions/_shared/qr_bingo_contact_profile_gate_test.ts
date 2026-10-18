@@ -237,7 +237,15 @@ Deno.test("couple and vendor endpoints retain identical shared contact and parti
     ['const isContactProfileAction =', 'if (isContactProfileAction)'],
     ['const contactProfile = bingoContactProfile', '// Website proof is the authentication.'],
   ]) {
-    assert(sourceRange(vendorSource, first, next) === sourceRange(coupleSource, first, next),
+    let vendorSection = sourceRange(vendorSource, first, next);
+    if (first === 'const websiteCoupleUser =') {
+      // The vendor route can use a freshly signed website member. Normalize
+      // only that exact lookup expression; all downstream security gates match.
+      const lookup = "websiteAttestedMember ?? await fetchFullBdUserById(authenticatedMemberId)";
+      assert(vendorSection.split(lookup).length === 2, "Expected one attested website lookup");
+      vendorSection = vendorSection.replace(lookup, "await fetchFullBdUserById(authenticatedMemberId)");
+    }
+    assert(vendorSection === sourceRange(coupleSource, first, next),
       `Shared contact authorization, reset or participation gate drifted at ${first}`);
   }
 });
