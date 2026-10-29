@@ -31,7 +31,9 @@ Deno.test("inactive chat access is limited to the expiring reviewer allowlist", 
   assert(sync.includes("await hasPrivateAppReviewerAccess(user.user_id)"));
   assert(sync.includes('await assertActiveChatMember(user, "account")'));
   assert(sync.includes("await privateAppReviewerPairAllowed(currentUser.user_id, user?.user_id)"));
-  assert(status.includes("await hasPrivateAppReviewerAccess(user.user_id)"));
+  assert(status.includes("loadChatMemberAccess(\"status\", authenticatedUser"));
+  assert(status.includes("assertFreshMember: async (freshUser)"));
+  assert(status.includes("await hasPrivateAppReviewerAccess(freshUser.user_id)"));
   assert(pairMigration.includes("paired_bd_member_id <> bd_member_id"));
   assert(pairMigration.includes("alter column paired_bd_member_id set not null"));
 });

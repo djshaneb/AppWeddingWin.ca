@@ -2,8 +2,8 @@
 //
 // Architecture: Supabase is the source of truth the app reads from and writes
 // to. BD (the website) is synchronized in the background with a strict API
-// call budget, so the app NEVER depends on a synchronous burst of BD calls
-// and can never be taken down by BD's 100 req/min rate limit.
+// call budget. The app can read the existing mirror when BD is rate limited;
+// other website integrations share the provider's separate global quota.
 //
 //   - bd_chat_threads / bd_chat_messages  -> mirror of BD chat data
 //   - bd_chat_outbox                      -> queued writes (send/read/close/mirror)
@@ -12,6 +12,17 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2.58.0";
 import { nativeSessionMatchesCachedBdIdentity } from "./bd_identity.ts";
+import {
+  assertSuccessfulChatRefreshPull,
+  beforeChatRefreshBdCall,
+  beforeChatRefreshWork,
+  CHAT_REFRESH_KEY,
+  type ChatRefreshRow,
+  ChatRefreshStoppedError,
+  type ChatRefreshStore,
+  claimChatRefresh,
+  withChatRefreshLease,
+} from "./chat_refresh_control.ts";
 import {
   chatImageDeliveryPolicy,
   containsInlineImagePayload,
@@ -566,6 +577,7 @@ export async function callBd(path: string, init: RequestInit = {}) {
     bdRateLimitHit = true;
     throw new BdRateLimitError();
   }
+  await beforeChatRefreshBdCall();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   let response: Response;
@@ -2150,7 +2162,10 @@ async function flushReadRow(row: OutboxRow, room: number): Promise<number> {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: formBody({ message_id: id, message_status: 1 }),
     }).catch((error) => {
-      if (error instanceof BdRateLimitError) throw error;
+      if (
+        error instanceof BdRateLimitError ||
+        error instanceof ChatRefreshStoppedError
+      ) throw error;
       return undefined;
     });
     calls += 1;
@@ -2301,6 +2316,7 @@ async function flushMirrorAppThreadRow(row: OutboxRow): Promise<number> {
 
 export async function flushOutbox(budget: number): Promise<number> {
   if (budget <= 0) return 0;
+  await beforeChatRefreshWork();
   if (CHAT_IMAGES_ENABLED) {
     // Rows parked at the image gate are the only terminal rows automatically
     // reactivated. Moderation blocks and exhausted delivery failures stay put.
@@ -2336,6 +2352,7 @@ export async function flushOutbox(budget: number): Promise<number> {
     for (const row of pending) {
       if (calls >= budget || rateLimitedNow()) break;
       try {
+        await beforeChatRefreshWork();
         if (row.kind === "send") calls += await flushSendRow(row);
         else if (row.kind === "read") {
           calls += await flushReadRow(row, budget - calls);
@@ -2344,6 +2361,10 @@ export async function flushOutbox(budget: number): Promise<number> {
           calls += await flushMirrorAppThreadRow(row);
         } else await markOutboxSent(row.id, String(row.claim_token || ""));
       } catch (error) {
+        // An exhausted refresh lease is a deferral, not a delivery failure.
+        // The finally block releases these claims for the next normal send
+        // or refresh; do not consume an outbox retry attempt.
+        if (error instanceof ChatRefreshStoppedError) throw error;
         if (error instanceof BdRateLimitError) {
           await markOutboxError(row, error);
           break;
@@ -2372,12 +2393,56 @@ export async function flushOutbox(budget: number): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// Mirror refresh (the ONLY steady-state BD reader)
+// Coordinated website mirror refresh (push snapshots are synchronized separately)
 // ---------------------------------------------------------------------------
 
-const MIRROR_REFRESH_KEY = "bd:mirror_refreshed_at";
-const MIRROR_LOCK_KEY = "bd:mirror_lock";
-const MIRROR_STALE_MS = 20_000;
+// Use database reads, never sharedCacheGet's isolate-local memory, for this
+// coordinator. The primary key arbitrates concurrent refreshes atomically.
+const mirrorRefreshStore: ChatRefreshStore = {
+  async read() {
+    const { data, error } = await admin.from("bd_edge_cache")
+      .select("value, expires_at")
+      .eq("key", CHAT_REFRESH_KEY)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return undefined;
+    return {
+      owner: String(data.value?.owner || ""),
+      kind: data.value?.kind as ChatRefreshRow["kind"],
+      expiresAt: Date.parse(data.expires_at),
+    };
+  },
+  async deleteExpired(now) {
+    const { error } = await admin.from("bd_edge_cache").delete()
+      .eq("key", CHAT_REFRESH_KEY)
+      .lte("expires_at", new Date(now).toISOString());
+    if (error) throw new Error(error.message);
+  },
+  async insert(row) {
+    const { error } = await admin.from("bd_edge_cache").insert({
+      key: CHAT_REFRESH_KEY,
+      value: { owner: row.owner, kind: row.kind },
+      expires_at: new Date(row.expiresAt).toISOString(),
+    });
+    if (error?.code === "23505") return false;
+    if (error) throw new Error(error.message);
+    return true;
+  },
+  async finish(owner, now, kind, expiresAt) {
+    const { data, error } = await admin.from("bd_edge_cache").update({
+      value: { owner, kind, finished_at: new Date(now).toISOString() },
+      expires_at: new Date(expiresAt).toISOString(),
+    })
+      .eq("key", CHAT_REFRESH_KEY)
+      .eq("value->>owner", owner)
+      .eq("value->>kind", "running")
+      .gt("expires_at", new Date(now).toISOString())
+      .select("key")
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return Boolean(data);
+  },
+};
 
 async function pullRecentThreads(pages: number) {
   let page = "";
@@ -2389,7 +2454,11 @@ async function pullRecentThreads(pages: number) {
     };
     if (page) params.page = page;
     const result = await callBd(listPath("chat_message_threads", params));
-    if (!result.response.ok || result.body.status !== "success") break;
+    assertSuccessfulChatRefreshPull(
+      result.response,
+      result.body.status,
+      "threads",
+    );
     await upsertMirrorThreads(rows(result.body.message));
     const current = Number(result.body.current_page || index + 1);
     const total = Number(result.body.total_pages || current);
@@ -2409,7 +2478,11 @@ async function pullRecentMessages(pages: number) {
     };
     if (page) params.page = page;
     const result = await callBd(listPath("chat_message_items", params));
-    if (!result.response.ok || result.body.status !== "success") break;
+    assertSuccessfulChatRefreshPull(
+      result.response,
+      result.body.status,
+      "messages",
+    );
     await upsertMirrorMessages(rows(result.body.message));
     const current = Number(result.body.current_page || index + 1);
     const total = Number(result.body.total_pages || current);
@@ -2491,7 +2564,10 @@ async function resolveThreadIdentities(maxBdCalls: number) {
       }
       if (calls >= maxBdCalls || rateLimitedNow()) continue;
       const user = await bdFindUserByParticipant(value).catch((error) => {
-        if (error instanceof BdRateLimitError) throw error;
+        if (
+          error instanceof BdRateLimitError ||
+          error instanceof ChatRefreshStoppedError
+        ) throw error;
         return undefined;
       });
       calls += Math.min(3, maxBdCalls - calls);
@@ -2512,7 +2588,10 @@ async function resolveThreadIdentities(maxBdCalls: number) {
           update.responder_user_id = String(byFilename[0].user_id);
         } else if (calls < maxBdCalls && !rateLimitedNow()) {
           const user = await bdFetchUserByProfilePath(profilePath).catch(
-            () => undefined,
+            (error) => {
+              if (error instanceof ChatRefreshStoppedError) throw error;
+              return undefined;
+            },
           );
           calls += 2;
           if (user?.user_id) update.responder_user_id = String(user.user_id);
@@ -2660,40 +2739,55 @@ async function repairThreadIdentitiesInBd(maxBdCalls: number): Promise<number> {
   return calls;
 }
 
-export async function refreshMirrorIfStale(force = false): Promise<boolean> {
+export async function refreshMirrorIfStale(_force = false): Promise<boolean> {
   await loadSharedRateLimit();
   if (rateLimitedNow()) return false;
-
-  const last = await sharedCacheGet<number>(MIRROR_REFRESH_KEY);
-  if (
-    !force && typeof last === "number" && Date.now() - last < MIRROR_STALE_MS
-  ) {
-    return false;
-  }
-
-  const lock = await sharedCacheGet<number>(MIRROR_LOCK_KEY);
-  if (lock) return false;
-  await sharedCacheSet(MIRROR_LOCK_KEY, Date.now(), 15_000);
-
+  // Even an explicit refresh must respect an active global lease/cooldown.
+  // Current app callers do not force refreshes; preserve the call signature.
+  let lease;
   try {
-    const { count } = await admin
-      .from("bd_chat_threads")
-      .select("thread_token", { count: "exact", head: true });
-    const seeded = (count || 0) > 0;
-    await pullRecentThreads(seeded ? 1 : 3);
-    await pullRecentMessages(seeded ? 1 : 3);
-    await flushOutbox(12);
-    await resolveThreadIdentities(4);
-    await repairThreadIdentitiesInBd(8);
-    await sharedCacheSet(MIRROR_REFRESH_KEY, Date.now(), 3_600_000);
-    return true;
+    lease = await claimChatRefresh(mirrorRefreshStore);
+    if (!lease) return false;
+    const completed = await withChatRefreshLease(lease, async () => {
+      await beforeChatRefreshWork();
+      const { count, error } = await admin
+        .from("bd_chat_threads")
+        .select("thread_token", { count: "exact", head: true });
+      if (error) throw new Error(error.message);
+      const seeded = (count || 0) > 0;
+      await pullRecentThreads(seeded ? 1 : 3);
+      await pullRecentMessages(seeded ? 1 : 3);
+      await flushOutbox(12);
+      await resolveThreadIdentities(4);
+      await repairThreadIdentitiesInBd(8);
+      return await lease!.complete();
+    });
+    console.info("chat mirror refresh", {
+      outcome: completed ? "complete" : "lease_changed",
+      bdCalls: lease.bdCalls,
+    });
+    return completed;
   } catch (error) {
-    if (!(error instanceof BdRateLimitError)) {
+    if (lease) {
+      try {
+        await lease.fail();
+      } catch {
+        // The original lease expires even if the cooldown write fails.
+      }
+      console.info("chat mirror refresh", {
+        outcome: error instanceof ChatRefreshStoppedError
+          ? "deferred"
+          : "failed",
+        bdCalls: lease.bdCalls,
+      });
+    }
+    if (
+      !(error instanceof BdRateLimitError) &&
+      !(error instanceof ChatRefreshStoppedError)
+    ) {
       console.error("mirror refresh failed", shortError(error));
     }
     return false;
-  } finally {
-    await sharedCacheDelete(MIRROR_LOCK_KEY);
   }
 }
 

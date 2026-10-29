@@ -1,6 +1,7 @@
 import {
   isApplePrivateRelayEmail,
   loadMemberEmailVerification,
+  MemberEmailIdentityChangedError,
   MemberEmailVerificationUnavailableError,
   requireConfirmedAuthEmailChange,
 } from "./member_email_verification.ts";
@@ -96,6 +97,34 @@ Deno.test("member email proof rejects wrong owner and stale authoritative addres
   for (const change of [{ user_id: "43" }, { current_email: "other@example.invalid" },
     { user_id: "042" }, { ok: false }, { current_email: null }]) {
     await rejects(() => loadMemberEmailVerification("42", currentEmail, options(change)));
+  }
+});
+
+Deno.test("only complete exact-member non-pending proof signals a controlled email refresh", async () => {
+  try {
+    await loadMemberEmailVerification("42", currentEmail, options({
+      current_email: "updated@example.invalid", email_verification_status: "confirmed",
+    }));
+    throw new Error("Expected changed email signal");
+  } catch (error) {
+    assert(error instanceof MemberEmailIdentityChangedError);
+    assert(error.userId === "42" && error.currentEmail === "updated@example.invalid");
+    assert(!error.message.includes(error.currentEmail));
+  }
+  for (const change of [
+    { user_id: "43" }, { user_id: "042" }, { ok: false },
+    { current_email: "invalid" }, { email_verification_status: "unknown" },
+    { email_confirmation_required: "false" }, { pending_email: "unexpected@example.invalid" },
+    { email_verification_status: "pending", email_confirmation_required: true, pending_email: "next@example.invalid" },
+    { email_verification_status: "expired", email_confirmation_required: true, pending_email: null },
+  ]) {
+    try {
+      await loadMemberEmailVerification("42", currentEmail, options({ current_email: "updated@example.invalid", ...change }));
+      throw new Error("Expected fail-closed proof");
+    } catch (error) {
+      assert(error instanceof MemberEmailVerificationUnavailableError);
+      assert(!(error instanceof MemberEmailIdentityChangedError));
+    }
   }
 });
 
@@ -225,7 +254,7 @@ Deno.test("chat routes gate before any mirror access and do not trust session pr
   for (const path of ["../bd-chat-sync/index.ts", "../bd-chat-status/index.ts"]) {
     const source = await Deno.readTextFile(new URL(path, import.meta.url));
     const handler = source.slice(source.indexOf("Deno.serve(async"));
-    const gate = handler.indexOf("await loadMemberEmailVerification(user.user_id, user.email)");
+    const gate = handler.indexOf("await loadChatMemberAccess(");
     assert(gate > 0 && gate < handler.indexOf("await refreshMirrorIfStale"));
     assert(handler.includes('code: "email_confirmation_required"') && handler.includes("}, 428)"));
     assert(handler.includes('code: "email_verification_unavailable"') && handler.includes("}, 503)"));
@@ -233,16 +262,24 @@ Deno.test("chat routes gate before any mirror access and do not trust session pr
   }
 });
 
-Deno.test("chat proof and QR contact gates re-read the authenticated member instead of cached session fields", async () => {
+Deno.test("chat gates use fresh signed active-member proof and QR gates retain fresh BD member reads", async () => {
   for (const path of ["../bd-chat-sync/index.ts", "../bd-chat-status/index.ts"]) {
     const source = await Deno.readTextFile(new URL(path, import.meta.url));
     const handler = source.slice(source.indexOf("Deno.serve(async"));
     const auth = handler.indexOf("await getSessionUser(");
-    const fresh = handler.indexOf("await bdFetchUserById(");
-    const proof = handler.indexOf("await loadMemberEmailVerification(user.user_id, user.email)");
-    assert(auth >= 0 && fresh > auth && proof > fresh);
-    assert(!handler.includes("loadMemberEmailVerification(authenticatedUser.user_id, authenticatedUser.email)"));
+    const proof = handler.indexOf("await loadChatMemberAccess(");
+    assert(auth >= 0 && proof > auth);
+    assert(handler.includes("fetchFreshUser: bdFetchUserById"));
+    assert(handler.indexOf("emailVerification.email_confirmation_required") > proof);
   }
+  const page = await Deno.readTextFile(new URL("../../../brilliant-directories/widgets/email-verification-page.php", import.meta.url));
+  const core = await Deno.readTextFile(new URL("../../../brilliant-directories/widgets/email-verification-core.php", import.meta.url));
+  const signedStatus = page.slice(page.indexOf("if ($wwEvMethod === 'POST'"), page.indexOf("if ($wwEvMethod === 'POST'", page.indexOf("if ($wwEvMethod === 'POST'") + 1));
+  assert(signedStatus.includes("ww_ev_signed_request($wwEvAction"));
+  assert(signedStatus.indexOf("$wwEvMember = ww_ev_user($wwEvId)") < signedStatus.indexOf("ww_ev_json(ww_email_verification_state($wwEvMember), 200)"));
+  const activeProof = core.slice(core.indexOf("function ww_ev_user("), core.indexOf("function ww_ev_current_member("));
+  assert(activeProof.includes("SELECT user_id,email,active FROM users_data"));
+  assert(activeProof.includes("(string)$row['active'] !== '2') throw new Exception("));
   const memberLookup = await Deno.readTextFile(new URL("./qr_bingo_bd_member.ts", import.meta.url));
   assert(memberLookup.includes("await callBd(") && memberLookup.includes("/api/v2/user/get/"));
   assert(!/cache|cached/i.test(memberLookup));
@@ -257,7 +294,10 @@ Deno.test("chat proof and QR contact gates re-read the authenticated member inst
     const contacts = handler.indexOf("await loadQrContactProfile(requireAdmin(), contactEventKey, authenticatedMemberId, user)");
     assert(fresh >= 0 && useFresh > fresh && contacts > useFresh);
     assert(!handler.includes("loadMemberEmailVerification"));
-    assert(handler.includes('websitePrincipal?.kind === "couple"\n        ? await fetchFullBdUserById(authenticatedMemberId)'));
+    const directWebsiteMember = handler.includes('websitePrincipal?.kind === "couple"\n        ? await fetchFullBdUserById(authenticatedMemberId)');
+    const verifiedWebsiteMember = handler.includes('const websiteAttestedMember = verifiedWebsiteCoupleMember(websitePrincipal, body)') &&
+      handler.includes('websitePrincipal?.kind === "couple"\n        ? websiteAttestedMember ?? await fetchFullBdUserById(authenticatedMemberId)');
+    assert(directWebsiteMember || verifiedWebsiteMember);
   }
 });
 

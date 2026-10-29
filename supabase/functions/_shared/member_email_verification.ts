@@ -11,6 +11,14 @@ export class MemberEmailVerificationUnavailableError extends Error {
   }
 }
 
+/** Internal signal from a fully validated website proof; never a transport retry. */
+export class MemberEmailIdentityChangedError extends MemberEmailVerificationUnavailableError {
+  constructor(readonly userId: string, readonly currentEmail: string) {
+    super();
+    this.name = "MemberEmailIdentityChangedError";
+  }
+}
+
 export const EMAIL_CONFIRMATION_NOTICE = "Confirm your email to continue.";
 
 export function requireConfirmedAuthEmailChange(
@@ -80,9 +88,10 @@ export async function loadMemberEmailVerification(
     if (!response.ok) throw new MemberEmailVerificationUnavailableError();
     const data = await response.json();
     if (!data || typeof data !== "object" || Array.isArray(data) || data.ok !== true ||
-      String(data.user_id) !== id || normalizedEmail(data.current_email) !== expectedEmail) {
+      String(data.user_id) !== id) {
       throw new MemberEmailVerificationUnavailableError();
     }
+    const authoritativeEmail = normalizedEmail(data.current_email);
     const status = data.email_verification_status;
     if (!["pending", "expired", "confirmed", "none"].includes(status)) {
       throw new MemberEmailVerificationUnavailableError();
@@ -92,13 +101,21 @@ export async function loadMemberEmailVerification(
       (!required && data.pending_email !== null)) {
       throw new MemberEmailVerificationUnavailableError();
     }
-    return {
+    const state: MemberEmailVerification = {
       email_confirmation_required: required,
       pending_email: required && !(status === "expired" && data.pending_email === null)
         ? normalizedEmail(data.pending_email) : null,
       email_verification_status: status,
     };
-  } catch {
+    // Only a complete, exact-member proof can request one profile refresh.
+    // Inconsistent flags, malformed pending data and service errors stay closed.
+    if (authoritativeEmail !== expectedEmail) {
+      if (required) throw new MemberEmailVerificationUnavailableError();
+      throw new MemberEmailIdentityChangedError(id, authoritativeEmail);
+    }
+    return state;
+  } catch (error) {
+    if (error instanceof MemberEmailIdentityChangedError) throw error;
     // Never include a signature, confirmation address, URL, or raw website body.
     throw new MemberEmailVerificationUnavailableError();
   }

@@ -8,6 +8,9 @@ const read=name=>readFileSync(new URL(name,root),'utf8');
 const compile=code=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 const appToken='app:0123456789abcdef0123456789abcdef',bdToken='0123456789abcdef0123456789abcdef';
 const chatSource=read('supabase/functions/bd-chat-sync/index.ts');
+const accessSource=read('supabase/functions/_shared/chat_member_access.ts');
+const accessAst=ts.createSourceFile('access.ts',accessSource,ts.ScriptTarget.Latest,true);
+const accessCode=accessAst.statements.filter(n=>!ts.isImportDeclaration(n)).map(n=>n.getText(accessAst).replace(/^export\s+/, '')).join('\n');
 const ast=ts.createSourceFile('chat.ts',chatSource,ts.ScriptTarget.Latest,true);
 const resolver=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='resolveNotificationChatTarget').getText(ast);
 const serve=ast.statements.find(n=>ts.isExpressionStatement(n)&&ts.isCallExpression(n.expression)&&n.expression.expression.getText(ast)==='Deno.serve').expression.arguments[0].getText(ast);
@@ -24,8 +27,8 @@ function chatFixture(options={}) {
   buildChatPayload:async(_u,_s,selected)=>{calls.push(['payload',selected]);const token=options.wrongSelection?'different-owned-thread':selected;return [{ok:true,selected_thread_token:token,threads:[{token}],sync_debug:{member_id:'38971',bd_threads:1,app_threads:0}},false];},
   shortError:e=>String(e),CHAT_PERMISSION_ENDPOINTS:[],
  };
- for(const name of ['MemberEmailVerificationUnavailableError','BdRateLimitError','ChatPolicyError','ChatMemberBlockedError','ObjectionableChatContentError','ChatImageSharingDisabledError'])g[name]=class extends Error{};
- const context=vm.createContext(g);vm.runInContext(compile(`${resolver}\nglobalThis.resolve=resolveNotificationChatTarget;globalThis.handler=${serve};`),context);
+ for(const name of ['MemberEmailIdentityChangedError','MemberEmailVerificationUnavailableError','BdRateLimitError','ChatPolicyError','ChatMemberBlockedError','ObjectionableChatContentError','ChatImageSharingDisabledError'])g[name]=class extends Error{};
+ const context=vm.createContext(g);vm.runInContext(compile(`${accessCode}\n${resolver}\nglobalThis.resolve=resolveNotificationChatTarget;globalThis.handler=${serve};`),context);
  return {calls,g,resolve:context.resolve,request:async(body={})=>{const r=await context.handler(new Request('https://offline.invalid',{method:'POST',body:JSON.stringify({action:'read',native_session:{user_id:'38971',token:'synthetic'},thread_token:appToken,notification_target:true,...body})}));return {status:r.status,body:await r.json()};}};
 }
 

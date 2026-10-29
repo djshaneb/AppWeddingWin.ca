@@ -27,9 +27,12 @@ import {
 import { sumUnreadOwnerCounts } from "../_shared/chat_moderation.ts";
 import {
   EMAIL_CONFIRMATION_NOTICE,
-  loadMemberEmailVerification,
   MemberEmailVerificationUnavailableError,
 } from "../_shared/member_email_verification.ts";
+import {
+  ChatMemberAccessError,
+  loadChatMemberAccess,
+} from "../_shared/chat_member_access.ts";
 
 const CHAT_INBOX_PATH = "/account/chat_messages";
 
@@ -127,20 +130,15 @@ Deno.serve(async (request) => {
       }
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
     }
-    const user = await bdFetchUserById(String(authenticatedUser.user_id));
-    if (!user?.user_id || String(user.user_id) !== String(authenticatedUser.user_id)) {
-      if (wasRateLimited()) {
-        return jsonResponse({ ok: false, error: "Website chat status busy", retriable: true }, 429);
-      }
-      return jsonResponse({ ok: false, error: "Native session expired" }, 401);
-    }
-    if (
-      String(user.active ?? "").trim() !== "2" &&
-      !(await hasPrivateAppReviewerAccess(user.user_id))
-    ) {
-      return jsonResponse({ ok: false, error: "Active membership required" }, 403);
-    }
-    const emailVerification = await loadMemberEmailVerification(user.user_id, user.email);
+    const { user, emailVerification } = await loadChatMemberAccess("status", authenticatedUser, {
+      fetchFreshUser: bdFetchUserById,
+      assertFreshMember: async (freshUser) => {
+        if (String(freshUser.active ?? "").trim() !== "2" &&
+          !(await hasPrivateAppReviewerAccess(freshUser.user_id))) {
+          throw new ChatMemberAccessError("Active membership required", 403);
+        }
+      },
+    });
     if (emailVerification.email_confirmation_required) {
       return jsonResponse({ ok: false, code: "email_confirmation_required", error: EMAIL_CONFIRMATION_NOTICE,
         ...emailVerification }, 428);
@@ -235,6 +233,12 @@ Deno.serve(async (request) => {
       inbox_path: CHAT_INBOX_PATH,
     });
   } catch (error) {
+    if (error instanceof ChatMemberAccessError) {
+      if (wasRateLimited()) {
+        return jsonResponse({ ok: false, error: "Website chat status busy", retriable: true }, 429);
+      }
+      return jsonResponse({ ok: false, error: error.message }, error.status);
+    }
     if (error instanceof MemberEmailVerificationUnavailableError) {
       return jsonResponse({ ok: false, code: "email_verification_unavailable", error: error.message, retriable: true }, 503);
     }

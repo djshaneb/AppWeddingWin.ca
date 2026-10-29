@@ -80,9 +80,12 @@ import {
 import { recipientCanReceiveChat } from "../_shared/chat_membership.ts";
 import {
   EMAIL_CONFIRMATION_NOTICE,
-  loadMemberEmailVerification,
   MemberEmailVerificationUnavailableError,
 } from "../_shared/member_email_verification.ts";
+import {
+  ChatMemberAccessError,
+  loadChatMemberAccess,
+} from "../_shared/chat_member_access.ts";
 
 const CHAT_REPORTED_NOTICE = CHAT_MEMBER_BLOCKED_NOTICE;
 const CHAT_PERMISSION_ENDPOINTS = [
@@ -1065,13 +1068,10 @@ Deno.serve(async (request) => {
       if (wasRateLimited()) return busyResponse();
       return jsonResponse({ ok: false, error: "Native session expired" }, 401);
     }
-    const authenticatedUserId = String(authenticatedUser.user_id || "").trim();
-    const user = await bdFetchUserById(authenticatedUserId);
-    if (!user?.user_id || String(user.user_id) !== String(authenticatedUser.user_id)) {
-      return jsonResponse({ ok: false, error: "Native session expired" }, 401);
-    }
-    await assertActiveChatMember(user, "account");
-    const emailVerification = await loadMemberEmailVerification(user.user_id, user.email);
+    const { user, emailVerification } = await loadChatMemberAccess(action, authenticatedUser, {
+      fetchFreshUser: bdFetchUserById,
+      assertFreshMember: (freshUser) => assertActiveChatMember(freshUser, "account"),
+    });
     if (emailVerification.email_confirmation_required) {
       return jsonResponse({ ok: false, code: "email_confirmation_required", error: EMAIL_CONFIRMATION_NOTICE,
         ...emailVerification }, 428);
@@ -1340,6 +1340,10 @@ Deno.serve(async (request) => {
         }
       : payload);
   } catch (error) {
+    if (error instanceof ChatMemberAccessError) {
+      if (wasRateLimited()) return busyResponse();
+      return jsonResponse({ ok: false, error: error.message }, error.status);
+    }
     if (error instanceof MemberEmailVerificationUnavailableError) {
       return jsonResponse({ ok: false, code: "email_verification_unavailable", error: error.message, retriable: true }, 503);
     }
