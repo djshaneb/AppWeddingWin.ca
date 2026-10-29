@@ -44,7 +44,7 @@ function database() {
         !row || row.owner !== owner || row.kind !== "running" ||
         row.expiresAt <= now
       ) return false;
-      row = { owner, kind, expiresAt };
+      row = { owner, kind, expiresAt, finishedAt: now };
       return true;
     },
   });
@@ -106,6 +106,88 @@ Deno.test("300 polls during completed freshness read once each without writes", 
   db.advance(CHAT_REFRESH_POLICY.freshMs - 1);
   assert.equal(await claimChatRefresh(db.clients(), db.options), undefined);
   db.advance(1);
+  assert(await claimChatRefresh(db.clients(), db.options));
+});
+
+Deno.test("300 background polls at30s skip writes and elect one refresh at60s", async () => {
+  const db = database();
+  const background = { ...db.options, demand: "background" as const };
+  const lease = (await claimChatRefresh(db.clients(), background))!;
+  assert(await lease.complete());
+  assert.equal(db.row!.expiresAt - db.row!.finishedAt!, 20_000);
+  db.advance(30_000);
+  const before = { ...db.stats };
+  const skipped = await Promise.all(
+    Array.from(
+      { length: 300 },
+      () => claimChatRefresh(db.clients(), background),
+    ),
+  );
+  assert(skipped.every((claim) => !claim));
+  assert.equal(db.stats.reads - before.reads, 300);
+  assert.equal(db.stats.deletes, before.deletes);
+  assert.equal(db.stats.inserts, before.inserts);
+  db.advance(30_000);
+  const claims = await Promise.all(
+    Array.from(
+      { length: 300 },
+      () => claimChatRefresh(db.clients(), background),
+    ),
+  );
+  assert.equal(claims.filter(Boolean).length, 1);
+});
+
+Deno.test("opening Messages can claim after20s despite a background caller's60s cadence", async () => {
+  const db = database();
+  const background = { ...db.options, demand: "background" as const };
+  const initial = (await claimChatRefresh(db.clients(), background))!;
+  assert(await initial.complete());
+  db.advance(20_000);
+  assert.equal(await claimChatRefresh(db.clients(), background), undefined);
+  const active = await claimChatRefresh(db.clients(), db.options);
+  assert(active);
+  assert(await active.complete());
+  db.advance(20_000);
+  assert.equal(await claimChatRefresh(db.clients(), background), undefined);
+  assert(
+    await claimChatRefresh(db.clients(), { ...db.options, demand: "active" }),
+  );
+});
+
+Deno.test("background cadence never lengthens failure cooldown or defeats running ownership", async () => {
+  const db = database();
+  const background = { ...db.options, demand: "background" as const };
+  const lease = (await claimChatRefresh(db.clients(), background))!;
+  assert(await lease.fail());
+  db.advance(29_999);
+  assert.equal(await claimChatRefresh(db.clients(), background), undefined);
+  db.advance(1);
+  const recovered = await claimChatRefresh(db.clients(), background);
+  assert(recovered);
+  db.advance(60_000);
+  assert.equal(await claimChatRefresh(db.clients(), background), undefined);
+});
+
+for (const timestamp of [undefined, NaN, Infinity, 9_999_999_999_999]) {
+  Deno.test(`background completed timestamp ${timestamp} has bounded fallback`, async () => {
+    const db = database();
+    const background = { ...db.options, demand: "background" as const };
+    const initial = (await claimChatRefresh(db.clients(), background))!;
+    assert(await initial.complete());
+    db.row = { ...db.row!, finishedAt: timestamp };
+    db.advance(59_999);
+    assert.equal(await claimChatRefresh(db.clients(), background), undefined);
+    db.advance(1);
+    assert(await claimChatRefresh(db.clients(), background));
+  });
+}
+
+Deno.test("invalid/future completion timestamp cannot slow active conversation refresh", async () => {
+  const db = database();
+  const initial = (await claimChatRefresh(db.clients(), db.options))!;
+  assert(await initial.complete());
+  db.row = { ...db.row!, finishedAt: 9_999_999_999_999 };
+  db.advance(20_000);
   assert(await claimChatRefresh(db.clients(), db.options));
 });
 

@@ -148,7 +148,7 @@ Deno.test("review vendor dashboard skips the website session but requires the li
     );
     const fastPath = source.slice(fastPathStart, dashboardStart);
     const freshIdentity = source.indexOf(
-      "const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)",
+      "const freshAuthenticatedUser = websiteCoupleUser ||",
       identityCheck,
     );
 
@@ -184,8 +184,8 @@ Deno.test("review vendor dashboard skips the website session but requires the li
       "review vendor raffle actions must use the verified BD identity and an empty page without a website session",
     );
     assert(
-      fastPath.indexOf("await fetchFullBdUserById(authenticatedMemberId)") <
-          fastPath.indexOf("const cookieJar = skipWebsiteTransport") &&
+      source.indexOf("await fetchFullBdUserById(authenticatedMemberId)", freshIdentity) > freshIdentity &&
+        source.indexOf("await fetchFullBdUserById(authenticatedMemberId)", freshIdentity) < fastPathStart &&
         fastPath.indexOf("? new Map<string, string>()") <
           fastPath.indexOf("await loginWebsiteSession(transportSession)") &&
         fastPath.indexOf("? ({ vendors: [], scanned: [] } as QrPage)") <

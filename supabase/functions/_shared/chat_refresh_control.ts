@@ -8,6 +8,7 @@ export const CHAT_REFRESH_POLICY = {
   workMs: 90_000,
   requestHeadroomMs: 25_000, // callBd aborts its request after 20 seconds.
   freshMs: 20_000,
+  backgroundFreshMs: 60_000,
   failureMs: 30_000,
   maxBdCalls: 32,
 } as const;
@@ -16,7 +17,10 @@ export type ChatRefreshRow = {
   owner: string;
   kind: "running" | "complete" | "failed";
   expiresAt: number;
+  finishedAt?: number;
 };
+
+export type ChatRefreshDemand = "active" | "background";
 
 export interface ChatRefreshStore {
   read(): Promise<ChatRefreshRow | undefined>;
@@ -129,12 +133,32 @@ export class ChatRefreshLease {
 
 export async function claimChatRefresh(
   store: ChatRefreshStore,
-  options: { now?: () => number; newOwner?: () => string } = {},
+  options: {
+    now?: () => number;
+    newOwner?: () => string;
+    demand?: ChatRefreshDemand;
+  } = {},
 ): Promise<ChatRefreshLease | undefined> {
   const now = options.now || Date.now;
   const existing = await store.read();
   // Steady-state polls are one read, without a write or unique violation.
   if (existing && existing.expiresAt > now()) return undefined;
+  if (existing?.kind === "complete" && options.demand === "background") {
+    // Keep the physical 20-second expiry so opening Messages can still elect
+    // an active refresh. Only passive badge demand waits a full minute after
+    // success; this adds no per-member writes and never extends failure/crash
+    // leases. Existing rows already persist finished_at; derive it for older
+    // rows and bound malformed/future timestamps by the known expiry.
+    const fromExpiry = existing.expiresAt - CHAT_REFRESH_POLICY.freshMs;
+    const finishedAt = Number.isFinite(existing.finishedAt) &&
+        existing.finishedAt! <= now()
+      ? Math.min(existing.finishedAt!, fromExpiry)
+      : fromExpiry;
+    if (
+      Number.isFinite(finishedAt) &&
+      finishedAt + CHAT_REFRESH_POLICY.backgroundFreshMs > now()
+    ) return undefined;
+  }
   if (existing) await store.deleteExpired(now());
   const startedAt = now();
   const owner = (options.newOwner || (() => crypto.randomUUID()))();

@@ -17,6 +17,7 @@ import {
   beforeChatRefreshBdCall,
   beforeChatRefreshWork,
   CHAT_REFRESH_KEY,
+  type ChatRefreshDemand,
   type ChatRefreshRow,
   ChatRefreshStoppedError,
   type ChatRefreshStore,
@@ -2410,6 +2411,7 @@ const mirrorRefreshStore: ChatRefreshStore = {
       owner: String(data.value?.owner || ""),
       kind: data.value?.kind as ChatRefreshRow["kind"],
       expiresAt: Date.parse(data.expires_at),
+      finishedAt: Date.parse(String(data.value?.finished_at || "")),
     };
   },
   async deleteExpired(now) {
@@ -2739,14 +2741,17 @@ async function repairThreadIdentitiesInBd(maxBdCalls: number): Promise<number> {
   return calls;
 }
 
-export async function refreshMirrorIfStale(_force = false): Promise<boolean> {
+export async function refreshMirrorIfStale(
+  _force = false,
+  demand: ChatRefreshDemand = "active",
+): Promise<boolean> {
   await loadSharedRateLimit();
   if (rateLimitedNow()) return false;
   // Even an explicit refresh must respect an active global lease/cooldown.
   // Current app callers do not force refreshes; preserve the call signature.
   let lease;
   try {
-    lease = await claimChatRefresh(mirrorRefreshStore);
+    lease = await claimChatRefresh(mirrorRefreshStore, { demand });
     if (!lease) return false;
     const completed = await withChatRefreshLease(lease, async () => {
       await beforeChatRefreshWork();

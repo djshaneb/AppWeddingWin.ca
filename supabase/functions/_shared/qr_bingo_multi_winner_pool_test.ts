@@ -399,10 +399,15 @@ Deno.test("fixture context is authenticated, exact-couple, and never fetches the
       source.indexOf("const isVendorRaffleAction"),
     );
     const identityCheck = source.indexOf("if (!await nativeSessionMatchesCachedBdIdentity(nativeSession))");
-    const freshIdentity = source.indexOf("const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)");
+    const freshIdentity = source.indexOf("const freshAuthenticatedUser = websiteCoupleUser ||");
+    const directLookup = source.includes("const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)");
+    const nativeProof = source.indexOf("const nativeMemberProof = websitePrincipal ? undefined : await loadFreshQrBingoMember(authenticatedMemberId)");
+    const roleScopedLookup = nativeProof > identityCheck && freshIdentity > nativeProof &&
+      source.includes('(nativeMemberProof && ["4", "18"].includes(String(nativeMemberProof.subscription_id))\n          ? nativeMemberProof : await fetchFullBdUserById(authenticatedMemberId))');
     const fixtureBranch = source.indexOf('if (action === "fixture_context")');
     assert(
       identityCheck >= 0 && freshIdentity > identityCheck && fixtureBranch > freshIdentity &&
+        (directLookup || roleScopedLookup) &&
         branch.includes("const fixtureUser = freshAuthenticatedUser;") &&
         branch.includes("String(fixtureUser.user_id) !== String(authenticatedMemberId)") &&
         branch.includes("loadAppReviewRaffleFixture") &&

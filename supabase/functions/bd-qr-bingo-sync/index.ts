@@ -1,4 +1,5 @@
 import { fetchQrBdMember, QrBdMemberLookupUnavailableError } from "../_shared/qr_bingo_bd_member.ts";
+import { loadFreshQrBingoMember, QrBingoMemberProofError } from "../_shared/qr_bingo_native_member.ts";
 import { handleReviewDrawAction, ReviewDrawError, REVIEW_DRAW_MODE } from "../_shared/qr_bingo_review_draw.ts";
 import { setReviewDrawPushEnabled, ReviewDrawNotificationError } from "../_shared/review_draw_notifications.ts";
 import { parseQrBingoPrizeEditStatus } from "../_shared/qr_bingo_prize_edit.ts";
@@ -4131,7 +4132,12 @@ Deno.serve(async (request) => {
 
       // Isolated review mode uses fresh authenticated identities and separate
       // service-only state. A disabled review pair never falls into real draws.
-      const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);
+      // Native couples use a fresh purpose-bound website SQL proof, avoiding a
+      // metered BD API lookup on every scan/list. Vendors keep their fresh tags.
+      const nativeMemberProof = websitePrincipal ? undefined : await loadFreshQrBingoMember(authenticatedMemberId);
+      const freshAuthenticatedUser = websiteCoupleUser ||
+        (nativeMemberProof && ["4", "18"].includes(String(nativeMemberProof.subscription_id))
+          ? nativeMemberProof : await fetchFullBdUserById(authenticatedMemberId));
       if (!freshAuthenticatedUser?.user_id || String(freshAuthenticatedUser.user_id) !== authenticatedMemberId) {
         return jsonResponse({ ok: false, error: "Native session expired" }, 401);
       }
@@ -4193,8 +4199,8 @@ Deno.serve(async (request) => {
         reviewFixture && isReviewVendor && isVendorRaffleAction,
       );
 
-      // Always load the current BD member with tags. Even an isolated fixture
-      // vendor must still belong to the currently published QR Bingo roster.
+      // Couple identity is fresh SQL proof; vendors retain the current BD tags.
+      // Even an isolated fixture vendor must belong to the published roster.
       const user = freshAuthenticatedUser;
       if (
         !user?.user_id || String(user.user_id) !== String(authenticatedMemberId)
@@ -5391,7 +5397,7 @@ Deno.serve(async (request) => {
       );
     });
   } catch (error) {
-    if (error instanceof QrBdMemberLookupUnavailableError) {
+    if (error instanceof QrBdMemberLookupUnavailableError || error instanceof QrBingoMemberProofError) {
       return jsonResponse({ ok: false, code: error.code, error: error.message, retriable: true, retry_after_seconds: 10 }, 503);
     }
     if (error instanceof QrParticipationError) return jsonResponse({ok:false,code:error.code,error:error.message,retriable:error.status===503},error.status);

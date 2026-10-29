@@ -144,9 +144,13 @@ Deno.serve(async (request) => {
         ...emailVerification }, 428);
     }
 
-    // Keep the mirror fresh so new website messages are noticed even when the
-    // chat screen is closed (budgeted + cross-isolate locked).
-    await refreshMirrorIfStale().catch(() => false);
+    // Installed apps keep their 30-second status timer. Outside a conversation
+    // it reads the mirror, requesting shared website refresh work once a minute.
+    // Active list/read requests and open conversations keep the shorter cadence.
+    await refreshMirrorIfStale(
+      false,
+      activeThreadToken ? "active" : "background",
+    ).catch(() => false);
 
     const userId = String(nativeSession.user_id);
     const tokens = participantTokens(user, nativeSession);

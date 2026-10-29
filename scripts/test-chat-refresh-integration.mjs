@@ -50,9 +50,10 @@ test('actual refresh store inserts without upsert; only duplicate key is a lost 
   assert.equal(await storeFixture({ data: null, error: { code: '23505' } }).store.insert(row), false);
   await assert.rejects(storeFixture({ data: null, error: { code: '57014', message: 'timeout' } }).store.insert(row), /timeout/);
 });
-test('actual refresh store reads ownership from database and propagates lookup outages', async () => {
-  const f = storeFixture({ data: { value: { owner: 'owner', kind: 'running' }, expires_at: '2026-10-29T18:00:00Z' }, error: null });
+test('actual refresh store reads ownership and completion time from database and propagates lookup outages', async () => {
+  const f = storeFixture({ data: { value: { owner: 'owner', kind: 'running', finished_at: '2026-10-29T17:59:40Z' }, expires_at: '2026-10-29T18:00:00Z' }, error: null });
   const row = await f.store.read(); assert.equal(row.owner, 'owner'); assert.equal(row.kind, 'running'); assert.equal(row.expiresAt, Date.parse('2026-10-29T18:00:00Z'));
+  assert.equal(row.finishedAt, Date.parse('2026-10-29T17:59:40Z'));
   assert.deepEqual(f.calls[0].filters, [['eq', 'key', 'bd:chat_refresh:v2']]);
   await assert.rejects(storeFixture({ data: null, error: { message: 'database unavailable' } }).store.read(), /database unavailable/);
 });
@@ -65,11 +66,11 @@ test('actual refresh store delete and finish returned errors cannot become succe
 class ChatRefreshStoppedError extends Error {}
 class BdRateLimitError extends Error {}
 function refreshFixture(options = {}) {
-  const counters = { fail: 0, complete: 0, claims: 0, pulls: [], outbox: 0, identity: 0, repair: 0 };
+  const counters = { fail: 0, complete: 0, claims: 0, demands: [], pulls: [], outbox: 0, identity: 0, repair: 0 };
   const lease = { bdCalls: 0, complete: async () => { counters.complete++; return true; }, fail: async () => { counters.fail++; return true; } };
   const globals = { counters, ChatRefreshStoppedError, BdRateLimitError, mirrorRefreshStore: {},
     loadSharedRateLimit: async () => {}, rateLimitedNow: () => false,
-    claimChatRefresh: async () => { counters.claims++; return options.noClaim ? undefined : lease; },
+    claimChatRefresh: async (_store, policy) => { counters.claims++; counters.demands.push(policy.demand); return options.noClaim ? undefined : lease; },
     withChatRefreshLease: async (_lease, fn) => fn(), beforeChatRefreshWork: async () => {},
     admin: { from: () => ({ select: async () => ({ count: 1, error: null }) }) },
     listPath: resource => resource, rows: value => value || [],
@@ -90,6 +91,24 @@ for (const resource of ['chat_message_threads', 'chat_message_items']) {
 test('actual refresh winner completes once; an existing lease skips all pulls even when force requested', async () => {
   const success = refreshFixture(); assert.equal(await success.run(), true); assert.equal(success.counters.complete, 1); assert.equal(success.counters.fail, 0); assert.equal(success.counters.pulls.length, 2);
   const busy = refreshFixture({ noClaim: true }); assert.equal(await busy.run(true), false); assert.equal(busy.counters.pulls.length, 0); assert.equal(busy.counters.outbox, 0);
+});
+
+test('actual refresh forwards background demand and defaults active calls to the existing cadence', async () => {
+  const background = refreshFixture(); await background.run(false, 'background');
+  assert.deepEqual(background.counters.demands, ['background']);
+  const active = refreshFixture(); await active.run();
+  assert.deepEqual(active.counters.demands, ['active']);
+});
+
+test('status selects cadence after fresh authorization; explicit Messages routes remain active', () => {
+  const status = readFileSync(new URL('../supabase/functions/bd-chat-status/index.ts', import.meta.url), 'utf8');
+  const sync = readFileSync(new URL('../supabase/functions/bd-chat-sync/index.ts', import.meta.url), 'utf8');
+  assert.match(status, /refreshMirrorIfStale\(\s*false,\s*activeThreadToken\s*\?\s*"active"\s*:\s*"background",?\s*\)/);
+  assert(status.indexOf('await loadChatMemberAccess("status"') < status.indexOf('await refreshMirrorIfStale('));
+  assert.match(sync, /await refreshMirrorIfStale\(\)/);
+  const native = readFileSync(new URL('../app/(tabs)/index.tsx', import.meta.url), 'utf8');
+  assert.match(native, /const CHAT_STATUS_POLL_MS = 30000/);
+  assert.match(native, /setInterval\(run, CHAT_STATUS_POLL_MS\)/);
 });
 
 function outboxFixture(error) {

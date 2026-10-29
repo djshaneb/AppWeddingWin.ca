@@ -238,14 +238,26 @@ Deno.test("couple and vendor endpoints retain identical shared contact and parti
     ['const contactProfile = bingoContactProfile', '// Website proof is the authentication.'],
   ]) {
     let vendorSection = sourceRange(vendorSource, first, next);
+    let coupleSection = sourceRange(coupleSource, first, next);
     if (first === 'const websiteCoupleUser =') {
       // The vendor route can use a freshly signed website member. Normalize
       // only that exact lookup expression; all downstream security gates match.
       const lookup = "websiteAttestedMember ?? await fetchFullBdUserById(authenticatedMemberId)";
       assert(vendorSection.split(lookup).length === 2, "Expected one attested website lookup");
       vendorSection = vendorSection.replace(lookup, "await fetchFullBdUserById(authenticatedMemberId)");
+      // Native couples use current SQL proof; vendors still require the full
+      // fresh BD lookup. Normalize only this exact authorized transport change.
+      const nativeLookup = `// Native couples use a fresh purpose-bound website SQL proof, avoiding a
+      // metered BD API lookup on every scan/list. Vendors keep their fresh tags.
+      const nativeMemberProof = websitePrincipal ? undefined : await loadFreshQrBingoMember(authenticatedMemberId);
+      const freshAuthenticatedUser = websiteCoupleUser ||
+        (nativeMemberProof && ["4", "18"].includes(String(nativeMemberProof.subscription_id))
+          ? nativeMemberProof : await fetchFullBdUserById(authenticatedMemberId));`;
+      assert(coupleSection.split(nativeLookup).length === 2, "Expected exactly one role-scoped native proof lookup");
+      coupleSection = coupleSection.replace(nativeLookup,
+        "const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);");
     }
-    assert(vendorSection === sourceRange(coupleSource, first, next),
+    assert(vendorSection === coupleSection,
       `Shared contact authorization, reset or participation gate drifted at ${first}`);
   }
 });

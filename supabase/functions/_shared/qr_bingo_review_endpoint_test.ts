@@ -7,6 +7,7 @@ import {
   ReviewDrawNotificationError,
   setReviewDrawPushEnabled,
 } from "./review_draw_notifications.ts";
+import { loadFreshQrBingoMember } from "./qr_bingo_native_member.ts";
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 function assert(value: unknown, message = "Assertion failed") {
@@ -45,7 +46,8 @@ for (const endpoint of ["bd-qr-bingo-sync", "bd-qr-bingo-vendor-sync"]) {
     const source = await Deno.readTextFile(
       new URL(`../${endpoint}/index.ts`, import.meta.url),
     );
-    const start = source.indexOf("const freshAuthenticatedUser =");
+    const native = endpoint === "bd-qr-bingo-sync";
+    const start = source.indexOf(native ? "const nativeMemberProof =" : "const freshAuthenticatedUser =");
     const end = source.indexOf('if (action === "fixture_context")', start);
     assert(
       start >
@@ -66,6 +68,8 @@ for (const endpoint of ["bd-qr-bingo-sync", "bd-qr-bingo-vendor-sync"]) {
       "setReviewDrawPushEnabled",
       "ReviewDrawNotificationError",
       "jsonResponse",
+      "websitePrincipal",
+      "loadFreshQrBingoMember",
       source.slice(start, end) + "\nreturn { productionFallback: true };",
     );
     async function invoke(
@@ -105,6 +109,27 @@ for (const endpoint of ["bd-qr-bingo-sync", "bd-qr-bingo-vendor-sync"]) {
           status,
           participationGate,
         }),
+        null,
+        async (id: string) => {
+          trace.push("fresh_member_proof");
+          assert(id === "102");
+          // Use the real signed-proof validator with only the website transport
+          // faked. Vendor proof must still lead to the full fresh BD/tag lookup.
+          return await loadFreshQrBingoMember(id, {
+            secret: "offline-review-member-proof-secret-0123456789",
+            baseUrl: "https://www.weddingwin.ca",
+            fetch: (async (_url, init) => {
+              const params = new URLSearchParams(String(init?.body));
+              return Response.json({
+                ok: true, purpose: "qr_bingo_member_v1", version: 1,
+                user_id: id, expires: params.get("expires"), nonce: params.get("nonce"),
+                member: { ...vendor, first_name: "Cedar", last_name: "Floral",
+                  email: "vendor@example.invalid", phone_number: "5551234567", phone: "", wedding_date: "" },
+                verification: { email_confirmation_required: false, pending_email: null, email_verification_status: "none" },
+              });
+            }) as typeof fetch,
+          });
+        },
       );
       return { result, calls, trace };
     }
@@ -113,7 +138,7 @@ for (const endpoint of ["bd-qr-bingo-sync", "bd-qr-bingo-vendor-sync"]) {
       review_mode: null,
     }]);
     assert(ordinary.result.productionFallback === true);
-    assert(ordinary.trace.join(",") === "fresh_identity,rpc");
+    assert(ordinary.trace.join(",") === (native ? "fresh_member_proof,fresh_identity,rpc" : "fresh_identity,rpc"));
     const enabled = await invoke("review_draw_enable", [context, {
       ...context,
       review_state: { ...state, enabled: true },

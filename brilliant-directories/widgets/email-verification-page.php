@@ -7,12 +7,14 @@ if (!function_exists('ww_aecv_secrets')) {
     function ww_aecv_secrets() { /* WW_PRIVATE_EMAIL_CHANGE_SECRETS */ return array(); }
 }
 if (!function_exists('ww_ev_signed_request')) {
-    function ww_ev_signed_request($action, $id, $email, $expires, $signature) {
+    function ww_ev_signed_request($action, $id, $email, $expires, $signature, $nonce = '') {
         if (!is_string($expires) || !preg_match('/^[1-9][0-9]{9}$/D', $expires) || !is_string($signature) || !preg_match('/^[a-f0-9]{64}$/D', $signature)) return false;
         $ttl = $action === 'status_app' ? 300 : 600;
+        if ($action === 'qr_bingo_member_v1') $ttl = 60;
         if (intval($expires) <= time() || intval($expires) > time() + $ttl || !function_exists('hash_equals')) return false;
         if ($action === 'status_app') $payload = 'status_app|' . $id . '|' . $expires;
         elseif ($action === 'request_app') $payload = $id . '|' . strtolower(trim($email)) . '|' . $expires;
+        elseif ($action === 'qr_bingo_member_v1' && is_string($nonce) && preg_match('/^[a-f0-9]{32}$/D', $nonce)) $payload = 'qr_bingo_member_v1|' . $id . '|' . $expires . '|' . $nonce;
         else return false;
         foreach (ww_aecv_secrets() as $secret) {
             if (is_string($secret) && strlen($secret) >= 32 && hash_equals(hash_hmac('sha256', $payload, $secret), $signature)) return true;
@@ -40,12 +42,67 @@ if (!function_exists('ww_ev_signed_request')) {
     }
     function ww_ev_post_string($key) { return isset($_POST[$key]) && is_string($_POST[$key]) ? $_POST[$key] : ''; }
 }
+/* WW_QR_NATIVE_MEMBER_PROOF_START */
+if (!function_exists('ww_ev_qr_bingo_member')) {
+    function ww_ev_qr_bingo_member($id, $expires, $nonce) {
+        $id = (string)ww_ev_member_id($id);
+        // Fresh local SQL only. Never serialize the complete row or credentials.
+        $rows = ww_ev_query("SELECT * FROM users_data WHERE user_id='" . $id . "' LIMIT 1");
+        $row = mysql_fetch_assoc($rows);
+        if (!is_array($row) || !isset($row['user_id'], $row['active'], $row['subscription_id'])) throw new Exception('Member unavailable.');
+        foreach (array('user_id', 'active', 'subscription_id') as $field) {
+            if (!is_string($row[$field]) && !is_int($row[$field])) throw new Exception('Member unavailable.');
+        }
+        if ((string)$row['user_id'] !== $id
+            || ((string)$row['active'] !== '2' && !((string)$row['active'] === '1' && !in_array((string)$row['subscription_id'], array('4', '18'), true)))
+            || !preg_match('/^[1-9][0-9]{0,17}$/D', (string)$row['subscription_id'])) throw new Exception('Member unavailable.');
+        $limits = array('user_id' => 18, 'active' => 1, 'subscription_id' => 18,
+            'first_name' => 500, 'last_name' => 500, 'email' => 254,
+            'phone_number' => 160, 'phone' => 160, 'wedding_date' => 40);
+        $member = array();
+        foreach ($limits as $field => $limit) {
+            $value = isset($row[$field]) ? $row[$field] : '';
+            if (!is_string($value) && !is_int($value)) throw new Exception('Member unavailable.');
+            $value = (string)$value;
+            if (strlen($value) > $limit || strpos($value, chr(0)) !== false) throw new Exception('Member unavailable.');
+            $member[$field] = $value;
+        }
+        // Preserve the BD profile metadata precedence, including explicit blank.
+        $metaRows = ww_ev_query("SELECT `value` FROM users_meta WHERE `database`='users_data' AND database_id='" . $id . "' AND `key`='wedding_date' ORDER BY meta_id DESC LIMIT 1");
+        $meta = mysql_fetch_assoc($metaRows);
+        if (is_array($meta) && array_key_exists('value', $meta)) {
+            $value = $meta['value'] === null ? '' : $meta['value'];
+            if (!is_string($value) || strlen($value) > 40 || strpos($value, chr(0)) !== false) throw new Exception('Member unavailable.');
+            $member['wedding_date'] = $value;
+        }
+        $state = ww_email_verification_state($row);
+        if (!isset($state['ok'], $state['user_id'], $state['current_email']) || $state['ok'] !== true || $state['user_id'] !== $id) throw new Exception('Member unavailable.');
+        $member['email'] = $state['current_email'];
+        return array('ok' => true, 'purpose' => 'qr_bingo_member_v1', 'version' => 1,
+            'user_id' => $id, 'expires' => $expires, 'nonce' => $nonce, 'member' => $member,
+            'verification' => array('email_confirmation_required' => $state['email_confirmation_required'],
+                'pending_email' => $state['pending_email'], 'email_verification_status' => $state['email_verification_status']));
+    }
+}
+/* WW_QR_NATIVE_MEMBER_PROOF_END */
 @header('Cache-Control: no-store');
 // Keep token/path out of referrers without making HTML form POST Origin null.
 @header('Referrer-Policy: strict-origin');
 $wwEvMethod = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
 $wwEvAction = ww_ev_post_string('ww_email_change_action');
 $wwEvPath = $wwEvApp ? '/verify-email-change-app' : '/verify-email-change';
+if ($wwEvMethod === 'POST' && $wwEvAction === 'qr_bingo_member_v1') {
+    if (!$wwEvApp) ww_ev_json(array('ok' => false, 'message' => 'Invalid verification route.'), 400);
+    try {
+        $wwEvId = (string)ww_ev_member_id(ww_ev_post_string('user_id'));
+        $wwEvExpires = ww_ev_post_string('expires'); $wwEvNonce = ww_ev_post_string('nonce');
+        if (!ww_ev_signed_request($wwEvAction, $wwEvId, '', $wwEvExpires, ww_ev_post_string('signature'), $wwEvNonce)) ww_ev_json(array('ok' => false, 'message' => 'This request could not be verified.'), 401);
+        // Read-only: no email, mutation lock, authorization cache, or BD API.
+        ww_ev_json(ww_ev_qr_bingo_member($wwEvId, $wwEvExpires, $wwEvNonce), 200);
+    } catch (Exception $error) {
+        ww_ev_json(array('ok' => false, 'message' => 'Member status is temporarily unavailable. Please try again.'), 503);
+    }
+}
 if ($wwEvMethod === 'POST' && ($wwEvAction === 'request_app' || $wwEvAction === 'status_app')) {
     if (!$wwEvApp) ww_ev_json(array('ok' => false, 'message' => 'Invalid verification route.'), 400);
     try {

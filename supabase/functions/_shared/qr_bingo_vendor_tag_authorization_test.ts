@@ -27,9 +27,9 @@ Deno.test("every vendor dashboard action requires the published QR Bingo tag", a
       `${label} does not resolve the currently published BD vendor tag`,
     );
     assert(
-      source.includes(
+      (source.includes(
         "const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId);",
-      ) &&
+      ) || source.includes('const freshAuthenticatedUser = websiteCoupleUser ||\n        (nativeMemberProof && ["4", "18"].includes(String(nativeMemberProof.subscription_id))\n          ? nativeMemberProof : await fetchFullBdUserById(authenticatedMemberId));')) &&
         source.includes("const user = freshAuthenticatedUser;") &&
         source.indexOf("const user = freshAuthenticatedUser;") > source.indexOf("const freshAuthenticatedUser =") &&
         !source.includes("? ({ user_id: nativeSession.user_id } as BdRow)"),

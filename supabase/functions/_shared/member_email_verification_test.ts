@@ -262,7 +262,7 @@ Deno.test("chat routes gate before any mirror access and do not trust session pr
   }
 });
 
-Deno.test("chat gates use fresh signed active-member proof and QR gates retain fresh BD member reads", async () => {
+Deno.test("chat and native couple QR gates use fresh purpose-bound proof; QR vendors retain fresh BD reads", async () => {
   for (const path of ["../bd-chat-sync/index.ts", "../bd-chat-status/index.ts"]) {
     const source = await Deno.readTextFile(new URL(path, import.meta.url));
     const handler = source.slice(source.indexOf("Deno.serve(async"));
@@ -274,7 +274,9 @@ Deno.test("chat gates use fresh signed active-member proof and QR gates retain f
   }
   const page = await Deno.readTextFile(new URL("../../../brilliant-directories/widgets/email-verification-page.php", import.meta.url));
   const core = await Deno.readTextFile(new URL("../../../brilliant-directories/widgets/email-verification-core.php", import.meta.url));
-  const signedStatus = page.slice(page.indexOf("if ($wwEvMethod === 'POST'"), page.indexOf("if ($wwEvMethod === 'POST'", page.indexOf("if ($wwEvMethod === 'POST'") + 1));
+  const statusStart = page.indexOf("if ($wwEvMethod === 'POST' && ($wwEvAction === 'request_app' || $wwEvAction === 'status_app'))");
+  assert(statusStart >= 0);
+  const signedStatus = page.slice(statusStart, page.indexOf("if ($wwEvMethod === 'POST'", statusStart + 1));
   assert(signedStatus.includes("ww_ev_signed_request($wwEvAction"));
   assert(signedStatus.indexOf("$wwEvMember = ww_ev_user($wwEvId)") < signedStatus.indexOf("ww_ev_json(ww_email_verification_state($wwEvMember), 200)"));
   const activeProof = core.slice(core.indexOf("function ww_ev_user("), core.indexOf("function ww_ev_current_member("));
@@ -289,7 +291,15 @@ Deno.test("chat gates use fresh signed active-member proof and QR gates retain f
     assert(fetcher.includes("await fetchQrBdMember(userId, callBd)"));
     assert(!/cache|cached/i.test(fetcher));
     const handler = source.slice(source.indexOf("Deno.serve(async"));
-    const fresh = handler.indexOf("const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)");
+    const fresh = handler.indexOf("const freshAuthenticatedUser = websiteCoupleUser ||");
+    if (path === "../bd-qr-bingo-sync/index.ts") {
+      const identity = handler.indexOf("if (!await nativeSessionMatchesCachedBdIdentity(nativeSession))");
+      const proof = handler.indexOf("const nativeMemberProof = websitePrincipal ? undefined : await loadFreshQrBingoMember(authenticatedMemberId)");
+      assert(identity >= 0 && proof > identity && fresh > proof);
+      assert(handler.includes('(nativeMemberProof && ["4", "18"].includes(String(nativeMemberProof.subscription_id))\n          ? nativeMemberProof : await fetchFullBdUserById(authenticatedMemberId))'));
+    } else {
+      assert(handler.includes("const freshAuthenticatedUser = websiteCoupleUser || await fetchFullBdUserById(authenticatedMemberId)"));
+    }
     const useFresh = handler.indexOf("const user = freshAuthenticatedUser;");
     const contacts = handler.indexOf("await loadQrContactProfile(requireAdmin(), contactEventKey, authenticatedMemberId, user)");
     assert(fresh >= 0 && useFresh > fresh && contacts > useFresh);
