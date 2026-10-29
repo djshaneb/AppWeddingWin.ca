@@ -2099,6 +2099,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       <p class="vendor-draw-status" id="vendorDrawStatus" role="status" aria-live="polite"></p>
       <div class="vendor-draw-actions">
         <button class="vendor-draw-decline" id="vendorDrawDecline" type="button">No</button>
+        <button class="vendor-draw-enter" id="vendorDrawRetry" type="button" hidden>Try again</button>
         <button class="vendor-draw-enter" id="vendorDrawEnter" type="button" disabled>Yes</button>
       </div>
     </section>
@@ -2461,8 +2462,13 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     }
 
     async function loadScannedVendors() {
-      if (!CONTACT_PROFILE_COMPLETE || document.hidden || scanProgressRequestInFlight || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
+      if (!CONTACT_PROFILE_COMPLETE || document.hidden || eventConfigRefreshStarted || scanProgressRequestInFlight || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
+      const refreshStartedAt = Date.now();
+      if (refreshStartedAt - scannerLastProgressRefreshAt < 60000) return;
       scanProgressRequestInFlight = true;
+      // Charge the minute only when a private read starts, including failures.
+      // Hidden/busy skips remain eligible; focus and timer events cannot burst.
+      scannerLastProgressRefreshAt = refreshStartedAt;
       const revision = scanProgressRevision;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
@@ -2480,7 +2486,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
 
         const data = await response.json();
         if (refreshPageAfterStaleEventConfig(response, data)) return;
-        if (revision !== scanProgressRevision || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
+        if (eventConfigRefreshStarted || revision !== scanProgressRevision || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
         if (response.ok && data.status === 'success' && Array.isArray(data.scanned)) {
           const currentVendorIds = new Set(VENDORS.map(vendor => vendor.id));
           const nextScanned = new Set(data.scanned.filter(id => typeof id === 'string' && currentVendorIds.has(id)));
@@ -2528,6 +2534,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     const vendorDrawPreviewNotice = document.getElementById('vendorDrawPreviewNotice');
     const vendorDrawDemoNotice = document.getElementById('vendorDrawDemoNotice');
     const vendorDrawDecline = document.getElementById('vendorDrawDecline');
+    const vendorDrawRetry = document.getElementById('vendorDrawRetry');
     const vendorDrawEnter = document.getElementById('vendorDrawEnter');
 
     function cleanPromotionText(value) {
@@ -2691,7 +2698,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     }
 
     function closeVendorDraw() {
-      if (vendorDrawEntryInFlight) return;
+      if (vendorDrawEntryInFlight || vendorDrawOfferInFlight) return;
       const returnFocus = vendorDrawReturnFocus;
       vendorDrawModal.hidden = true;
       currentVendorDrawOffer = null;
@@ -2790,6 +2797,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       resetVendorDrawChoice();
       vendorDrawDecline.disabled = false;
       vendorDrawDecline.textContent = 'No';
+      vendorDrawRetry.hidden = true;
       vendorDrawEnter.hidden = false;
       const namedVendor = cleanPromotionText(offer.vendor_business_name) || cleanPromotionText(offer.vendor_name) || cleanPromotionText(vendor && vendor.name) || 'this vendor';
       vendorDrawTitle.textContent = 'Enter ' + namedVendor + '’s draw?';
@@ -2811,6 +2819,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       vendorDrawPrize.hidden = true;
       vendorDrawPrizeDetails.open = false;
       vendorDrawEnter.hidden = true;
+      vendorDrawRetry.hidden = !isError;
       vendorDrawDecline.disabled = false;
       vendorDrawDecline.textContent = 'Close';
       vendorDrawStatus.textContent = cleanPromotionText(message) || 'This draw is not accepting new entries right now.';
@@ -2822,14 +2831,23 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       return true;
     }
 
-    async function openVendorDrawOffer(vendor, showUnavailable = false) {
+    async function openVendorDrawOffer(vendor, showUnavailable = false, retry = false) {
+      const retrying = retry && !vendorDrawModal.hidden &&
+        currentVendorDrawVendor === vendor && !currentVendorDrawOffer;
       if (!hasCurrentParticipationNotice() || !EVENT_CONFIG.vendor_draws_enabled || !vendor ||
           !canReviewVendorDraw(vendor.id) ||
-          vendorDrawOfferInFlight || vendorDrawEntryInFlight || !vendorDrawModal.hidden) return;
+          vendorDrawOfferInFlight || vendorDrawEntryInFlight || (!vendorDrawModal.hidden && !retrying)) return;
       vendorDrawOfferInFlight = true;
-      vendorDrawReturnFocus = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+      if (retrying) {
+        vendorDrawRetry.disabled = true;
+        vendorDrawDecline.disabled = true;
+        vendorDrawStatus.classList.remove('is-error');
+        vendorDrawStatus.textContent = 'Loading this vendor’s draw…';
+      } else {
+        vendorDrawReturnFocus = document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      }
       try {
         const data = await requestVendorDraw('raffle_offer', { vendor_id: vendor.id });
         if (data.ok === true && data.raffle_offer === null) {
@@ -2842,13 +2860,15 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
           throw new Error('The current vendor offer did not include a valid version. No entry can be submitted.');
         }
       } catch (error) {
-        if (!showUnavailable || eventConfigRefreshStarted ||
-            !showVendorDrawStatus(vendor, 'We could not load this draw. Close this message and try again.', true)) {
+        if (eventConfigRefreshStarted ||
+            !showVendorDrawStatus(vendor, 'Your booth visit is saved, but we could not load this vendor’s draw. Choose Try again to review the draw.', true)) {
           vendorDrawReturnFocus = null;
         }
         console.error('Optional vendor draw could not be loaded:', error);
       } finally {
         vendorDrawOfferInFlight = false;
+        vendorDrawRetry.disabled = false;
+        vendorDrawDecline.disabled = false;
       }
     }
 
@@ -2927,6 +2947,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     }
 
     vendorDrawDecline.addEventListener('click', closeVendorDraw);
+    vendorDrawRetry.addEventListener('click', () => openVendorDrawOffer(currentVendorDrawVendor, true, true));
     vendorDrawEnter.addEventListener('click', enterVendorDraw);
     vendorDrawModal.addEventListener('click', event => {
       if (event.target === vendorDrawModal) closeVendorDraw();
@@ -3152,7 +3173,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
       if (identityFields.some(key => payload[key] !== EVENT_CONFIG[key])) return null;
       return { revision: payload.revision, scan_enabled: payload.scan_enabled, vendor_draws_enabled: payload.vendor_draws_enabled, scan_open_early: early, scan_opens_at: opens, scan_history_starts_at: floor };
     }
-    async function refreshWebsiteScannerConfig(refreshProgressOnReturn = false) {
+    async function refreshWebsiteScannerConfig() {
       if (scannerPublicPollInFlight || document.hidden || vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
       scannerPublicPollInFlight = true;
       const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
@@ -3164,13 +3185,12 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
         if (vendorScanRequests.size || vendorDrawOfferInFlight || vendorDrawEntryInFlight || qrFixtureScanInFlight) return;
         scannerConfigUnavailable = false;
         if (!next) { scannerSettingsRequireRefresh = true; syncWebsiteScannerAvailability(); return; }
-        const shouldRefreshProgress = next.revision !== EVENT_CONFIG.revision
-          || (refreshProgressOnReturn && Date.now() - scannerLastProgressRefreshAt >= 60000);
+        const shouldRefreshProgress = Date.now() - scannerLastProgressRefreshAt >= 60000;
         Object.keys(next).forEach(key => { EVENT_CONFIG[key] = next[key]; });
         scannerSettingsRequireRefresh = false; syncWebsiteScannerAvailability();
-        // Keep schedule checks frequent without spending BD API quota on idle cards.
+        // Admin resets do not change the event revision. Refresh this account's
+        // progress once a minute while visible, alongside the existing poll.
         if (CONTACT_PROFILE_COMPLETE && shouldRefreshProgress) {
-          scannerLastProgressRefreshAt = Date.now();
           await loadScannedVendors();
         }
       } catch (error) { scannerConfigUnavailable = true; syncWebsiteScannerAvailability(); }
@@ -3179,7 +3199,7 @@ if (user::isUserLogged($_COOKIE) && isset($_COOKIE['userid']) && is_string($_COO
     function initializeWebsiteScannerPolling() {
       syncWebsiteScannerAvailability();
       setInterval(() => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(); } }, 30000);
-      const refreshOnReturn = () => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(true); } };
+      const refreshOnReturn = () => { if (!document.hidden) { syncWebsiteScannerAvailability(); void refreshWebsiteScannerConfig(); } };
       document.addEventListener('visibilitychange', refreshOnReturn);
       window.addEventListener('focus', refreshOnReturn);
     }

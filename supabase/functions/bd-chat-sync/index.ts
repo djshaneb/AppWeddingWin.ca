@@ -323,11 +323,25 @@ function otherAppMemberId(thread: AppNativeThread, userId: unknown) {
 // App-side (Supabase-only) threads
 // ---------------------------------------------------------------------------
 
+function mirrorThreadIsAccessible(thread: MirrorThread, userTokens: string[], userId: string) {
+  // Match the normal inbox exclusion: deleted website threads cannot be revived
+  // by an explicit selection or a stale native alias.
+  const deletedAt = String((thread.raw as Record<string, unknown> | null)?.deleted_at || "").trim();
+  return !deletedAt && threadMatchesUser(thread, userTokens, userId);
+}
+
+class ChatThreadAccessError extends Error {
+  constructor() {
+    super("Conversation was not found for this account.");
+    this.name = "ChatThreadAccessError";
+  }
+}
+
 async function getAppThread(token: string, userId: unknown) {
   const { data, error } = await admin.from("app_native_chat_threads").select("*").eq("thread_token", token).limit(1);
   if (error) throw new Error(error.message);
   const thread = (Array.isArray(data) ? data[0] : undefined) as AppNativeThread | undefined;
-  if (!thread || !appThreadIncludesUser(thread, userId)) throw new Error("Conversation was not found for this account.");
+  if (!thread || !appThreadIncludesUser(thread, userId)) throw new ChatThreadAccessError();
   return thread;
 }
 
@@ -343,10 +357,10 @@ async function resolveNotificationChatTarget(token: string, userId: string, user
     const mirrored = String(thread.bd_thread_token || "").trim();
     if (!mirrored) return token;
     const alias = await mirrorThreadByToken(mirrored);
-    return alias && threadMatchesUser(alias, userTokens, userId) ? mirrored : token;
+    return alias && mirrorThreadIsAccessible(alias, userTokens, userId) ? mirrored : token;
   }
   const thread = await mirrorThreadByToken(token);
-  return thread && threadMatchesUser(thread, userTokens, userId) ? token : null;
+  return thread && mirrorThreadIsAccessible(thread, userTokens, userId) ? token : null;
 }
 
 async function listAppThreads(userId: unknown) {
@@ -542,7 +556,6 @@ async function recordThreadReport(
   const aliases = [...new Set([
     token,
     String(appThread?.thread_token || "").trim(),
-    String(appThread?.bd_thread_token || "").trim(),
     bdThreadToken,
   ].filter(Boolean))];
   if (!aliases.length) throw new Error("Conversation token required");
@@ -553,7 +566,7 @@ async function recordThreadReport(
   const rows = aliases.map((alias) => ({
     thread_token: alias,
     app_thread_token: String(appThread?.thread_token || "").trim() || null,
-    bd_thread_token: String(appThread?.bd_thread_token || bdThreadToken || "").trim() || null,
+    bd_thread_token: bdThreadToken || null,
     reporter_bd_user_id: String(reporterId || ""),
     member_a_bd_user_id: memberA,
     member_b_bd_user_id: memberB,
@@ -735,19 +748,74 @@ async function buildChatPayload(
   const userTokens = participantTokens(user, session);
   const ownAvatar = avatarUrlFromBdUser(user);
 
+  // A selected token is a lookup key, never authorization. Validate it before
+  // loading any messages, including explicit selections on ordinary list calls.
+  let selectedToken = String(requestedThread || "").trim();
+  let selectedAppThread: AppNativeThread | undefined;
+  let selectedBdThread: MirrorThread | undefined;
+  if (selectedToken) {
+    if (isAppThread(selectedToken)) {
+      selectedAppThread = await getAppThread(selectedToken, userId);
+      const mirrored = String(selectedAppThread.bd_thread_token || "").trim();
+      if (mirrored) {
+        const alias = await mirrorThreadByToken(mirrored);
+        if (alias && mirrorThreadIsAccessible(alias, userTokens, userId)) {
+          selectedBdThread = alias;
+          selectedToken = alias.thread_token;
+        }
+      }
+    } else {
+      selectedBdThread = await mirrorThreadByToken(selectedToken);
+      if (!selectedBdThread || !mirrorThreadIsAccessible(selectedBdThread, userTokens, userId)) {
+        throw new ChatThreadAccessError();
+      }
+    }
+  }
+
   const bdThreads = await mirrorThreadsForUser(userTokens, userId);
+  if (selectedBdThread) {
+    // Keep selected older conversations inside the same bounded report/block
+    // and message pipeline; never bypass those checks via a separate fallback.
+    const selectedIndex = bdThreads.findIndex((thread) => thread.thread_token === selectedBdThread!.thread_token);
+    if (selectedIndex >= 0) bdThreads.splice(selectedIndex, 1);
+    bdThreads.unshift(selectedBdThread);
+  }
   await persistThreadIdentitiesFromSession(bdThreads, userTokens, userId);
   const appThreads = await listAppThreads(userId);
+  if (selectedAppThread) {
+    const selectedIndex = appThreads.findIndex((thread) => thread.thread_token === selectedAppThread!.thread_token);
+    if (selectedIndex >= 0) appThreads.splice(selectedIndex, 1);
+    appThreads.unshift(selectedAppThread);
+  }
   const bdTokenSet = new Set(bdThreads.map((thread) => thread.thread_token));
   const appLinkedBdTokenSet = new Set(
     appThreads
       .map((thread) => String(thread.bd_thread_token || "").trim())
       .filter(Boolean),
   );
-  const visibleAppThreads = appThreads.filter((thread) => {
+  let visibleAppThreads = appThreads.filter((thread) => {
     const mirrored = String(thread.bd_thread_token || "").trim();
     return !mirrored || !bdTokenSet.has(mirrored);
   });
+  const unresolvedAliases = [...new Set(visibleAppThreads
+    .map((thread) => String(thread.bd_thread_token || "").trim())
+    .filter(Boolean))];
+  if (unresolvedAliases.length) {
+    const { data, error } = await admin.from("bd_chat_threads")
+      .select("*").in("thread_token", unresolvedAliases).limit(unresolvedAliases.length);
+    if (error) throw new Error(error.message);
+    const authorizedAliases = new Set(((data || []) as MirrorThread[])
+      .filter((thread) => mirrorThreadIsAccessible(thread, userTokens, userId))
+      .map((thread) => thread.thread_token));
+    // An app row's link is not authority to inspect reports or close a BD
+    // conversation. Validate unresolved links in one bounded metadata read.
+    visibleAppThreads = visibleAppThreads.map((thread) => {
+      const mirrored = String(thread.bd_thread_token || "").trim();
+      return !mirrored || authorizedAliases.has(mirrored)
+        ? thread
+        : { ...thread, bd_thread_token: null, bd_thread_id: null };
+    });
+  }
 
   const activeBlocks = await activeChatBlocksForMember(userId);
   const blockByOtherMemberId = new Map<string, ChatMemberBlock>();
@@ -773,15 +841,6 @@ async function buildChatPayload(
   };
   const blockForAppThread = (thread: AppNativeThread) =>
     blockByOtherMemberId.get(otherAppMemberId(thread, userId));
-
-  // If the app asked for an app:* thread that has since been mirrored to a BD
-  // thread we know about, follow it.
-  let selectedToken = String(requestedThread || "").trim();
-  if (isAppThread(selectedToken)) {
-    const appThread = appThreads.find((thread) => thread.thread_token === selectedToken);
-    const mirrored = String(appThread?.bd_thread_token || "").trim();
-    if (mirrored && bdTokenSet.has(mirrored)) selectedToken = mirrored;
-  }
 
   const visibleBdThreads = bdThreads.slice(0, 50);
   const threadTokens = visibleBdThreads.map((thread) => thread.thread_token);
@@ -969,18 +1028,17 @@ async function buildChatPayload(
   let selectedClosed = !!selectedReport;
   if (selectedToken && isAppThread(selectedToken)) {
     const appSummary = appSummaries.find((summary) => summary.token === selectedToken);
+    if (!appSummary) throw new ChatThreadAccessError();
     const otherUser = usersById.get(otherAppMemberId(
       appThreads.find((thread) => thread.thread_token === selectedToken) || ({} as AppNativeThread),
       userId,
     ));
     const otherAvatar = otherUser?.avatar_url || "";
-    const messages = appSummary?._messages || visibleAppMessages(
-      await listAppMessages(selectedToken).catch(() => []),
-      selectedReport,
-    );
+    const messages = appSummary._messages;
     messageDtos = messages.map((message) => appMessageDto(message, userId, ownAvatar, otherAvatar));
   } else if (selectedToken) {
-    const thread = bdThreads.find((row) => row.thread_token === selectedToken) || await mirrorThreadByToken(selectedToken);
+    const thread = bdThreads.find((row) => row.thread_token === selectedToken);
+    if (!thread || !mirrorThreadIsAccessible(thread, userTokens, userId)) throw new ChatThreadAccessError();
     if (thread) {
       // One-time history pull when a thread is opened the first time.
       await ensureThreadBackfilled(thread);
@@ -1141,10 +1199,13 @@ Deno.serve(async (request) => {
 
       if (isAppThread(token)) {
         const appThread = await getAppThread(token, userId);
-        const blockedMemberId = otherAppMemberId(appThread, userId);
-        const block = await upsertChatMemberBlock(userId, blockedMemberId, token);
         const bdToken = String(appThread.bd_thread_token || "").trim();
         const bdThread = bdToken ? await mirrorThreadByToken(bdToken) : undefined;
+        if (bdToken && (!bdThread || !mirrorThreadIsAccessible(bdThread, userTokens, userId))) {
+          throw new ChatThreadAccessError();
+        }
+        const blockedMemberId = otherAppMemberId(appThread, userId);
+        const block = await upsertChatMemberBlock(userId, blockedMemberId, token);
         await recordThreadReport(
           token,
           userId,
@@ -1158,7 +1219,7 @@ Deno.serve(async (request) => {
         if (bdToken) selectedThread = bdToken;
       } else {
         const thread = await mirrorThreadByToken(token);
-        if (!thread || !threadMatchesUser(thread, userTokens, userId)) {
+        if (!thread || !mirrorThreadIsAccessible(thread, userTokens, userId)) {
           return jsonResponse({ ok: false, error: "Conversation was not found for this account." }, 404);
         }
         const blockedMemberId = await resolveOtherUserIdForThread(thread, userTokens, userId);
@@ -1206,6 +1267,13 @@ Deno.serve(async (request) => {
 
       if (isAppThread(token)) {
         const appThread = await getAppThread(token, userId);
+        const bdToken = String(appThread.bd_thread_token || "").trim();
+        if (bdToken) {
+          const alias = await mirrorThreadByToken(bdToken);
+          if (!alias || !mirrorThreadIsAccessible(alias, userTokens, userId)) {
+            throw new ChatThreadAccessError();
+          }
+        }
         const targetId = otherAppMemberId(appThread, userId);
         await assertChatMemberPairAllowed(userId, targetId);
         await verifiedChatTargetById(targetId, user);
@@ -1233,7 +1301,7 @@ Deno.serve(async (request) => {
         if (report || (thread && threadIsClosed({ thread_status: thread.thread_status }))) {
           return jsonResponse(chatReportedPayload(report), 423);
         }
-        if (!thread || !threadMatchesUser(thread, userTokens, userId)) {
+        if (!thread || !mirrorThreadIsAccessible(thread, userTokens, userId)) {
           return jsonResponse({ ok: false, error: "Conversation was not found for this account." }, 404);
         }
         const target = await verifiedChatTargetForThread(thread, userTokens, userId, user);
@@ -1285,16 +1353,22 @@ Deno.serve(async (request) => {
           if (isAppThread(token)) {
             const appThread = await getAppThread(token, userId);
             const mirrored = String(appThread.bd_thread_token || "").trim();
-            if (mirrored) readReceiptQueued = await markMirrorThreadRead(mirrored, userTokens, userId);
+            if (mirrored) {
+              const alias = await mirrorThreadByToken(mirrored);
+              if (alias && mirrorThreadIsAccessible(alias, userTokens, userId)) {
+                readReceiptQueued = await markMirrorThreadRead(mirrored, userTokens, userId);
+              }
+            }
             await markAppRead(token, userId);
           } else {
             const thread = await mirrorThreadByToken(token);
-            if (!thread || !threadMatchesUser(thread, userTokens, userId)) {
+            if (!thread || !mirrorThreadIsAccessible(thread, userTokens, userId)) {
               return jsonResponse({ ok: false, error: "Conversation was not found for this account." }, 404);
             }
             readReceiptQueued = await markMirrorThreadRead(token, userTokens, userId);
           }
         } catch (error) {
+          if (error instanceof ChatThreadAccessError) throw error;
           console.error("Chat mark-read failed", shortError(error));
         }
       }
@@ -1340,6 +1414,9 @@ Deno.serve(async (request) => {
         }
       : payload);
   } catch (error) {
+    if (error instanceof ChatThreadAccessError) {
+      return jsonResponse({ ok: false, error: error.message }, 404);
+    }
     if (error instanceof ChatMemberAccessError) {
       if (wasRateLimited()) return busyResponse();
       return jsonResponse({ ok: false, error: error.message }, error.status);

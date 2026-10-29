@@ -12,6 +12,8 @@ const accessSource=read('supabase/functions/_shared/chat_member_access.ts');
 const accessAst=ts.createSourceFile('access.ts',accessSource,ts.ScriptTarget.Latest,true);
 const accessCode=accessAst.statements.filter(n=>!ts.isImportDeclaration(n)).map(n=>n.getText(accessAst).replace(/^export\s+/, '')).join('\n');
 const ast=ts.createSourceFile('chat.ts',chatSource,ts.ScriptTarget.Latest,true);
+const mirrorAccess=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='mirrorThreadIsAccessible').getText(ast);
+const threadAccessError=ast.statements.find(n=>ts.isClassDeclaration(n)&&n.name?.text==='ChatThreadAccessError').getText(ast);
 const resolver=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='resolveNotificationChatTarget').getText(ast);
 const serve=ast.statements.find(n=>ts.isExpressionStatement(n)&&ts.isCallExpression(n.expression)&&n.expression.expression.getText(ast)==='Deno.serve').expression.arguments[0].getText(ast);
 function chatFixture(options={}) {
@@ -28,7 +30,7 @@ function chatFixture(options={}) {
   shortError:e=>String(e),CHAT_PERMISSION_ENDPOINTS:[],
  };
  for(const name of ['MemberEmailIdentityChangedError','MemberEmailVerificationUnavailableError','BdRateLimitError','ChatPolicyError','ChatMemberBlockedError','ObjectionableChatContentError','ChatImageSharingDisabledError'])g[name]=class extends Error{};
- const context=vm.createContext(g);vm.runInContext(compile(`${accessCode}\n${resolver}\nglobalThis.resolve=resolveNotificationChatTarget;globalThis.handler=${serve};`),context);
+ const context=vm.createContext(g);vm.runInContext(compile(`${accessCode}\n${threadAccessError}\n${mirrorAccess}\n${resolver}\nglobalThis.resolve=resolveNotificationChatTarget;globalThis.handler=${serve};`),context);
  return {calls,g,resolve:context.resolve,request:async(body={})=>{const r=await context.handler(new Request('https://offline.invalid',{method:'POST',body:JSON.stringify({action:'read',native_session:{user_id:'38971',token:'synthetic'},thread_token:appToken,notification_target:true,...body})}));return {status:r.status,body:await r.json()};}};
 }
 
