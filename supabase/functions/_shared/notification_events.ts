@@ -17,6 +17,8 @@ export type MessageSnapshotEvent = {
 export type MessageSnapshotInput = {
   memberId: string;
   memberTokens: string[];
+  /** Complete authoritative identities; never inferred from message content. */
+  memberIdentities?: Row[];
   bdThreads: Row[];
   bdMessages: Row[];
   nativeThreads: Row[];
@@ -43,6 +45,8 @@ const intersects = (left: string[], right: Set<string>) =>
   left.some((value) => right.has(value));
 const deleted = (value: unknown) =>
   identities(value).includes("(deleted member)");
+const exactDeletedIdentity = (value: unknown) =>
+  clean(value) === "(deleted member)";
 const closed = (row: Row | undefined) => {
   const status = clean(row?.thread_status ?? row?.status).toLowerCase();
   return status === "0" || status === "closed" || Boolean(row?.closed_at);
@@ -109,6 +113,21 @@ export function buildMessageSnapshot(input: MessageSnapshotInput): {
     [input.memberId, ...input.memberTokens].map(normalizeParticipantIdentity)
       .filter(Boolean),
   );
+  // Canonical tokens may change while historical thread participants retain
+  // their old token. Keep ownership of current aliases explicit, including
+  // collisions, so an alias can never transfer a message to another member.
+  const aliasOwners = new Map<string, Set<string>>();
+  for (const row of input.memberIdentities || []) {
+    const id = memberId(row.user_id);
+    if (!id) throw new Error("Invalid authoritative notification identity");
+    for (const alias of [id, row.token, row.cookie, row.email]) {
+      const normalized = normalizeParticipantIdentity(clean(alias));
+      if (!normalized || exactDeletedIdentity(normalized)) continue;
+      const owners = aliasOwners.get(normalized) || new Set<string>();
+      owners.add(id);
+      aliasOwners.set(normalized, owners);
+    }
+  }
   const blockedIds = new Set(input.blockedMemberIds);
   const blockedTokens = new Set(
     (input.blockedParticipantTokens || []).map(normalizeParticipantIdentity),
@@ -249,6 +268,29 @@ export function buildMessageSnapshot(input: MessageSnapshotInput): {
   for (const row of input.bdMessages) {
     const thread = bdThreads.get(clean(row.thread_token));
     if (!thread) continue;
+    const id = clean(row.message_id);
+    const tokenMatch = nativeMessages.get(
+      clean(row.message_token).toLowerCase(),
+    );
+    const idMatch = nativeByBdId.get(id);
+    if (tokenMatch && idMatch && tokenMatch !== idMatch) {
+      throw new Error("Conflicting native-to-BD message aliases");
+    }
+    const mirror = tokenMatch || idMatch;
+    const exactParticipants = Boolean(
+      mirror?.nativeThread &&
+        memberId(thread.row.owner_user_id) &&
+        memberId(thread.row.responder_user_id) &&
+        [clean(thread.row.owner_user_id), clean(thread.row.responder_user_id)]
+            .sort().join(":") ===
+          [
+            clean(mirror.nativeThread.row.member_a_bd_user_id),
+            clean(mirror.nativeThread.row.member_b_bd_user_id),
+          ].sort().join(":"),
+    );
+    const mirrorThreadMatches =
+      mirror?.nativeThread?.bdToken === thread.token ||
+      Boolean(!mirror?.nativeThread?.bdToken && exactParticipants);
     const owner = identities(row.message_owner);
     const ownedByMe = intersects(owner, mine) ||
       intersects(owner, new Set(thread.mine));
@@ -256,11 +298,29 @@ export function buildMessageSnapshot(input: MessageSnapshotInput): {
       ...thread.other,
       ...(thread.otherId ? [thread.otherId] : []),
     ]);
-    const incoming = owner.length > 0 && owner.every((value) =>
-      otherSide.has(value)
-    ) && !ownedByMe;
+    const hasConflictingAlias = owner.some((value) => {
+      const owners = aliasOwners.get(value);
+      return owners &&
+        (owners.size !== 1 || !thread.otherId || !owners.has(thread.otherId));
+    });
+    if (mirror && (ownedByMe || hasConflictingAlias)) {
+      throw new Error("Notification mirror identity is not yet authoritative");
+    }
+    const provenNativeSender = Boolean(
+      mirror?.incoming && mirrorThreadMatches && thread.otherId &&
+        mirror.event.sender_member_id === thread.otherId,
+    );
+    const incoming = Boolean(
+      !ownedByMe && (
+        (owner.length > 0 && owner.every((value) => otherSide.has(value))) ||
+        // Current aliases supplement a stale thread only for a single sender
+        // identity on an exact native mirror whose sender and thread are proved.
+        (owner.length === 1 && provenNativeSender &&
+          aliasOwners.get(owner[0])?.size === 1 &&
+          aliasOwners.get(owner[0])?.has(thread.otherId!))
+      ),
+    );
     if (ownedByMe) continue;
-    const id = clean(row.message_id);
     if (!id || seenBdIds.has(id)) {
       throw new Error("Missing or repeated BD notification message identity");
     }
@@ -291,37 +351,27 @@ export function buildMessageSnapshot(input: MessageSnapshotInput): {
       unread,
       incoming,
     };
-    const tokenMatch = nativeMessages.get(
-      clean(row.message_token).toLowerCase(),
+    const nativeDeleted = exactDeletedIdentity(
+      mirror?.nativeRow?.sender_bd_user_id,
     );
-    const idMatch = nativeByBdId.get(id);
-    if (tokenMatch && idMatch && tokenMatch !== idMatch) {
-      throw new Error("Conflicting native-to-BD message aliases");
-    }
-    const mirror = tokenMatch || idMatch;
-    const exactParticipants = Boolean(
-      mirror?.nativeThread &&
-        memberId(thread.row.owner_user_id) &&
-        memberId(thread.row.responder_user_id) &&
-        [clean(thread.row.owner_user_id), clean(thread.row.responder_user_id)]
-            .sort().join(":") ===
-          [
-            clean(mirror.nativeThread.row.member_a_bd_user_id),
-            clean(mirror.nativeThread.row.member_b_bd_user_id),
-          ].sort().join(":"),
+    const websiteDeleted = exactDeletedIdentity(row.message_owner);
+    const deletedMirror = Boolean(
+      mirror && mirrorThreadMatches &&
+        ((nativeDeleted && (websiteDeleted ||
+          (incoming && sender === mirror.nativeThread?.otherId))) ||
+          (websiteDeleted && provenNativeSender)),
     );
-    const mirrorThreadMatches =
-      mirror?.nativeThread?.bdToken === thread.token ||
-      Boolean(!mirror?.nativeThread?.bdToken && exactParticipants);
     if (
-      mirror && mirror.incoming && incoming && sender &&
-      mirror.event.sender_member_id === sender && mirrorThreadMatches
+      mirror && mirrorThreadMatches &&
+      ((mirror.incoming && incoming && sender &&
+        mirror.event.sender_member_id === sender) || deletedMirror)
     ) {
       // Either source may be read before the other mirror catches up. A read
       // wins, and the immutable native UUID remains the logical event key.
       mirror.unread = mirror.unread && unread;
       mirror.event.eligible = mirror.event.eligible &&
-        candidate.event.eligible && mirror.unread;
+        candidate.event.eligible && mirror.unread && !deletedMirror;
+      if (deletedMirror) mirror.event.sender_member_id = null;
       mirror.event.occurred_at =
         mirror.event.occurred_at < candidate.event.occurred_at
           ? mirror.event.occurred_at

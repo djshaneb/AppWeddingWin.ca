@@ -34,10 +34,18 @@ function fixture(options = {}) {
       }
       throw new Error(`Unexpected RPC ${name}`);
     } },
-    buildMessageSnapshot: input => ({ events: input.blockedMemberIds?.includes('11') ? [{ ...event, eligible: false }] : options.currentIneligible && input.nowMs ? [{ ...event, eligible: false }] : [event], unreadCount: 4 }),
+    buildMessageSnapshot: input => {
+      trace.push({ name: 'snapshot', input });
+      return { events: input.blockedMemberIds?.includes('11') ? [{ ...event, eligible: false }] : options.currentIneligible && input.nowMs ? [{ ...event, eligible: false }] : [event], unreadCount: 4 };
+    },
     refreshEventBdSnapshot: async input => input,
     moderationSnapshot: async () => { trace.push({ name: 'moderation' }); return { blockedMemberIds: options.blocked ? ['11'] : [] }; },
     nativeSnapshot: async () => { trace.push({ name: 'native' }); return {}; },
+    memberIdentitySnapshot: async () => {
+      trace.push({ name: 'identities' });
+      if (options.identityError) throw new Error('Identity snapshot incomplete');
+      return [{ user_id: '11', token: 'current-sender-token' }];
+    },
     renewPushClaim: async () => options.expired ? 0 : 1,
     currentClaimedRows: async () => options.changedRegistration ? [] : [row],
     buildNotificationPayload: supplied => { trace.push({ name: 'payload', supplied }); return { title: 'fixture', data: { event_id: supplied.id, recipient_member_id: supplied.recipient_member_id } }; },
@@ -74,6 +82,19 @@ test('failed durable reservation never contacts push provider', async () => {
 
 test('recipient mismatch is rejected before payload or transport', async () => {
   const f = fixture({ delivery: { recipient_member_id: '33' } }); await assert.rejects(f.run, /recipient mismatch/);
+  assert.equal(f.trace.filter(x => x.name === 'send').length, 0);
+});
+
+test('dispatch rechecks current member identities before contacting the push provider', async () => {
+  const f = fixture(); await f.run();
+  const freshSnapshot = f.trace.find(x => x.name === 'snapshot' && x.input.nowMs);
+  assert.equal(freshSnapshot.input.memberIdentities[0].token, 'current-sender-token');
+  assert(f.trace.findIndex(x => x.name === 'identities') < f.trace.findIndex(x => x.name === 'send'));
+});
+
+test('an incomplete current identity snapshot prevents dispatch', async () => {
+  const f = fixture({ identityError: true });
+  await assert.rejects(f.run, /Identity snapshot incomplete/);
   assert.equal(f.trace.filter(x => x.name === 'send').length, 0);
 });
 

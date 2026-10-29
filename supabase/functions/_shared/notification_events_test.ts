@@ -77,6 +77,263 @@ function mirrored(): MessageSnapshotInput {
   return value;
 }
 
+Deno.test("verified current sender token reconciles a stale thread identity", () => {
+  const value = mirrored();
+  value.memberIdentities = [{ user_id: "2", token: "current-sender-token" }];
+  value.nativeMessages[0].bd_message_id = "100";
+  value.bdMessages[0].message_owner = "current-sender-token";
+  const snapshot = buildMessageSnapshot(value);
+  equal(snapshot.unreadCount, 1);
+  equal(snapshot.events.length, 1);
+  equal(snapshot.events[0].aliases, [`chat:1:bd:100`, `chat:1:native:${UUID}`]);
+  equal(snapshot.events[0].sender_member_id, "2");
+});
+
+Deno.test("exact deleted native mirror is retained once and cannot notify", () => {
+  const value = mirrored();
+  value.nativeMessages[0].sender_bd_user_id = "(deleted member)";
+  value.nativeMessages[0].bd_message_id = "100";
+  value.bdMessages[0].message_status = "1";
+  const snapshot = buildMessageSnapshot(value);
+  equal(snapshot.unreadCount, 0);
+  equal(snapshot.events.length, 1);
+  equal(snapshot.events[0].eligible, false);
+  equal(snapshot.events[0].sender_member_id, null);
+  equal(snapshot.events[0].aliases, [`chat:1:bd:100`, `chat:1:native:${UUID}`]);
+});
+
+function rotatedMirror(): MessageSnapshotInput {
+  const value = mirrored();
+  value.memberIdentities = [{ user_id: "2", token: "current-sender-token" }];
+  value.bdMessages[0].message_owner = "current-sender-token";
+  return value;
+}
+
+for (const field of ["token", "cookie", "email"]) {
+  Deno.test(`current ${field} alias requires authoritative sender and exact mirror`, () => {
+    const value = rotatedMirror();
+    const alias = field === "email"
+      ? "Current@Example.Test"
+      : "current-sender-token";
+    value.memberIdentities = [{ user_id: "2", [field]: alias }];
+    value.bdMessages[0].message_owner = alias.toLowerCase();
+    equal(buildMessageSnapshot(value).unreadCount, 1);
+    value.nativeMessages = [];
+    const noMirror = buildMessageSnapshot(value);
+    equal(noMirror.unreadCount, 0);
+    equal(noMirror.events[0].eligible, false);
+  });
+}
+
+Deno.test("current alias reconciles by saved BD ID without a UUID alias", () => {
+  const value = rotatedMirror();
+  value.nativeMessages[0].bd_message_id = "100";
+  value.bdMessages[0].message_token = "website-generated-token";
+  const snapshot = buildMessageSnapshot(value);
+  equal(snapshot.events.length, 1);
+  equal(snapshot.unreadCount, 1);
+});
+
+for (
+  const failure of [
+    "unknown alias",
+    "wrong cached member",
+    "alias collision",
+    "current member collision",
+    "current member token",
+    "current member thread identity",
+    "mixed known aliases",
+    "mixed unknown alias",
+    "case changed token",
+    "wrong native sender",
+    "wrong thread",
+    "missing exact participants",
+    "conflicting UUID and BD ID",
+    "conflicting old identity",
+  ]
+) {
+  Deno.test(`current sender alias fails closed for ${failure}`, () => {
+    const value = rotatedMirror();
+    if (failure === "unknown alias") value.memberIdentities = [];
+    if (failure === "wrong cached member") {
+      value.memberIdentities![0].user_id = "3";
+    }
+    if (failure === "alias collision") {
+      value.memberIdentities!.push({
+        user_id: "3",
+        token: "current-sender-token",
+      });
+    }
+    if (failure === "current member collision") {
+      value.memberIdentities!.push({
+        user_id: "1",
+        email: "current-sender-token",
+      });
+    }
+    if (failure === "current member token") {
+      value.memberTokens.push("current-sender-token");
+    }
+    if (failure === "current member thread identity") {
+      value.bdThreads[0].thread_owner = "current-sender-token";
+    }
+    if (failure === "mixed known aliases") {
+      value.bdMessages[0].message_owner =
+        "current-sender-token,two@example.test";
+    }
+    if (failure === "mixed unknown alias") {
+      value.bdMessages[0].message_owner = "current-sender-token,unknown-token";
+    }
+    if (failure === "case changed token") {
+      value.bdMessages[0].message_owner = "CURRENT-SENDER-TOKEN";
+    }
+    if (failure === "wrong native sender") {
+      value.nativeMessages[0].sender_bd_user_id = "3";
+    }
+    if (failure === "wrong thread") {
+      value.nativeThreads[0].bd_thread_token = "different-thread-token";
+    }
+    if (failure === "missing exact participants") {
+      value.nativeThreads[0].bd_thread_token = null;
+      delete value.bdThreads[0].responder_user_id;
+    }
+    if (failure === "conflicting UUID and BD ID") {
+      value.nativeMessages.push({ ...native(UUID2), bd_message_id: "100" });
+    }
+    if (failure === "conflicting old identity") {
+      value.bdMessages[0].message_owner = "two@example.test";
+      value.memberIdentities = [{ user_id: "3", email: "two@example.test" }];
+    }
+    rejects(() => buildMessageSnapshot(value));
+  });
+}
+
+for (
+  const silent of [
+    "native read",
+    "website read",
+    "blocked",
+    "alias blocked",
+    "native closed",
+    "BD closed",
+    "native reported",
+    "BD reported",
+  ]
+) {
+  Deno.test(`current alias mirror remains silent when ${silent}`, () => {
+    const value = rotatedMirror();
+    if (silent === "native read") value.nativeMessages[0].read_at = CREATED;
+    if (silent === "website read") value.bdMessages[0].message_status = "1";
+    if (silent === "blocked") value.blockedMemberIds = ["2"];
+    if (silent === "alias blocked") {
+      value.blockedParticipantTokens = ["current-sender-token"];
+    }
+    if (silent === "native closed") value.nativeThreads[0].closed_at = CREATED;
+    if (silent === "BD closed") value.bdThreads[0].thread_status = "0";
+    if (silent === "native reported") value.reportedThreadTokens = [NATIVE];
+    if (silent === "BD reported") value.reportedThreadTokens = [BD];
+    const snapshot = buildMessageSnapshot(value);
+    equal(snapshot.unreadCount, 0);
+    equal(snapshot.events.length, 1);
+    equal(snapshot.events[0].aliases.length, 2);
+  });
+}
+
+Deno.test("current member's canonical alias is still excluded for an outgoing message", () => {
+  const value = mirrored();
+  value.memberIdentities = [{ user_id: "1", token: "my-new-token" }];
+  value.memberTokens.push("my-new-token");
+  value.nativeMessages[0].sender_bd_user_id = "1";
+  value.bdMessages[0].message_owner = "my-new-token";
+  equal(buildMessageSnapshot(value), { events: [], unreadCount: 0 });
+});
+
+Deno.test("a shared deletion sentinel is not a reusable member identity", () => {
+  const value = mirrored();
+  value.memberIdentities = [
+    { user_id: "2", token: "(deleted member)" },
+    { user_id: "3", email: "(deleted member)" },
+  ];
+  value.nativeMessages[0].sender_bd_user_id = "(deleted member)";
+  value.bdMessages[0].message_owner = "(deleted member)";
+  const snapshot = buildMessageSnapshot(value);
+  equal(snapshot.events.length, 1);
+  equal(snapshot.events[0].sender_member_id, null);
+  equal(snapshot.unreadCount, 0);
+});
+
+for (const source of ["native", "website", "both"]) {
+  for (const read of [false, true]) {
+    Deno.test(`exact ${source} tombstone merges once and stays silent with read=${read}`, () => {
+      const value = mirrored();
+      if (source !== "website") {
+        value.nativeMessages[0].sender_bd_user_id = "(deleted member)";
+      }
+      if (source !== "native") {
+        value.bdMessages[0].message_owner = "(deleted member)";
+      }
+      if (read) value.bdMessages[0].message_status = "1";
+      const snapshot = buildMessageSnapshot(value);
+      equal(snapshot.events.length, 1);
+      equal(snapshot.events[0].eligible, false);
+      equal(snapshot.events[0].sender_member_id, null);
+      equal(snapshot.events[0].aliases, [
+        `chat:1:bd:100`,
+        `chat:1:native:${UUID}`,
+      ]);
+      equal(snapshot.unreadCount, 0);
+    });
+  }
+}
+
+for (
+  const failure of [
+    "invalid native sender",
+    "mismatched native sender",
+    "unknown website sender",
+    "current alias without native sender",
+    "mixed tombstone",
+    "wrong thread",
+    "current recipient",
+    "conflicting participant IDs",
+  ]
+) {
+  Deno.test(`deleted mirror fails closed for ${failure}`, () => {
+    const value = mirrored();
+    value.nativeMessages[0].sender_bd_user_id = "(deleted member)";
+    if (failure === "invalid native sender") {
+      value.nativeMessages[0].sender_bd_user_id = "bad-id";
+      value.bdMessages[0].message_owner = "(deleted member)";
+    }
+    if (failure === "mismatched native sender") {
+      value.nativeMessages[0].sender_bd_user_id = "3";
+      value.bdMessages[0].message_owner = "(deleted member)";
+    }
+    if (failure === "unknown website sender") {
+      value.bdMessages[0].message_owner = "unknown-token";
+    }
+    if (failure === "current alias without native sender") {
+      value.memberIdentities = [{
+        user_id: "2",
+        token: "current-sender-token",
+      }];
+      value.bdMessages[0].message_owner = "current-sender-token";
+    }
+    if (failure === "mixed tombstone") {
+      value.bdMessages[0].message_owner = "(deleted member),two@example.test";
+    }
+    if (failure === "wrong thread") {
+      value.nativeThreads[0].bd_thread_token = "different-thread-token";
+    }
+    if (failure === "current recipient") {
+      value.bdMessages[0].message_owner = "one@example.test";
+    }
+    if (failure === "conflicting participant IDs") {
+      value.bdThreads[0].responder_user_id = "3";
+    }
+    rejects(() => buildMessageSnapshot(value));
+  });
+}
+
 Deno.test("new identity survives an unchanged unread total", () => {
   const before = input();
   before.nativeMessages = [native()];

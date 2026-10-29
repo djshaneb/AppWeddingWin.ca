@@ -394,6 +394,19 @@ async function cachedMember(id: string): Promise<BdRow> {
   return data;
 }
 
+async function memberIdentitySnapshot(): Promise<BdRow[]> {
+  // Read once for the sweep, including identities outside the conversation so
+  // a shared/ambiguous alias cannot be accepted as proof of a sender. This is
+  // the server-maintained cache, never an identity supplied by a push device.
+  return await completeDatabaseRows(
+    "Notification member identity",
+    "user_id",
+    (from, to) => admin.from("bd_users_cache")
+      .select("user_id,token,cookie,email", { count: "exact" })
+      .order("user_id").range(from, to),
+  );
+}
+
 function memberTokens(member: BdRow): string[] {
   return [member.user_id, member.token, member.cookie, member.email]
     .map((value) => String(value || "").trim()).filter(Boolean);
@@ -703,10 +716,12 @@ async function dispatchDeviceEvents(
       );
       const moderation = await moderationSnapshot(row.bd_member_id);
       const native = await nativeSnapshot(row.bd_member_id);
+      const memberIdentities = await memberIdentitySnapshot();
       const currentSnapshot = buildMessageSnapshot({
         ...freshBd,
         ...moderation,
         ...native,
+        memberIdentities,
         nowMs: Date.now(),
       });
       const currentEvent = currentSnapshot.events.find((event) =>
@@ -870,6 +885,10 @@ Deno.serve(async (request) => {
       ...row,
       ...identityByThread.get(String(row.thread_token)),
     }));
+    const memberIdentities = byMember.size ? await memberIdentitySnapshot() : [];
+    const identityByMember = new Map(
+      memberIdentities.map((row) => [String(row.user_id), row]),
+    );
     let checked = 0;
     let notified = 0;
     let deferred = 0;
@@ -878,12 +897,14 @@ Deno.serve(async (request) => {
     for (const [memberId, rows] of byMember) {
       if (Date.now() > deadline - 25_000 || budget.bdCalls >= 78) break;
       try {
-        const member = await cachedMember(memberId);
+        const member = identityByMember.get(memberId);
+        if (!member) throw new Error("Notification member identity unavailable");
         const native = await nativeSnapshot(memberId);
         const moderation = await moderationSnapshot(memberId);
         const snapshotInput = {
           memberId,
           memberTokens: memberTokens(member),
+          memberIdentities,
           bdThreads: threads,
           bdMessages,
           ...native,

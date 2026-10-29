@@ -76,6 +76,21 @@ await test('late validated native alias and changed canonical thread reuse exist
  const r=await snapshot([event(3,{event_key:'chat:101:native:'+id(3),thread_token:'app:'+id(77),thread_aliases:['thread1','app:'+id(77)],aliases:['chat:101:bd:3','chat:101:native:'+id(3)]})]);assert.equal(r.events_created,0);assert.equal(r.deliveries_created,0);
  assert.equal((await row("select thread_token from app_notification_events where event_key='chat:101:bd:3'")).thread_token,'app:'+id(77));
 });
+await test('deleted mirrored sender stays null and suppressed across alias reconciliation and replay',async()=>{
+ const bdKey='chat:101:bd:deleted-mirror',nativeKey='chat:101:native:'+id(600),thread='app:'+id(601);
+ const deleted=event('deleted-mirror',{sender_member_id:null,eligible:false});
+ const first=await snapshot([deleted]);assert.equal(first.events_created,1);assert.equal(first.deliveries_created,0);
+ const merged={...deleted,event_key:nativeKey,thread_token:thread,thread_aliases:['thread1',thread],aliases:[bdKey,nativeKey]};
+ const result=await snapshot([merged]);assert.equal(result.events_created,0);assert.equal(result.deliveries_created,0);
+ const saved=await row('select id,sender_member_id,baseline_suppressed,thread_token from app_notification_events where event_key=$1',[bdKey]);
+ assert.equal(saved.sender_member_id,null);assert.equal(saved.baseline_suppressed,true);assert.equal(saved.thread_token,thread);
+ assert.equal((await row('select count(distinct event_id)::int n from app_notification_event_aliases where alias=any($1)',[[bdKey,nativeKey]])).n,1);
+ assert.equal((await row('select count(*)::int n from app_notification_deliveries where event_id=$1',[saved.id])).n,0);
+ // Even later account/cache resolution cannot replay a remembered tombstone.
+ assert.equal((await snapshot([{...merged,sender_member_id:'102',eligible:true}])).deliveries_created,0);
+ assert.equal((await row('select baseline_suppressed from app_notification_events where id=$1',[saved.id])).baseline_suppressed,true);
+ await assert.rejects(snapshot([{...merged,sender_member_id:'103',eligible:true}]),/Notification alias identity conflict/);
+});
 const claimToken=id(700);
 async function lease(device){await db.query('update app_push_tokens set push_claim_token=$2,push_claim_expires_at=clock_timestamp()+interval \'10 minutes\' where id=$1',[device.device_id,claimToken]);}
 const claim=()=>service(()=>rpc('claim_weddingwin_notification_deliveries',[a.device_id,a.registration_generation,claimToken,20]));
